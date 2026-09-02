@@ -1,17 +1,18 @@
-# AI Agent Rules — TucanoTCM
+# AI Agent Rules — Tucano Test Rust
 
-This file contains rules and guidelines for AI agents working on the TucanoTCM project.
+This file contains rules and guidelines for AI agents working on the Tucano Test Rust project.
 
 ---
 
 ## Core Project Philosophy
 
-**TucanoTCM is a file-based test case management system.** All test data (projects, test cases, test suites, test runs) is stored as JSON files on the filesystem. There is no database. The system is designed to be portable via container + local storage mount.
+**Tucano Test is a file-based test case management system.** All test data (projects, test cases, test suites, test runs, and attachments) is stored as JSON or files on the filesystem. There is no database. The API is designed to be portable via a production container and persistent volume.
 
 When making decisions about features, architecture, or implementation:
-- Preserve the file-based approach — all CRUD operations read/write JSON files in `TucanoTCM/json_files/`
-- Do not introduce databases, ORMs, or external storage services
-- Ensure the container works with just a volume mount for the data directory
+- Preserve the file-based approach — all CRUD operations read/write JSON files below `TUCANO_DATA_DIR`.
+- Do not introduce databases, ORMs, or external persistence services.
+- Keep the API stateless so replicas can share the configured persistent storage.
+- Require shared storage with working advisory locks for multi-replica deployments; never use separate per-replica data volumes.
 - Keep the system simple, inspectable, and movable
 - **GUI and API are equal citizens** — all actions can be performed via the graphical interface or directly via API calls. Neither is secondary; both must support the same functionality
 - **All API functionality must be documented in Swagger** — every endpoint, parameter, and response must be captured in the OpenAPI/Swagger specification. If it's not in Swagger, it doesn't exist
@@ -32,8 +33,8 @@ When developing a new feature or carrying out a ticket:
 ### Dependencies
 When adding a feature or new dependency:
 - **Always check online for the latest stable version** before adding
-- Use `npm view <package> version` or check the package's official repository
-- Do not assume the version in `package.json` is current — verify before installing
+- Use `cargo search <crate>` inside the pinned Rust build environment or check the crate's official repository
+- Do not assume the version in `Cargo.toml` is current — verify before installing
 - Prefer well-maintained, stable releases over bleeding-edge versions
 
 ---
@@ -41,50 +42,54 @@ When adding a feature or new dependency:
 ## Code Standards
 
 ### File Structure
-- Routes: `TucanoTCM/routes/<resource>.js`
-- Schemas: `TucanoTCM/schemas/<resource>.schema.json`
-- Tests: `TucanoTCM/test/<resource>.test.js`
-- Data: `TucanoTCM/json_files/<resource>/` (runtime, mounted via Docker volume)
+- API handlers: `src/api.rs`
+- Domain models: `src/models.rs`
+- Filesystem repository: `src/repository.rs`
+- OpenAPI contract: `openapi.json`; interactive UI: `swagger.html`
+- Tests: Rust unit/integration tests alongside the relevant module or under `tests/`
+- Runtime data: `TUCANO_DATA_DIR` (mounted persistent volume, never committed)
 
-### JSON Schema Validation
-- All API payloads must be validated against JSON schemas using AJV
-- Schemas use Draft 2020-12 with local `$ref` resolution
-- Validate on POST and PUT operations
+### JSON and Schema Validation
+- Validate all API payloads against the checked-in contract before persistence.
+- Preserve the legacy Draft 2020-12 JSON shapes and camelCase field names.
+- Validate on POST and PUT operations and reject malformed, unknown, or oversized input.
 
 ### API Design
 - RESTful endpoints for each resource
-- OpenAPI/Swagger documentation in route files
+- Every endpoint, parameter, request, response, and error must be represented in `openapi.json` and usable through Swagger UI at `/api-docs`.
 - Consistent structured JSON error responses
 - Secure filenames and prevent path traversal attacks
 
 ### Testing
-- Write tests for new features using Node's built-in test runner
-- Run tests with: `npm test`
-- Cover CRUD operations for each resource
-- Test file persistence and volume mount behavior
+- Run `cargo fmt --all -- --check`, `cargo clippy --all-targets --all-features -- -D warnings`, and `cargo test --all-targets --all-features`.
+- Cover CRUD operations, persistence, attachments, malformed input, traversal, symlinks, concurrency, and volume behavior.
+- Test the production image and Compose configuration for startup, health, persistence, and restart behavior.
 
 ---
 
 ## Docker & Deployment
 
-### Local Development
+### Local Run
 ```bash
 docker compose up -d --build
 ```
 
 ### Ports
-- WAF: `8080` (host) → `80` (container)
-- App: `3001` (host) → `80` (container)
+- API: `3000` (host) → `3000` (container)
+- Swagger UI: `http://localhost:3000/api-docs`
+- OpenAPI JSON: `http://localhost:3000/openapi.json`
 
 ### Volume Mount
-- Host: `./data` → Container: `/app/json_files`
+- Compose volume: `tucano-test-data` → Container: `/data`
+- Configuration: `TUCANO_DATA_DIR=/data`
 - Data persists across container restarts
 - Files are plain JSON — inspectable and editable on host
 
-### WAF
-- Uses external repository: `ECiurleo/owasp-crs-nginx-waf`
-- Built via Docker Compose from remote Git context
-- Provides ModSecurity protection with OWASP CRS
+### Scaling
+- The application container runs as an unprivileged user with a read-only root filesystem.
+- Replicas share no in-memory application state.
+- Scale only with a shared persistent POSIX volume and advisory-lock support.
+- A local Docker volume is single-node only; use platform-provided shared storage for multi-node deployments.
 
 ---
 
@@ -116,10 +121,10 @@ docker compose up -d --build
   - Testing instructions
 
 ### Code Documentation
-- Update README.md for user-facing changes
-- Add JSDoc comments for new API endpoints
-- Keep Swagger/OpenAPI specs in sync with routes
-- Document any changes to file format or schema
+- Update README.md for user-facing changes.
+- Keep `openapi.json` and Swagger UI in sync with routes.
+- Document changes to file formats, compatibility behavior, persistence, or deployment.
+- Keep architecture, security, and compatibility documents versioned with the code.
 
 ---
 
@@ -151,7 +156,7 @@ docker compose up -d --build
 
 ## Project Board Management
 
-**Project board:** https://github.com/users/ECiurleo/projects/1
+**Project board:** https://github.com/orgs/TucanoTechnology/projects/3/views/1
 
 ### Ticket Requirements
 Every ticket on the project board must have:
