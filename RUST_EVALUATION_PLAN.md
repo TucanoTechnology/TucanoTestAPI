@@ -40,6 +40,7 @@ The GUI must use the same documented API as other clients. It should not read th
 - Capture the current endpoint behavior, status codes, JSON schemas, error envelope, request IDs, and Swagger document as compatibility fixtures.
 - Define the Rust workspace and CI toolchain policy without changing production deployment.
 - Decide MSRV, supported targets, release profile, container base image, and dependency update process.
+- Define immutable release numbering: SemVer tags for application releases and GitHub run numbers for every main-branch build artifact.
 
 ### Phase 1: Safe core
 
