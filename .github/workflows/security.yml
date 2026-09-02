@@ -39,7 +39,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Build application image
         run: docker build --file Dockerfile --tag tucano-test .
-      - uses: aquasecurity/trivy-action@v0.9.2
+      - uses: aquasecurity/trivy-action@0.35.0
         with:
           image-ref: tucano-test
           format: table
