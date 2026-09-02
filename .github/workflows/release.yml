@@ -2,6 +2,8 @@ name: Release
 
 on:
   push:
+    branches:
+      - main
     tags:
       - "v*.*.*"
 
@@ -27,11 +29,14 @@ jobs:
         id: metadata
         with:
           images: ${{ env.IMAGE_NAME }}
-          tags: type=ref,event=tag
+          tags: |
+            type=ref,event=tag
+            type=raw,value=build-${{ github.run_number }}
       - uses: docker/build-push-action@v6
         with:
           context: .
-          file: .devcontainer/Dockerfile
+          file: Dockerfile
+          build-args: BUILD_NUMBER=${{ github.run_number }}
           push: true
           tags: ${{ steps.metadata.outputs.tags }}
           labels: ${{ steps.metadata.outputs.labels }}
