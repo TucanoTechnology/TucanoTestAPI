@@ -27,12 +27,3 @@ jobs:
         run: cargo test --all-targets --all-features
       - name: Build release
         run: cargo build --release
-
-  devcontainer:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: devcontainers/ci@v0.3
-        with:
-          imageName: tucano-test-devcontainer
-          runCmd: cargo test --all-targets --all-features

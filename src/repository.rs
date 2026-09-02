@@ -1,3 +1,4 @@
+use fs2::FileExt;
 use serde_json::Value;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
@@ -51,6 +52,7 @@ impl FileRepository {
     }
 
     pub fn write(&self, resource: &str, id: &str, value: &Value) -> io::Result<()> {
+        let lock = self.acquire_lock()?;
         let directory = self.resource_dir(resource);
         fs::create_dir_all(&directory)?;
         let destination = self.resource_path(resource, id)?;
@@ -73,25 +75,31 @@ impl FileRepository {
         if result.is_err() {
             let _ = fs::remove_file(&temporary);
         }
+        lock.unlock()?;
         result
     }
 
     pub fn delete(&self, resource: &str, id: &str) -> io::Result<()> {
-        if resource == "test_cases" {
+        let lock = self.acquire_lock()?;
+        let result = if resource == "test_cases" {
             fs::remove_dir_all(self.test_case_dir(id)?)
         } else {
             fs::remove_file(self.resource_path(resource, id)?)
-        }
+        };
+        lock.unlock()?;
+        result
     }
 
     pub fn save_attachment(&self, id: &str, filename: &str, contents: &[u8]) -> io::Result<()> {
+        let lock = self.acquire_lock()?;
         let directory = self.test_case_dir(id)?;
         fs::create_dir_all(&directory)?;
         let path = self.attachment_path(id, filename)?;
         let mut file = OpenOptions::new().write(true).create_new(true).open(path)?;
         set_private_permissions(&file)?;
         file.write_all(contents)?;
-        file.sync_all()
+        file.sync_all()?;
+        lock.unlock()
     }
 
     pub fn read_attachment(&self, id: &str, filename: &str) -> io::Result<Vec<u8>> {
@@ -99,11 +107,25 @@ impl FileRepository {
     }
 
     pub fn delete_attachment(&self, id: &str, filename: &str) -> io::Result<()> {
-        fs::remove_file(self.attachment_path(id, filename)?)
+        let lock = self.acquire_lock()?;
+        let result = fs::remove_file(self.attachment_path(id, filename)?);
+        lock.unlock()?;
+        result
     }
 
     fn resource_dir(&self, resource: &str) -> PathBuf {
         self.root.join(resource)
+    }
+
+    fn acquire_lock(&self) -> io::Result<File> {
+        let lock = OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .read(true)
+            .write(true)
+            .open(self.root.join(".tucano.lock"))?;
+        lock.lock_exclusive()?;
+        Ok(lock)
     }
 
     fn resource_path(&self, resource: &str, id: &str) -> io::Result<PathBuf> {
