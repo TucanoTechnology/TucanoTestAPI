@@ -9,6 +9,7 @@
   "paths": {
     "/health": {"get": {"summary": "Health check", "responses": {"200": {"description": "Service is healthy"}}}},
     "/openapi.json": {"get": {"summary": "OpenAPI document", "responses": {"200": {"description": "OpenAPI JSON"}}}},
+    "/api-docs": {"get": {"summary": "Swagger UI", "responses": {"200": {"description": "Interactive API documentation"}}}},
     "/projects": {"$ref": "#/components/x-crud"},
     "/projects/{id}": {"$ref": "#/components/x-resource"},
     "/test_suites": {"$ref": "#/components/x-crud"},

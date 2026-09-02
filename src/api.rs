@@ -23,6 +23,8 @@ pub fn router(repository: FileRepository) -> Router {
     Router::new()
         .route("/health", get(health))
         .route("/openapi.json", get(openapi))
+        .route("/api-docs", get(swagger_ui))
+        .route("/api-docs/", get(swagger_ui))
         .route("/projects", get(list_projects).post(create_project))
         .route(
             "/projects/{id}",
@@ -61,6 +63,14 @@ async fn openapi() -> Response {
     (
         [(header::CONTENT_TYPE, "application/json")],
         Body::from(include_str!("../openapi.json")),
+    )
+        .into_response()
+}
+
+async fn swagger_ui() -> Response {
+    (
+        [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
+        Body::from(include_str!("../swagger.html")),
     )
         .into_response()
 }
