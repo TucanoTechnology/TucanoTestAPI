@@ -139,6 +139,14 @@ docker compose up -d --build
 - **Require CI to pass** — PRs must pass all CI checks before merging
 - **Require up-to-date branches** — branches must be up-to-date with main before merging
 
+## Release Numbering Policy
+
+- Application releases use Semantic Versioning in `Cargo.toml` and immutable `vMAJOR.MINOR.PATCH` Git tags.
+- Every push to `main` receives an immutable GitHub Actions run number and publishes a container tag in the form `build-<run number>`.
+- A SemVer release publishes both its `vMAJOR.MINOR.PATCH` tag and its build-number tag; the commit SHA is the audit identity.
+- Never reuse or overwrite a release tag or build number. Pull requests may build artifacts for validation but do not publish releases.
+- Release artifacts must be built from protected `main` or protected release tags and must retain the JSON volume-mount model; no database or external persistence service may be introduced.
+
 ---
 
 ## Project Board Management

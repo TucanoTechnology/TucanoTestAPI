@@ -2,15 +2,23 @@
 
 Rust architecture evaluation for TucanoTCM. The project preserves the file-based JSON storage model and keeps future GUI clients behind the documented HTTP API.
 
-## Development container
+## Application container
 
-Open this repository in VS Code with the Dev Containers extension and choose **Reopen in Container**. The container pins Rust `1.98.0`, installs `rustfmt` and `clippy`, runs as the non-root `vscode` user, and mounts the local `data/` directory at `/workspace/data`.
+Build and run the production API with Docker Compose:
 
-The storage location is available to the application through `TUCANO_DATA_DIR`. Keep test data and secrets out of version control; only `data/.gitkeep` is tracked.
+```sh
+docker compose up -d --build
+```
+
+The API listens on port `3000`, runs as an unprivileged user, and stores inspectable JSON and attachments in the persistent `tucano-test-data` volume mounted at `/data`. The storage location is configurable through `TUCANO_DATA_DIR`. Keep test data and secrets out of version control; only `data/.gitkeep` is tracked.
 
 Interactive Swagger UI is available at `http://localhost:3000/api-docs`; the raw OpenAPI document is at `http://localhost:3000/openapi.json`.
 
-On rootless Docker hosts, bind-mounted workspace files may appear owned by container `root`; this can prevent the non-root `vscode` user from creating `Cargo.lock`. Use a Docker engine with matching UID mappings, or run the local validation command with temporary root access. The Dev Container configuration itself remains non-root.
+The API process is stateless: replicas do not keep sessions or in-memory records. Horizontal scaling requires a shared persistent POSIX volume mounted at the same `TUCANO_DATA_DIR` for every replica. Repository mutations use an advisory lock file and atomic same-directory renames. A local Docker volume is suitable for one node; multi-node deployments must provide shared storage with working advisory locks. Do not use separate per-replica local volumes, or data will diverge.
+
+## Release numbering
+
+Application releases use Semantic Versioning. Update the Cargo package version and create a protected `vMAJOR.MINOR.PATCH` tag for a release; release tags are immutable and must never be reused. Every push to `main` also publishes an immutable GHCR image tagged `build-<GitHub run number>`. Tagged releases publish both the SemVer tag and their build number, while the commit SHA remains the audit identity. Pull requests build and test without publishing release artifacts.
 
 ## Local checks
 
@@ -22,7 +30,7 @@ cargo clippy --all-targets --all-features -- -D warnings
 cargo test --all-targets --all-features
 ```
 
-The Dev Container is the first reproducibility gate. GitHub Actions runs the same checks, a release build, the Dev Container test, dependency auditing, secret scanning, and container scanning. Tags matching `v*.*.*` publish a container artifact to GHCR.
+GitHub Actions runs formatting, Clippy, tests, a release build, dependency auditing, secret scanning, and production container scanning. Main-branch builds and SemVer tags publish numbered container artifacts to GHCR.
 
 Repository contribution and agent workflow rules are documented in [AGENTS.md](AGENTS.md).
 
