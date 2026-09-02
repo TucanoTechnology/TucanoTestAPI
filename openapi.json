@@ -1,0 +1,31 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Tucano Test API",
+    "version": "0.1.0",
+    "description": "File-based test case management API. Data is stored as JSON files; no database is used."
+  },
+  "servers": [{"url": "http://localhost:3000"}],
+  "paths": {
+    "/health": {"get": {"summary": "Health check", "responses": {"200": {"description": "Service is healthy"}}}},
+    "/openapi.json": {"get": {"summary": "OpenAPI document", "responses": {"200": {"description": "OpenAPI JSON"}}}},
+    "/api-docs": {"get": {"summary": "Swagger UI", "responses": {"200": {"description": "Interactive API documentation"}}}},
+    "/projects": {"$ref": "#/components/x-crud"},
+    "/projects/{id}": {"$ref": "#/components/x-resource"},
+    "/test_suites": {"$ref": "#/components/x-crud"},
+    "/test_suites/{id}": {"$ref": "#/components/x-resource"},
+    "/test_runs": {"$ref": "#/components/x-crud"},
+    "/test_runs/{id}": {"$ref": "#/components/x-resource"},
+    "/test_cases": {"$ref": "#/components/x-crud"},
+    "/test_cases/{id}": {"$ref": "#/components/x-resource"},
+    "/test_cases/{id}/attachments": {"post": {"summary": "Upload attachment", "parameters": [{"$ref": "#/components/parameters/id"}], "requestBody": {"required": true, "content": {"multipart/form-data": {"schema": {"$ref": "#/components/schemas/AttachmentUpload"}}}}, "responses": {"201": {"description": "Uploaded"}, "400": {"$ref": "#/components/responses/Error"}, "404": {"$ref": "#/components/responses/Error"}}}},
+    "/test_cases/{id}/attachments/{filename}": {"get": {"summary": "Download attachment", "parameters": [{"$ref": "#/components/parameters/id"}, {"$ref": "#/components/parameters/filename"}], "responses": {"200": {"description": "File content", "content": {"application/octet-stream": {"schema": {"type": "string", "format": "binary"}}}}, "404": {"$ref": "#/components/responses/Error"}}}, "delete": {"summary": "Delete attachment", "parameters": [{"$ref": "#/components/parameters/id"}, {"$ref": "#/components/parameters/filename"}], "responses": {"200": {"description": "Deleted"}, "404": {"$ref": "#/components/responses/Error"}}}}
+  },
+  "components": {
+    "x-crud": {"get": {"summary": "List resources", "responses": {"200": {"description": "Resource IDs", "content": {"application/json": {"schema": {"type": "array", "items": {"type": "string"}}}}}}}, "post": {"summary": "Create resource", "requestBody": {"required": true, "content": {"application/json": {"schema": {"type": "object"}}}}, "responses": {"201": {"description": "Created"}, "400": {"$ref": "#/components/responses/Error"}, "409": {"$ref": "#/components/responses/Error"}}}},
+    "x-resource": {"get": {"summary": "Read resource", "parameters": [{"$ref": "#/components/parameters/id"}], "responses": {"200": {"description": "Resource JSON"}, "404": {"$ref": "#/components/responses/Error"}}}, "put": {"summary": "Update resource", "parameters": [{"$ref": "#/components/parameters/id"}], "requestBody": {"required": true, "content": {"application/json": {"schema": {"type": "object"}}}}, "responses": {"200": {"description": "Updated"}, "404": {"$ref": "#/components/responses/Error"}}}, "delete": {"summary": "Delete resource", "parameters": [{"$ref": "#/components/parameters/id"}], "responses": {"200": {"description": "Deleted"}, "404": {"$ref": "#/components/responses/Error"}}}},
+    "parameters": {"id": {"name": "id", "in": "path", "required": true, "schema": {"type": "string"}}, "filename": {"name": "filename", "in": "path", "required": true, "schema": {"type": "string"}}},
+    "schemas": {"AttachmentUpload": {"type": "object", "properties": {"file": {"type": "string", "format": "binary"}}, "required": ["file"]}, "Error": {"type": "object", "properties": {"error": {"type": "object", "required": ["code", "message"], "properties": {"code": {"type": "string"}, "message": {"type": "string"}}}}}},
+    "responses": {"Error": {"description": "Structured error", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Error"}}}}}
+  }
+}
