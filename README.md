@@ -16,6 +16,10 @@ Interactive Swagger UI is available at `http://localhost:3000/api-docs`; the raw
 
 The API process is stateless: replicas do not keep sessions or in-memory records. Horizontal scaling requires a shared persistent POSIX volume mounted at the same `TUCANO_DATA_DIR` for every replica. Repository mutations use an advisory lock file and atomic same-directory renames. A local Docker volume is suitable for one node; multi-node deployments must provide shared storage with working advisory locks. Do not use separate per-replica local volumes, or data will diverge.
 
+## Release numbering
+
+Application releases use Semantic Versioning. Update the Cargo package version and create a protected `vMAJOR.MINOR.PATCH` tag for a release; release tags are immutable and must never be reused. Every push to `main` also publishes an immutable GHCR image tagged `build-<GitHub run number>`. Tagged releases publish both the SemVer tag and their build number, while the commit SHA remains the audit identity. Pull requests build and test without publishing release artifacts.
+
 ## Local checks
 
 From the container or a host with the pinned toolchain installed:
@@ -26,7 +30,7 @@ cargo clippy --all-targets --all-features -- -D warnings
 cargo test --all-targets --all-features
 ```
 
-GitHub Actions runs formatting, Clippy, tests, a release build, dependency auditing, secret scanning, and production container scanning. Tags matching `v*.*.*` publish a container artifact to GHCR.
+GitHub Actions runs formatting, Clippy, tests, a release build, dependency auditing, secret scanning, and production container scanning. Main-branch builds and SemVer tags publish numbered container artifacts to GHCR.
 
 Repository contribution and agent workflow rules are documented in [AGENTS.md](AGENTS.md).
 

@@ -1,5 +1,7 @@
 FROM rust:1.98.0-bookworm AS builder
 
+ARG BUILD_NUMBER=local
+
 WORKDIR /build
 COPY Cargo.toml Cargo.lock ./
 COPY src ./src
@@ -7,6 +9,8 @@ COPY openapi.json swagger.html ./
 RUN cargo build --release
 
 FROM debian:bookworm-slim
+
+ARG BUILD_NUMBER=local
 
 RUN apt-get update \
     && apt-get upgrade --yes \
@@ -17,6 +21,8 @@ RUN apt-get update \
     && chown tucano:tucano /data
 
 COPY --from=builder /build/target/release/tucano-test /usr/local/bin/tucano-test
+
+LABEL org.opencontainers.image.version="${BUILD_NUMBER}"
 
 ENV TUCANO_DATA_DIR=/data
 ENV PORT=3000
