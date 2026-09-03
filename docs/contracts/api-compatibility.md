@@ -2,9 +2,11 @@
 
 ## Status
 
-This contract is the baseline for the Rust evaluation. As of 2026-09-02, this repository contains no Rust HTTP service, Node reference service, endpoint implementation, JSON fixtures, or Swagger document. No endpoint behavior is assumed or invented here.
+The Rust service implements CRUD and attachment endpoints, and `openapi.json` is checked in and served at `/api-docs`.
 
-The existing TucanoTCM implementation remains the behavioral authority. Capture observations from that implementation before declaring a Rust endpoint compatible.
+The legacy [TucanoTest](https://github.com/ECiurleo/TucanoTest) implementation remains the behavioural authority for file formats. The legacy Draft 2020-12 schemas set `additionalProperties: false`, so adding any field is a breaking change and requires an explicit versioning plan recorded in this document before implementation.
+
+Sanitised reference fixtures have **not** yet been captured, so cross-implementation contract tests are still outstanding.
 
 ## Fixture layout
 
@@ -68,5 +70,5 @@ Each endpoint case must record:
 - Reference endpoint observations are captured in sanitized fixtures.
 - A Swagger/OpenAPI document is checked in and matches the observed routes.
 - Contract tests compare Node and Rust status, headers, bodies, and persistence effects.
-- Negative security cases cover every threat in [THREAT_MODEL.md](THREAT_MODEL.md).
+- Negative security cases cover every threat in [the threat model](../security/threat-model.md).
 - Every approved deviation is documented before migration work begins.
