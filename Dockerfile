@@ -1,4 +1,4 @@
-FROM rust:1.98.0-bookworm AS builder
+FROM rust:1.98.0-slim-trixie AS builder
 
 ARG BUILD_NUMBER=local
 
@@ -8,7 +8,7 @@ COPY src ./src
 COPY openapi.json swagger.html ./
 RUN cargo build --release
 
-FROM ubuntu:26.04
+FROM debian:trixie-slim
 
 ARG BUILD_NUMBER=local
 
