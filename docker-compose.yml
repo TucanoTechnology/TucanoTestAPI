@@ -3,12 +3,12 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: tucano-test:local
+    image: tucano-test-api:local
     environment:
       TUCANO_DATA_DIR: /data
       PORT: 3000
     ports:
-      - "3000:3000"
+      - "3100:3000"
     volumes:
       - tucano-data:/data
     read_only: true
@@ -16,6 +16,25 @@ services:
       - /tmp
     security_opt:
       - no-new-privileges:true
+    restart: unless-stopped
+    deploy:
+      replicas: 1
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512M
+
+  gui:
+    build:
+      context: ../Tucano-Test-GUI
+      dockerfile: Dockerfile
+    image: tucano-test-gui:local
+    environment:
+      TUCANO_API_URL: http://api:3000
+    ports:
+      - "8080:8080"
+    depends_on:
+      - api
     restart: unless-stopped
     deploy:
       replicas: 1
