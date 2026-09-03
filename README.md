@@ -2,6 +2,44 @@
 
 Rust architecture evaluation for TucanoTCM. The project preserves the file-based JSON storage model and keeps future GUI clients behind the documented HTTP API.
 
+## Prerequisites
+
+To build and run the project manually you need:
+
+| Requirement | Version | Purpose |
+| --- | --- | --- |
+| Rust toolchain | `1.98.0` (pinned by `rust-toolchain.toml`) | Build and test the API |
+| `rustfmt` and `clippy` components | Bundled with the pinned toolchain | Formatting and lint gates |
+| Docker Engine | 24 or newer | Build and run the production container |
+| Docker Compose plugin | v2 | Local deployment via `docker compose` |
+| `actionlint` (optional) | `1.7.12` | Validate workflow files locally |
+
+Install the toolchain with [rustup](https://rustup.rs); `rust-toolchain.toml` pins the exact version automatically:
+
+```sh
+rustup show
+cargo build --release
+```
+
+If you prefer not to install Rust locally, every command below also runs inside the pinned image:
+
+```sh
+docker run --rm -v "$PWD":/workspace -w /workspace rust:1.98.0-bookworm cargo test --all-targets --all-features
+```
+
+## Editor setup
+
+Recommended VS Code extensions are listed in `.vscode/extensions.json` and VS Code will offer to install them when the workspace is opened:
+
+- `rust-lang.rust-analyzer` — Rust language support
+- `github.vscode-github-actions` — workflow authoring and validation
+- `redhat.vscode-yaml` — YAML schema validation
+- `tamasfe.even-better-toml` — `Cargo.toml` support
+
+`.vscode/settings.json` maps `.github/workflows/*.yml` to the SchemaStore GitHub Actions schema so workflow files validate correctly.
+
+The GitHub Actions extension may report `Context access might be invalid: GITHUB_TOKEN` on `.github/workflows/release.yml`. This is a known false positive: `GITHUB_TOKEN` is injected automatically by GitHub Actions and is not a user-defined repository secret, so the extension cannot resolve it while signed out. The workflows are validated in CI with `actionlint`, which reports no issues.
+
 ## Application container
 
 Build and run the production API with Docker Compose:
@@ -30,7 +68,41 @@ cargo clippy --all-targets --all-features -- -D warnings
 cargo test --all-targets --all-features
 ```
 
-GitHub Actions runs formatting, Clippy, tests, a release build, dependency auditing, secret scanning, and production container scanning. Main-branch builds and SemVer tags publish numbered container artifacts to GHCR.
+Validate the workflow files with the same linter CI uses:
+
+```sh
+docker run --rm -v "$PWD:/repo:ro" --workdir /repo rhysd/actionlint:1.7.12 -color
+```
+
+## Testing
+
+Tests are split into two layers and both run in CI on every push and pull request:
+
+- **Unit tests** live beside the code in `src/models.rs` and `src/repository.rs`. They cover legacy JSON compatibility, required and unknown field handling, atomic writes, path confinement, attachment storage, concurrent writers, and file permissions.
+- **Integration tests** live in `tests/` and exercise the HTTP surface in-process through the Axum router against a temporary data directory. Each API area has its own suite:
+
+| Suite | Covers |
+| --- | --- |
+| `tests/service.rs` | Health, OpenAPI document, Swagger UI, malformed bodies, traversal rejection, persistence across restarts |
+| `tests/projects.rs` | Project CRUD, validation, conflicts, error envelopes |
+| `tests/suites.rs` | Test suite CRUD, validation, conflicts, missing resources |
+| `tests/runs.rs` | Test run CRUD, validation, conflicts, missing resources |
+| `tests/cases.rs` | Test case CRUD, required fields, conflicts, missing resources |
+| `tests/attachments.rs` | Upload, download, delete, content types, removal with the parent test case |
+
+Shared request builders and assertions live in `tests/common/mod.rs`. Cargo compiles only top-level files in `tests/` as test binaries, so a subdirectory module is shared across suites without running as one itself.
+
+Run everything, a single layer, or one suite:
+
+```sh
+cargo test --all-targets --all-features   # unit + integration
+cargo test --lib                          # unit tests only
+cargo test --test attachments             # a single API suite
+```
+
+The crate exposes a library target (`src/lib.rs`) alongside the binary so integration tests can import `tucano_test::api` and drive the router directly, without binding a network port.
+
+GitHub Actions runs workflow linting, formatting, Clippy, unit and integration tests, a release build, dependency auditing, secret scanning, and production container scanning. Main-branch builds and SemVer tags publish numbered container artifacts to GHCR.
 
 Repository contribution and agent workflow rules are documented in [AGENTS.md](AGENTS.md).
 

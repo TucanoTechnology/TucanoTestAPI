@@ -211,12 +211,27 @@ fn set_private_permissions(file: &File) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
+    use tempfile::TempDir;
+
+    fn repository() -> (TempDir, FileRepository) {
+        let directory = TempDir::new().expect("temp dir");
+        let repository = FileRepository::new(directory.path()).expect("repository");
+        (directory, repository)
+    }
+
+    #[test]
+    fn new_creates_every_resource_directory() {
+        let (directory, _repository) = repository();
+        for resource in RESOURCE_DIRS {
+            assert!(directory.path().join(resource).is_dir(), "{resource}");
+        }
+    }
 
     #[test]
     fn persists_json_atomically_and_rejects_traversal() {
-        let root = std::env::temp_dir().join(format!("tucano-repo-{}", unique_suffix()));
-        let repository = FileRepository::new(&root).expect("repository");
-        let value = serde_json::json!({"name": "Checkout"});
+        let (_directory, repository) = repository();
+        let value = json!({"name": "Checkout"});
         repository
             .write("projects", "checkout.json", &value)
             .expect("write");
@@ -229,6 +244,271 @@ mod tests {
                 .write("projects", "../escape.json", &value)
                 .is_err()
         );
-        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn write_leaves_no_temporary_files_behind() {
+        let (directory, repository) = repository();
+        repository
+            .write("projects", "checkout.json", &json!({"name": "Checkout"}))
+            .expect("write");
+
+        let leftovers = fs::read_dir(directory.path().join("projects"))
+            .expect("read dir")
+            .filter_map(Result::ok)
+            .filter(|entry| entry.file_name().to_string_lossy().starts_with('.'))
+            .count();
+        assert_eq!(leftovers, 0);
+    }
+
+    #[test]
+    fn write_overwrites_existing_document() {
+        let (_directory, repository) = repository();
+        repository
+            .write("projects", "checkout.json", &json!({"name": "First"}))
+            .expect("first write");
+        repository
+            .write("projects", "checkout.json", &json!({"name": "Second"}))
+            .expect("second write");
+
+        assert_eq!(
+            repository.read("projects", "checkout.json").expect("read")["name"],
+            "Second"
+        );
+    }
+
+    #[test]
+    fn list_returns_sorted_json_files_only() {
+        let (directory, repository) = repository();
+        repository
+            .write("projects", "beta.json", &json!({"name": "Beta"}))
+            .expect("write beta");
+        repository
+            .write("projects", "alpha.json", &json!({"name": "Alpha"}))
+            .expect("write alpha");
+        fs::write(directory.path().join("projects/notes.txt"), b"ignored").expect("stray file");
+
+        assert_eq!(
+            repository.list("projects").expect("list"),
+            vec!["alpha.json".to_owned(), "beta.json".to_owned()]
+        );
+    }
+
+    #[test]
+    fn list_is_empty_for_new_storage() {
+        let (_directory, repository) = repository();
+        assert!(repository.list("test_runs").expect("list").is_empty());
+    }
+
+    #[test]
+    fn test_cases_are_stored_as_directories() {
+        let (directory, repository) = repository();
+        repository
+            .write("test_cases", "TC-001", &json!({"testCaseId": "TC-001"}))
+            .expect("write");
+
+        assert!(
+            directory
+                .path()
+                .join("test_cases/TC-001/test-case.json")
+                .is_file()
+        );
+        assert_eq!(
+            repository.list("test_cases").expect("list"),
+            vec!["TC-001".to_owned()]
+        );
+    }
+
+    #[test]
+    fn exists_reflects_stored_documents() {
+        let (_directory, repository) = repository();
+        assert!(!repository.exists("projects", "missing.json").expect("miss"));
+        repository
+            .write("projects", "found.json", &json!({"name": "Found"}))
+            .expect("write");
+        assert!(repository.exists("projects", "found.json").expect("hit"));
+    }
+
+    #[test]
+    fn read_reports_missing_documents() {
+        let (_directory, repository) = repository();
+        let error = repository
+            .read("projects", "missing.json")
+            .expect_err("miss");
+        assert_eq!(error.kind(), io::ErrorKind::NotFound);
+    }
+
+    #[test]
+    fn read_reports_corrupted_json_as_invalid_data() {
+        let (directory, repository) = repository();
+        fs::write(directory.path().join("projects/broken.json"), b"{ not json")
+            .expect("corrupt file");
+
+        let error = repository
+            .read("projects", "broken.json")
+            .expect_err("corrupt");
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+    }
+
+    #[test]
+    fn delete_removes_documents_and_test_case_directories() {
+        let (directory, repository) = repository();
+        repository
+            .write("projects", "checkout.json", &json!({"name": "Checkout"}))
+            .expect("write project");
+        repository
+            .write("test_cases", "TC-001", &json!({"testCaseId": "TC-001"}))
+            .expect("write case");
+        repository
+            .save_attachment("TC-001", "notes.txt", b"evidence")
+            .expect("attachment");
+
+        repository
+            .delete("projects", "checkout.json")
+            .expect("delete project");
+        repository
+            .delete("test_cases", "TC-001")
+            .expect("delete case");
+
+        assert!(!directory.path().join("projects/checkout.json").exists());
+        assert!(!directory.path().join("test_cases/TC-001").exists());
+    }
+
+    #[test]
+    fn delete_reports_missing_documents() {
+        let (_directory, repository) = repository();
+        let error = repository
+            .delete("projects", "missing.json")
+            .expect_err("miss");
+        assert_eq!(error.kind(), io::ErrorKind::NotFound);
+    }
+
+    #[test]
+    fn unknown_resources_are_rejected() {
+        let (_directory, repository) = repository();
+        let error = repository
+            .read("secrets", "any.json")
+            .expect_err("rejected");
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+    }
+
+    #[test]
+    fn flat_resources_require_a_json_extension() {
+        let (_directory, repository) = repository();
+        let error = repository
+            .write("projects", "checkout", &json!({"name": "Checkout"}))
+            .expect_err("rejected");
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+    }
+
+    #[test]
+    fn hostile_identifiers_are_rejected() {
+        let (_directory, repository) = repository();
+        for id in [
+            "",
+            ".",
+            "..",
+            "../escape.json",
+            "nested/child.json",
+            "back\\slash.json",
+            "/absolute.json",
+        ] {
+            assert!(
+                repository.read("projects", id).is_err(),
+                "identifier should be rejected: {id:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn attachments_round_trip_and_reject_traversal() {
+        let (_directory, repository) = repository();
+        repository
+            .write("test_cases", "TC-001", &json!({"testCaseId": "TC-001"}))
+            .expect("write case");
+
+        repository
+            .save_attachment("TC-001", "notes.txt", b"evidence")
+            .expect("save");
+        assert_eq!(
+            repository
+                .read_attachment("TC-001", "notes.txt")
+                .expect("read"),
+            b"evidence"
+        );
+
+        assert!(
+            repository
+                .save_attachment("TC-001", "../escape.txt", b"x")
+                .is_err()
+        );
+        assert!(
+            repository
+                .read_attachment("TC-001", "../../etc/passwd")
+                .is_err()
+        );
+
+        repository
+            .delete_attachment("TC-001", "notes.txt")
+            .expect("delete");
+        assert!(repository.read_attachment("TC-001", "notes.txt").is_err());
+    }
+
+    #[test]
+    fn duplicate_attachment_names_are_rejected() {
+        let (_directory, repository) = repository();
+        repository
+            .write("test_cases", "TC-001", &json!({"testCaseId": "TC-001"}))
+            .expect("write case");
+        repository
+            .save_attachment("TC-001", "notes.txt", b"first")
+            .expect("first");
+
+        assert!(
+            repository
+                .save_attachment("TC-001", "notes.txt", b"second")
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn concurrent_writers_never_publish_partial_documents() {
+        let (_directory, repository) = repository();
+        let readable = repository.clone();
+        let writers = (0..8)
+            .map(|index| {
+                let writer = repository.clone();
+                std::thread::spawn(move || {
+                    writer
+                        .write("projects", "shared.json", &json!({"name": index}))
+                        .expect("concurrent write");
+                })
+            })
+            .collect::<Vec<_>>();
+
+        for writer in writers {
+            writer.join().expect("writer thread");
+        }
+
+        let stored = readable.read("projects", "shared.json").expect("read");
+        assert!(stored["name"].is_number());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn stored_documents_use_private_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let (directory, repository) = repository();
+        repository
+            .write("projects", "checkout.json", &json!({"name": "Checkout"}))
+            .expect("write");
+
+        let mode = fs::metadata(directory.path().join("projects/checkout.json"))
+            .expect("metadata")
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(mode, 0o600);
     }
 }
