@@ -79,14 +79,25 @@ docker run --rm -v "$PWD:/repo:ro" --workdir /repo rhysd/actionlint:1.7.12 -colo
 Tests are split into two layers and both run in CI on every push and pull request:
 
 - **Unit tests** live beside the code in `src/models.rs` and `src/repository.rs`. They cover legacy JSON compatibility, required and unknown field handling, atomic writes, path confinement, attachment storage, concurrent writers, and file permissions.
-- **Integration tests** live in `tests/api.rs` and exercise the HTTP surface in-process through the Axum router against a temporary data directory. They cover health, the OpenAPI document, Swagger UI, CRUD for every resource family, the attachment upload/download/delete lifecycle, error envelopes, traversal rejection, and persistence across restarts.
+- **Integration tests** live in `tests/` and exercise the HTTP surface in-process through the Axum router against a temporary data directory. Each API area has its own suite:
 
-Run everything, or a single layer:
+| Suite | Covers |
+| --- | --- |
+| `tests/service.rs` | Health, OpenAPI document, Swagger UI, malformed bodies, traversal rejection, persistence across restarts |
+| `tests/projects.rs` | Project CRUD, validation, conflicts, error envelopes |
+| `tests/suites.rs` | Test suite CRUD, validation, conflicts, missing resources |
+| `tests/runs.rs` | Test run CRUD, validation, conflicts, missing resources |
+| `tests/cases.rs` | Test case CRUD, required fields, conflicts, missing resources |
+| `tests/attachments.rs` | Upload, download, delete, content types, removal with the parent test case |
+
+Shared request builders and assertions live in `tests/common/mod.rs`. Cargo compiles only top-level files in `tests/` as test binaries, so a subdirectory module is shared across suites without running as one itself.
+
+Run everything, a single layer, or one suite:
 
 ```sh
 cargo test --all-targets --all-features   # unit + integration
 cargo test --lib                          # unit tests only
-cargo test --test api                     # API integration tests only
+cargo test --test attachments             # a single API suite
 ```
 
 The crate exposes a library target (`src/lib.rs`) alongside the binary so integration tests can import `tucano_test::api` and drive the router directly, without binding a network port.
