@@ -69,7 +69,8 @@ When making decisions about features, architecture, or implementation:
 
 - Preserve the legacy Draft 2020-12 JSON shapes and camelCase field names.
 - The legacy schemas set `additionalProperties: false`; adding a field is a breaking change and
-  requires an explicit versioning plan in `COMPATIBILITY_CONTRACT.md` before implementation.
+  requires an explicit versioning plan in
+  [`docs/contracts/api-compatibility.md`](docs/contracts/api-compatibility.md) before implementation.
 - Test run results belong to the run, keyed per test case, so a case or suite may appear in
   several runs with different outcomes.
 
@@ -142,6 +143,17 @@ Beyond the shared security rules:
 - Keep `openapi.json` and Swagger UI in sync with routes.
 - Document changes to file formats, compatibility behaviour, persistence, or deployment.
 - Keep architecture, security, and compatibility documents versioned with the code.
+
+Repository documentation lives under `docs/`:
+
+| Path | Contents |
+| --- | --- |
+| [`docs/architecture/`](docs/architecture/) | Service design and technology decisions |
+| [`docs/contracts/`](docs/contracts/) | Compatibility rules against the legacy implementation |
+| [`docs/security/`](docs/security/) | Threat model, trust boundaries, security invariants |
+
+Only `README.md` and `AGENTS.md` belong at the repository root. Place any new document in the
+matching `docs/` category and link it from the README documentation table.
 
 ---
 
