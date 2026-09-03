@@ -11,6 +11,13 @@ permissions:
   contents: read
 
 jobs:
+  workflows:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate GitHub Actions workflows
+        run: docker run --rm -v "$PWD:/repo:ro" --workdir /repo rhysd/actionlint:1.7.12 -color
+
   checks:
     runs-on: ubuntu-latest
     container:
@@ -23,7 +30,7 @@ jobs:
         run: cargo fmt --all -- --check
       - name: Run clippy
         run: cargo clippy --all-targets --all-features -- -D warnings
-      - name: Run tests
+      - name: Run unit and integration tests
         run: cargo test --all-targets --all-features
       - name: Build release
         run: cargo build --release

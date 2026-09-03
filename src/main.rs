@@ -1,6 +1,4 @@
-pub mod api;
-pub mod models;
-pub mod repository;
+use tucano_test::{api, repository};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
