@@ -7,6 +7,12 @@ Rules and guidelines for AI agents working on the Tucano Test API.
 Organisation-wide rules live in [`AgentRules/`](AgentRules/) and apply to every repository.
 Read them before making changes. This file records only what is specific to this repository.
 
+**`AgentRules/` is synced automatically from
+[TucanoAgentRules](https://github.com/TucanoTechnology/TucanoAgentRules), the single source of
+truth shared with [TucanoTestGUI](https://github.com/TucanoTechnology/TucanoTestGUI). Do not edit
+files under `AgentRules/` in this repository — submit changes against TucanoAgentRules instead and
+they will arrive here as an automated pull request.**
+
 | Area | Rules |
 | --- | --- |
 | Branching | [`AgentRules/coding/branch-strategy.md`](AgentRules/coding/branch-strategy.md) |
