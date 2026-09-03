@@ -67,6 +67,111 @@ mod tests {
     use super::*;
 
     #[test]
+    fn attachment_round_trips_and_omits_missing_upload_time() {
+        let input = r#"{
+            "filename": "1700000000-notes.txt",
+            "originalName": "notes.txt",
+            "mimeType": "text/plain",
+            "size": 12
+        }"#;
+
+        let attachment: Attachment = serde_json::from_str(input).expect("valid attachment");
+        assert_eq!(attachment.original_name, "notes.txt");
+        assert!(attachment.uploaded_at.is_none());
+
+        let output = serde_json::to_value(&attachment).expect("serializable attachment");
+        assert_eq!(output["mimeType"], "text/plain");
+        assert_eq!(output["size"], 12.0);
+        assert!(output.get("uploadedAt").is_none());
+    }
+
+    #[test]
+    fn test_case_preserves_attachment_metadata() {
+        let input = r#"{
+            "testCaseId": "TC-001",
+            "title": "Upload evidence",
+            "expectedResult": "Attachment stored",
+            "attachments": [{
+                "filename": "1700000000-shot.png",
+                "originalName": "shot.png",
+                "mimeType": "image/png",
+                "size": 2048,
+                "uploadedAt": "2026-09-02T00:00:00Z"
+            }]
+        }"#;
+
+        let case: TestCase = serde_json::from_str(input).expect("valid test case");
+        let attachments = case.attachments.as_ref().expect("attachments present");
+        assert_eq!(attachments.len(), 1);
+        assert_eq!(
+            attachments[0].uploaded_at.as_deref(),
+            Some("2026-09-02T00:00:00Z")
+        );
+
+        let output = serde_json::to_value(&case).expect("serializable test case");
+        assert_eq!(output["attachments"][0]["originalName"], "shot.png");
+    }
+
+    #[test]
+    fn test_suite_round_trips_nested_test_cases() {
+        let input = r#"{
+            "suiteId": "S-001",
+            "name": "Regression",
+            "testCases": [{
+                "testCaseId": "TC-001",
+                "title": "Login",
+                "expectedResult": "User is authenticated"
+            }]
+        }"#;
+
+        let suite: TestSuite = serde_json::from_str(input).expect("valid suite");
+        assert_eq!(suite.test_cases.len(), 1);
+
+        let output = serde_json::to_value(&suite).expect("serializable suite");
+        assert_eq!(output["suiteId"], "S-001");
+        assert_eq!(output["testCases"][0]["testCaseId"], "TC-001");
+        assert!(output.get("description").is_none());
+    }
+
+    #[test]
+    fn test_run_round_trips_all_optional_collections() {
+        let input = r#"{
+            "testRunId": "R-001",
+            "timestamp": "2026-09-02T00:00:00Z",
+            "projects": [],
+            "testSuites": [],
+            "testCases": []
+        }"#;
+
+        let run: TestRun = serde_json::from_str(input).expect("valid run");
+        assert!(run.projects.as_ref().is_some_and(|items| items.is_empty()));
+
+        let output = serde_json::to_value(&run).expect("serializable run");
+        assert_eq!(output["testRunId"], "R-001");
+        assert!(output["testSuites"].is_array());
+    }
+
+    #[test]
+    fn test_run_omits_absent_collections() {
+        let run: TestRun =
+            serde_json::from_str(r#"{"testRunId":"R-002","timestamp":"2026-09-02T00:00:00Z"}"#)
+                .expect("valid minimal run");
+
+        let output = serde_json::to_value(&run).expect("serializable run");
+        assert!(output.get("projects").is_none());
+        assert!(output.get("testSuites").is_none());
+        assert!(output.get("testCases").is_none());
+    }
+
+    #[test]
+    fn snake_case_field_names_are_rejected() {
+        let result = serde_json::from_str::<TestCase>(
+            r#"{"test_case_id":"TC-001","title":"Legacy","expected_result":"Pass"}"#,
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
     fn project_round_trips_legacy_json() {
         let input = r#"{
             "projectId": "P-001",
@@ -105,10 +210,54 @@ mod tests {
     }
 
     #[test]
+    fn missing_required_fields_are_rejected_for_every_resource() {
+        assert!(
+            serde_json::from_str::<Project>(r#"{"projectId":"P-001","name":"No suites"}"#).is_err()
+        );
+        assert!(
+            serde_json::from_str::<TestSuite>(r#"{"suiteId":"S-001","name":"No cases"}"#).is_err()
+        );
+        assert!(serde_json::from_str::<TestRun>(r#"{"testRunId":"R-001"}"#).is_err());
+        assert!(
+            serde_json::from_str::<Attachment>(
+                r#"{"filename":"a.txt","originalName":"a.txt","mimeType":"text/plain"}"#
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
     fn unknown_fields_are_rejected() {
         let result = serde_json::from_str::<TestRun>(
             r#"{"testRunId":"R-001","timestamp":"2026-09-02T00:00:00Z","unexpected":true}"#,
         );
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn unknown_fields_are_rejected_for_every_resource() {
+        assert!(
+            serde_json::from_str::<Project>(
+                r#"{"projectId":"P-001","name":"X","testSuites":[],"rogue":1}"#
+            )
+            .is_err()
+        );
+        assert!(
+            serde_json::from_str::<TestSuite>(
+                r#"{"suiteId":"S-001","name":"X","testCases":[],"rogue":1}"#
+            )
+            .is_err()
+        );
+        assert!(
+            serde_json::from_str::<TestCase>(
+                r#"{"testCaseId":"TC-001","title":"X","expectedResult":"Y","rogue":1}"#
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn malformed_json_is_rejected() {
+        assert!(serde_json::from_str::<Project>("{ not json }").is_err());
     }
 }
