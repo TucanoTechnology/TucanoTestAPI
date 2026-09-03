@@ -8,4 +8,5 @@
 - Rebase only unpublished branches. Do not rewrite shared history unless explicitly approved.
 - Merge only through pull requests, after review, required CI checks, and branch protection checks pass.
 - Keep pull request branches up to date with their actual Gitflow target branch before merging.
+- Delete merged feature, bugfix, and release branches locally and on origin to prevent clutter.
 - Follow the secret handling requirements in `../security/secret-protection.md`.

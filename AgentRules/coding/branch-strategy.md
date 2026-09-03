@@ -11,9 +11,10 @@ Follow Gitflow as the branching strategy:
 - Merge hotfix branches into both `main` and `develop` through pull requests.
 
 When developing a feature or carrying out a ticket:
-- Create the branch from the correct Gitflow base branch.
+- Create the branch from the correct Gitflow base branch (or the repository's default branch if `develop` is absent).
 - Do not commit directly to `main` or `develop`.
 - Keep the branch up to date with its pull request target branch.
 - Resolve conflicts locally before requesting review.
-- Open a pull request when the work is ready.
+- Open a pull request targeting `develop` (or `main` if `develop` is absent) when the work is completed.
 - Merge through the pull request after review and required checks pass.
+- Delete local and remote feature/hotfix branches promptly after the pull request is merged.
