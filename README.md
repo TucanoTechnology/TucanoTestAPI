@@ -106,4 +106,11 @@ GitHub Actions runs workflow linting, formatting, Clippy, unit and integration t
 
 Repository contribution and agent workflow rules are documented in [AGENTS.md](AGENTS.md).
 
-The security requirements are captured in [THREAT_MODEL.md](THREAT_MODEL.md), and the Rust migration baseline is defined in [COMPATIBILITY_CONTRACT.md](COMPATIBILITY_CONTRACT.md).
+## Documentation
+
+| Document | Purpose |
+| --- | --- |
+| [docs/architecture/rust-service-core.md](docs/architecture/rust-service-core.md) | Why Rust, the layered service design, and delivery status |
+| [docs/contracts/api-compatibility.md](docs/contracts/api-compatibility.md) | File-format and endpoint compatibility rules against the legacy implementation |
+| [docs/security/threat-model.md](docs/security/threat-model.md) | Trust boundaries, abuse cases, and security invariants |
+| [AgentRules/](AgentRules/) | Organisation-wide engineering and process rules |

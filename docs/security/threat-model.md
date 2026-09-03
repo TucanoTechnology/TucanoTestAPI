@@ -1,8 +1,10 @@
-# Rust Service Threat Model
+# Service Threat Model
 
 ## Scope
 
-This threat model covers the planned Rust HTTP service, its JSON filesystem repository, attachment handling, and the future GUI client. The current repository is an evaluation skeleton and does not expose HTTP endpoints yet.
+This threat model covers the Rust HTTP service, its JSON filesystem repository, attachment handling, and the [TucanoTestGUI](https://github.com/TucanoTechnology/TucanoTestGUI) client.
+
+The service now exposes CRUD and attachment endpoints, so the controls below are live requirements rather than design intent. Controls that remain unimplemented are called out explicitly in the Open decisions section.
 
 ## Assets
 
@@ -35,7 +37,7 @@ This threat model covers the planned Rust HTTP service, its JSON filesystem repo
 | Concurrent write | Define lock and overwrite behavior; never publish a partial JSON document | Concurrent writer and atomicity tests |
 | Denial of service | Bound body size, JSON depth, filesystem work, uploads, and request duration | Timeout, cancellation, and resource-limit tests |
 | Data disclosure | Never return internal paths, stack traces, raw filesystem errors, secrets, or file contents in logs | Error and log-redaction tests |
-| Unauthorized access | Authenticate before protected operations and authorize by resource/action | Auth matrix tests |
+| Unauthorized access | Authenticate before protected operations and authorize by resource/action | Auth matrix tests (**not yet implemented** — the service is currently unauthenticated and must not be exposed beyond a trusted network) |
 | Vulnerable dependency or image | Run advisory, secret, and container scans in CI | Security workflow and clean-baseline checks |
 
 ## Security invariants

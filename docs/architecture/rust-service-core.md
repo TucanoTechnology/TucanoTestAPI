@@ -1,15 +1,17 @@
-# TucanoTCM Rust Evaluation Plan
+# Rust Service Core
+
+## Status
+
+**Decided and implemented.** This document began as a Rust evaluation plan and is retained as the architecture record for the service core. Phases 0–2 are delivered; Phase 3 is partially delivered, as noted below.
 
 ## Decision frame
 
-Evaluate Rust for the service core because TucanoTCM is intended to be a portable, file-based system exposed to untrusted HTTP input. Rust can reduce memory-safety risk at compile time while retaining the project goals of inspectable JSON files, a database-free deployment, API/GUI parity, and container portability.
-
-This is an evaluation, not a rewrite commitment. The existing API remains the behavioral reference until the Rust service passes compatibility, security, and operational gates.
+Rust was chosen for the service core because Tucano Test is a portable, file-based system exposed to untrusted HTTP input. Rust reduces memory-safety risk at compile time while retaining the project goals of inspectable JSON files, a database-free deployment, API/GUI parity, and container portability.
 
 ## Target architecture
 
 ```text
-GUI (future)
+GUI (TucanoTestGUI)
     |
     | HTTP/JSON API
     v
@@ -67,17 +69,11 @@ The GUI must use the same documented API as other clients. It should not read th
 - Benchmark representative CRUD, listing, validation, and upload workloads with bounded memory and concurrency.
 - Shadow or canary the Rust service with rollback to the current implementation. Migrate one resource family at a time; do not change file formats without an explicit versioning plan.
 
-## Suggested Rust stack
+## Delivered stack
 
-- `axum` and `tower-http` for HTTP routing, limits, tracing, and request IDs.
-- `serde`, `serde_json`, and a reviewed JSON Schema validator for typed payloads.
-- `thiserror` for domain errors and `anyhow` only at application boundaries.
-- `tokio` for asynchronous I/O and cancellation.
-- `tracing`/`tracing-subscriber` for structured diagnostics.
-- `tempfile` plus platform-aware filesystem operations for atomic persistence.
-- `cargo-deny` or equivalent policy checks, `cargo-audit`, and an SBOM in release CI.
+The candidates below were validated and adopted: `axum` and `tower-http` for HTTP routing, limits and tracing; `serde` and `serde_json` for typed payloads; `tokio` for asynchronous I/O; `fs2` for advisory locking; `tempfile` for test isolation.
 
-These are candidates to validate during Phase 0, not dependencies to add before the compatibility and security requirements are agreed.
+Still outstanding: a reviewed JSON Schema validator, `thiserror` domain errors, `tracing-subscriber` structured diagnostics, `cargo-deny` policy checks, and an SBOM in release CI.
 
 ## Non-goals for the first prototype
 
@@ -88,4 +84,6 @@ These are candidates to validate during Phase 0, not dependencies to add before 
 
 ## Exit criteria
 
-The evaluation is successful when the Rust prototype has endpoint and file-format compatibility fixtures, passes the security and failure-mode suite, documents all deviations, demonstrates bounded resource behavior, and can be deployed and rolled back using the existing volume-mount model. Only then should a full migration be proposed.
+The service core is accepted once it has endpoint and file-format compatibility fixtures, passes the security and failure-mode suite, documents all deviations, demonstrates bounded resource behaviour, and can be deployed and rolled back using the existing volume-mount model.
+
+Outstanding against these criteria: compatibility fixtures, property/fuzz testing, benchmarking, and authentication.
