@@ -8,7 +8,7 @@ COPY src ./src
 COPY openapi.json swagger.html ./
 RUN cargo build --release
 
-FROM debian:bookworm-slim
+FROM ubuntu:26.04
 
 ARG BUILD_NUMBER=local
 
