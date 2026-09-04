@@ -1,3 +1,4 @@
+use crate::models::{TestCase, TestSuite};
 use crate::repository::FileRepository;
 use axum::{
     Json, Router,
@@ -5,7 +6,7 @@ use axum::{
     extract::{Multipart, Path, State},
     http::{StatusCode, header},
     response::{IntoResponse, Response},
-    routing::{get, post},
+    routing::{delete, get, post},
 };
 use serde_json::{Value, json};
 use std::{
@@ -34,6 +35,11 @@ pub fn router(repository: FileRepository) -> Router {
         .route(
             "/test_suites/{id}",
             get(get_suite).put(update_suite).delete(delete_suite),
+        )
+        .route("/test_suites/{id}/test_cases", post(add_case_to_suite))
+        .route(
+            "/test_suites/{id}/test_cases/{case_id}",
+            delete(remove_case_from_suite),
         )
         .route("/test_runs", get(list_runs).post(create_run))
         .route(
@@ -278,6 +284,100 @@ async fn delete_attachment(
         {
             not_found("File not found")
         }
+        Err(error) => storage_error(error),
+    }
+}
+
+async fn add_case_to_suite(
+    State(repo): State<SharedRepository>,
+    Path(id): Path<String>,
+    Json(value): Json<Value>,
+) -> Response {
+    let Some(target_case_id) = required_string(&value, "testCaseId") else {
+        return bad_request("invalid_request", "Required field testCaseId is missing");
+    };
+
+    let suite_value = match repo.read("test_suites", &id) {
+        Ok(v) => v,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return not_found("Test suite not found");
+        }
+        Err(error) => return storage_error(error),
+    };
+
+    let mut suite: TestSuite = match serde_json::from_value(suite_value) {
+        Ok(s) => s,
+        Err(_) => return server_error("Stored suite JSON is invalid"),
+    };
+
+    let case_value = match repo.read("test_cases", &target_case_id) {
+        Ok(v) => v,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return not_found("Test case not found");
+        }
+        Err(error) => return storage_error(error),
+    };
+
+    let test_case: TestCase = match serde_json::from_value(case_value) {
+        Ok(c) => c,
+        Err(_) => return server_error("Stored case JSON is invalid"),
+    };
+
+    if suite
+        .test_cases
+        .iter()
+        .any(|c| c.test_case_id == test_case.test_case_id || c.test_case_id == target_case_id)
+    {
+        return conflict("Test case is already in suite");
+    }
+
+    suite.test_cases.push(test_case);
+    let updated_value = match serde_json::to_value(&suite) {
+        Ok(v) => v,
+        Err(_) => return server_error("Failed to serialize suite"),
+    };
+
+    match repo.write("test_suites", &id, &updated_value) {
+        Ok(()) => (
+            StatusCode::OK,
+            Json(json!({"message": "Test case added to suite"})),
+        )
+            .into_response(),
+        Err(error) => storage_error(error),
+    }
+}
+
+async fn remove_case_from_suite(
+    State(repo): State<SharedRepository>,
+    Path((id, case_id)): Path<(String, String)>,
+) -> Response {
+    let suite_value = match repo.read("test_suites", &id) {
+        Ok(v) => v,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return not_found("Test suite not found");
+        }
+        Err(error) => return storage_error(error),
+    };
+
+    let mut suite: TestSuite = match serde_json::from_value(suite_value) {
+        Ok(s) => s,
+        Err(_) => return server_error("Stored suite JSON is invalid"),
+    };
+
+    let original_len = suite.test_cases.len();
+    suite.test_cases.retain(|c| c.test_case_id != case_id);
+
+    if suite.test_cases.len() == original_len {
+        return not_found("Test case not in suite");
+    }
+
+    let updated_value = match serde_json::to_value(&suite) {
+        Ok(v) => v,
+        Err(_) => return server_error("Failed to serialize suite"),
+    };
+
+    match repo.write("test_suites", &id, &updated_value) {
+        Ok(()) => Json(json!({"message": "Test case removed from suite"})).into_response(),
         Err(error) => storage_error(error),
     }
 }
