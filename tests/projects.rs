@@ -57,9 +57,21 @@ async fn projects_support_the_full_crud_lifecycle() {
 async fn list_supports_case_insensitive_substring_filtering() {
     let (_directory, app) = test_app();
 
-    send_json(&app, json_request("POST", "/projects", &json!({"name": "alpha"}))).await;
-    send_json(&app, json_request("POST", "/projects", &json!({"name": "beta"}))).await;
-    send_json(&app, json_request("POST", "/projects", &json!({"name": "alphabet"}))).await;
+    send_json(
+        &app,
+        json_request("POST", "/projects", &json!({"name": "alpha"})),
+    )
+    .await;
+    send_json(
+        &app,
+        json_request("POST", "/projects", &json!({"name": "beta"})),
+    )
+    .await;
+    send_json(
+        &app,
+        json_request("POST", "/projects", &json!({"name": "alphabet"})),
+    )
+    .await;
 
     let (status, body) = send_json(&app, get("/projects?filter=ALPH")).await;
     assert_eq!(status, StatusCode::OK);
