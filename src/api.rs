@@ -1,4 +1,4 @@
-use crate::models::{TestCase, TestSuite};
+use crate::models::{TestCase, TestCaseResult, TestRun, TestSuite};
 use crate::repository::FileRepository;
 use axum::{
     Json, Router,
@@ -52,6 +52,9 @@ pub fn router(repository: FileRepository) -> Router {
             "/test_runs/{id}",
             get(get_run).put(update_run).delete(delete_run),
         )
+        .route("/test_runs/{id}/test_suites", post(add_suite_to_run))
+        .route("/test_runs/{id}/test_cases", post(add_case_to_run))
+        .route("/test_runs/{id}/results", post(record_run_result))
         .route("/test_cases", get(list_cases).post(create_case))
         .route(
             "/test_cases/{id}",
@@ -395,6 +398,198 @@ async fn remove_case_from_suite(
         Ok(()) => Json(json!({"message": "Test case removed from suite"})).into_response(),
         Err(error) => storage_error(error),
     }
+}
+
+async fn add_suite_to_run(
+    State(repo): State<SharedRepository>,
+    Path(id): Path<String>,
+    Json(value): Json<Value>,
+) -> Response {
+    let Some(suite_id) = required_string(&value, "suiteId") else {
+        return bad_request("invalid_request", "Required field suiteId is missing");
+    };
+
+    let run_value = match repo.read("test_runs", &id) {
+        Ok(v) => v,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return not_found("Test run not found");
+        }
+        Err(error) => return storage_error(error),
+    };
+
+    let mut run: TestRun = match serde_json::from_value(run_value) {
+        Ok(r) => r,
+        Err(_) => return server_error("Stored run JSON is invalid"),
+    };
+
+    let suite_value = match repo.read("test_suites", &suite_id) {
+        Ok(v) => v,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return not_found("Test suite not found");
+        }
+        Err(error) => return storage_error(error),
+    };
+
+    let suite: TestSuite = match serde_json::from_value(suite_value) {
+        Ok(s) => s,
+        Err(_) => return server_error("Stored suite JSON is invalid"),
+    };
+
+    let suites = run.test_suites.get_or_insert_with(Vec::new);
+    if suites
+        .iter()
+        .any(|s| s.suite_id == suite.suite_id || s.suite_id == suite_id)
+    {
+        return conflict("Test suite is already in test run");
+    }
+
+    suites.push(suite);
+    let updated_value = match serde_json::to_value(&run) {
+        Ok(v) => v,
+        Err(_) => return server_error("Failed to serialize test run"),
+    };
+
+    match repo.write("test_runs", &id, &updated_value) {
+        Ok(()) => (
+            StatusCode::OK,
+            Json(json!({"message": "Test suite added to test run"})),
+        )
+            .into_response(),
+        Err(error) => storage_error(error),
+    }
+}
+
+async fn add_case_to_run(
+    State(repo): State<SharedRepository>,
+    Path(id): Path<String>,
+    Json(value): Json<Value>,
+) -> Response {
+    let Some(case_id) = required_string(&value, "testCaseId") else {
+        return bad_request("invalid_request", "Required field testCaseId is missing");
+    };
+
+    let run_value = match repo.read("test_runs", &id) {
+        Ok(v) => v,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return not_found("Test run not found");
+        }
+        Err(error) => return storage_error(error),
+    };
+
+    let mut run: TestRun = match serde_json::from_value(run_value) {
+        Ok(r) => r,
+        Err(_) => return server_error("Stored run JSON is invalid"),
+    };
+
+    let case_value = match repo.read("test_cases", &case_id) {
+        Ok(v) => v,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return not_found("Test case not found");
+        }
+        Err(error) => return storage_error(error),
+    };
+
+    let test_case: TestCase = match serde_json::from_value(case_value) {
+        Ok(c) => c,
+        Err(_) => return server_error("Stored case JSON is invalid"),
+    };
+
+    let cases = run.test_cases.get_or_insert_with(Vec::new);
+    if cases
+        .iter()
+        .any(|c| c.test_case_id == test_case.test_case_id || c.test_case_id == case_id)
+    {
+        return conflict("Test case is already in test run");
+    }
+
+    cases.push(test_case);
+    let updated_value = match serde_json::to_value(&run) {
+        Ok(v) => v,
+        Err(_) => return server_error("Failed to serialize test run"),
+    };
+
+    match repo.write("test_runs", &id, &updated_value) {
+        Ok(()) => (
+            StatusCode::OK,
+            Json(json!({"message": "Test case added to test run"})),
+        )
+            .into_response(),
+        Err(error) => storage_error(error),
+    }
+}
+
+async fn record_run_result(
+    State(repo): State<SharedRepository>,
+    Path(id): Path<String>,
+    Json(value): Json<Value>,
+) -> Response {
+    let Some(test_case_id) = required_string(&value, "testCaseId") else {
+        return bad_request("invalid_request", "Required field testCaseId is missing");
+    };
+    let Some(status_str) = required_string(&value, "status") else {
+        return bad_request("invalid_request", "Required field status is missing");
+    };
+
+    let valid_statuses = ["Passed", "Failed", "Blocked", "Untested", "Retest"];
+    if !valid_statuses.contains(&status_str.as_str()) {
+        return bad_request(
+            "invalid_status",
+            "Status must be Passed, Failed, Blocked, Untested, or Retest",
+        );
+    }
+
+    let run_value = match repo.read("test_runs", &id) {
+        Ok(v) => v,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return not_found("Test run not found");
+        }
+        Err(error) => return storage_error(error),
+    };
+
+    let mut run: TestRun = match serde_json::from_value(run_value) {
+        Ok(r) => r,
+        Err(_) => return server_error("Stored run JSON is invalid"),
+    };
+
+    let timestamp = required_string(&value, "timestamp").unwrap_or_else(current_iso_timestamp);
+    let notes = required_string(&value, "notes");
+
+    let new_result = TestCaseResult {
+        test_case_id: test_case_id.clone(),
+        status: status_str,
+        timestamp,
+        notes,
+        attachments: None,
+    };
+
+    let results = run.results.get_or_insert_with(Vec::new);
+    if let Some(existing) = results.iter_mut().find(|r| r.test_case_id == test_case_id) {
+        *existing = new_result;
+    } else {
+        results.push(new_result);
+    }
+
+    let updated_value = match serde_json::to_value(&run) {
+        Ok(v) => v,
+        Err(_) => return server_error("Failed to serialize test run"),
+    };
+
+    match repo.write("test_runs", &id, &updated_value) {
+        Ok(()) => (
+            StatusCode::OK,
+            Json(json!({"message": "Test result recorded in run"})),
+        )
+            .into_response(),
+        Err(error) => storage_error(error),
+    }
+}
+
+fn current_iso_timestamp() -> String {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    format!("{}", now)
 }
 
 fn required_string(value: &Value, key: &str) -> Option<String> {

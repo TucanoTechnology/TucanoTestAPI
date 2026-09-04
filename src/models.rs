@@ -88,6 +88,8 @@ pub struct TestRun {
     pub test_run_id: String,
     pub timestamp: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub projects: Option<Vec<Project>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub test_suites: Option<Vec<TestSuite>>,
