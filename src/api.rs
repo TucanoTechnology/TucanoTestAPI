@@ -1,4 +1,4 @@
-use crate::models::{TestCase, TestCaseResult, TestRun, TestSuite};
+use crate::models::{Milestone, MilestoneProgress, TestCase, TestCaseResult, TestRun, TestSuite};
 use crate::repository::FileRepository;
 use axum::{
     Json, Router,
@@ -65,6 +65,14 @@ pub fn router(repository: FileRepository) -> Router {
             "/test_cases/{id}/attachments/{filename}",
             get(download_attachment).delete(delete_attachment),
         )
+        .route("/milestones", get(list_milestones).post(create_milestone))
+        .route(
+            "/milestones/{id}",
+            get(get_milestone)
+                .put(update_milestone)
+                .delete(delete_milestone),
+        )
+        .route("/milestones/{id}/progress", get(get_milestone_progress))
         .layer(RequestBodyLimitLayer::new(MAX_BODY_BYTES))
         .layer(TraceLayer::new_for_http())
         .with_state(state)
@@ -152,6 +160,14 @@ crud_handlers!(
     delete_case,
     "test_cases"
 );
+crud_handlers!(
+    list_milestones,
+    get_milestone,
+    create_milestone,
+    update_milestone,
+    delete_milestone,
+    "milestones"
+);
 
 fn list_resource(repo: SharedRepository, resource: &str, query: ListQuery) -> Response {
     match repo.list(resource) {
@@ -188,6 +204,15 @@ fn create_resource(repo: SharedRepository, resource: &str, value: Value) -> Resp
             required_string(&value, "title")
                 .zip(required_string(&value, "expectedResult"))
                 .map(|_| id)
+        })
+    } else if resource == "milestones" {
+        required_string(&value, "name").map(|name| {
+            let raw_id = required_string(&value, "milestoneId").unwrap_or(name);
+            if raw_id.ends_with(".json") {
+                raw_id
+            } else {
+                format!("{raw_id}.json")
+            }
         })
     } else {
         required_string(&value, "name").map(|name| format!("{name}.json"))
@@ -582,6 +607,80 @@ async fn record_run_result(
             .into_response(),
         Err(error) => storage_error(error),
     }
+}
+
+async fn get_milestone_progress(
+    State(repo): State<SharedRepository>,
+    Path(id): Path<String>,
+) -> Response {
+    let milestone_value = match repo.read("milestones", &id) {
+        Ok(v) => v,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return not_found("Milestone not found");
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::InvalidInput => {
+            return bad_request("invalid_id", "Invalid resource ID");
+        }
+        Err(error) => return storage_error(error),
+    };
+
+    let milestone: Milestone = match serde_json::from_value(milestone_value) {
+        Ok(m) => m,
+        Err(_) => return server_error("Stored milestone JSON is invalid"),
+    };
+
+    let run_ids = milestone.test_run_ids.unwrap_or_default();
+    let mut total_cases = 0;
+    let mut passed = 0;
+    let mut failed = 0;
+    let mut blocked = 0;
+    let mut untested = 0;
+    let mut retest = 0;
+
+    for run_id in run_ids {
+        if let Ok(run_value) = repo.read("test_runs", &run_id) {
+            if let Ok(run) = serde_json::from_value::<TestRun>(run_value) {
+                if let Some(cases) = run.test_cases {
+                    total_cases += cases.len();
+                }
+                if let Some(results) = run.results {
+                    for res in results {
+                        match res.status.as_str() {
+                            "Passed" => passed += 1,
+                            "Failed" => failed += 1,
+                            "Blocked" => blocked += 1,
+                            "Untested" => untested += 1,
+                            "Retest" => retest += 1,
+                            _ => {}
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if total_cases == 0 {
+        total_cases = passed + failed + blocked + untested + retest;
+    }
+
+    let pass_percentage = if total_cases > 0 {
+        (passed as f64 / total_cases as f64) * 100.0
+    } else {
+        0.0
+    };
+
+    let progress = MilestoneProgress {
+        milestone_id: milestone.milestone_id,
+        total_cases,
+        passed,
+        failed,
+        blocked,
+        untested,
+        retest,
+        pass_percentage,
+    };
+
+    Json(progress).into_response()
 }
 
 fn current_iso_timestamp() -> String {
