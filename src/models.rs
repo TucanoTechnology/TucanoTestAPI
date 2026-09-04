@@ -51,6 +51,18 @@ pub struct Project {
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TestCaseResult {
+    pub test_case_id: String,
+    pub status: String,
+    pub timestamp: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub notes: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub attachments: Option<Vec<Attachment>>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct TestRun {
     pub test_run_id: String,
     pub timestamp: String,
@@ -60,6 +72,8 @@ pub struct TestRun {
     pub test_suites: Option<Vec<TestSuite>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub test_cases: Option<Vec<TestCase>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub results: Option<Vec<TestCaseResult>>,
 }
 
 #[cfg(test)]
@@ -161,6 +175,30 @@ mod tests {
         assert!(output.get("projects").is_none());
         assert!(output.get("testSuites").is_none());
         assert!(output.get("testCases").is_none());
+        assert!(output.get("results").is_none());
+    }
+
+    #[test]
+    fn test_run_round_trips_test_case_results() {
+        let input = r#"{
+            "testRunId": "R-003",
+            "timestamp": "2026-09-04T12:00:00Z",
+            "results": [{
+                "testCaseId": "TC-001.json",
+                "status": "Passed",
+                "timestamp": "2026-09-04T12:05:00Z",
+                "notes": "Verified login form"
+            }]
+        }"#;
+
+        let run: TestRun = serde_json::from_str(input).expect("valid run with results");
+        let results = run.results.as_ref().expect("results present");
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].test_case_id, "TC-001.json");
+        assert_eq!(results[0].status, "Passed");
+
+        let output = serde_json::to_value(&run).expect("serializable run");
+        assert_eq!(output["results"][0]["status"], "Passed");
     }
 
     #[test]

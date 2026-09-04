@@ -46,6 +46,19 @@ Each endpoint case must record:
 6. Internal paths, stack traces, raw filesystem errors, secrets, and file contents must never appear in client errors or logs.
 7. Rust deviations must be listed with rationale, migration impact, and a test proving the new behavior.
 
+## Test Run Results Schema Versioning Plan (Issue #22)
+
+To record per-case execution outcomes within test runs without breaking existing run files:
+- `TestRun` JSON is extended with an optional `results` array of `TestCaseResult` objects.
+- Each `TestCaseResult` includes:
+  - `testCaseId`: string (required)
+  - `status`: string (required: `Passed`, `Failed`, `Blocked`, `Untested`, or `Retest`)
+  - `timestamp`: ISO-8601 string (required)
+  - `notes`: string (optional)
+  - `attachments`: array of `Attachment` objects (optional)
+- Existing run JSON files omitting `results` remain valid and deserialize with `results: None`.
+- Serializing `TestRun` instances with `results: None` omits the field, preserving legacy file compatibility.
+
 ## Required case matrix
 
 | Case | Expected evidence |
