@@ -638,22 +638,24 @@ async fn get_milestone_progress(
     let mut retest = 0;
 
     for run_id in run_ids {
-        if let Ok(run_value) = repo.read("test_runs", &run_id) {
-            if let Ok(run) = serde_json::from_value::<TestRun>(run_value) {
-                if let Some(cases) = run.test_cases {
-                    total_cases += cases.len();
-                }
-                if let Some(results) = run.results {
-                    for res in results {
-                        match res.status.as_str() {
-                            "Passed" => passed += 1,
-                            "Failed" => failed += 1,
-                            "Blocked" => blocked += 1,
-                            "Untested" => untested += 1,
-                            "Retest" => retest += 1,
-                            _ => {}
-                        }
-                    }
+        let Ok(run_value) = repo.read("test_runs", &run_id) else {
+            continue;
+        };
+        let Ok(run) = serde_json::from_value::<TestRun>(run_value) else {
+            continue;
+        };
+        if let Some(cases) = run.test_cases {
+            total_cases += cases.len();
+        }
+        if let Some(results) = run.results {
+            for res in results {
+                match res.status.as_str() {
+                    "Passed" => passed += 1,
+                    "Failed" => failed += 1,
+                    "Blocked" => blocked += 1,
+                    "Untested" => untested += 1,
+                    "Retest" => retest += 1,
+                    _ => {}
                 }
             }
         }
