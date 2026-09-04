@@ -68,6 +68,15 @@ To allow building test suites incrementally while preserving legacy fixture comp
 - Requests referencing unknown test cases return `404 Not Found`.
 - Requests adding duplicate test cases to the same suite return `409 Conflict`.
 
+## Test Run Composition & Execution Plan (Issue #24)
+
+To allow assembling runs from suites and cases, and recording per-case execution results:
+- `POST /test_runs/{id}/test_suites` (payload `{"suiteId": "Smoke.json"}`) resolves the suite from repository storage and appends it to `run.testSuites`.
+- `POST /test_runs/{id}/test_cases` (payload `{"testCaseId": "TC-001.json"}`) resolves the test case from repository storage and appends it to `run.testCases`.
+- `POST /test_runs/{id}/results` (payload `{"testCaseId": "TC-001.json", "status": "Passed", "notes": "notes"}`) records or updates a `TestCaseResult` in `run.results`.
+- Results persist in `run.results` in run storage and never mutate source `TestCase` or `TestSuite` files.
+- Recording results for the same test case across multiple runs maintains total isolation between runs.
+
 ## Required case matrix
 
 | Case | Expected evidence |
