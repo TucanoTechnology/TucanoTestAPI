@@ -33,6 +33,9 @@ async fn openapi_document_describes_every_route() {
         "/test_cases/{id}",
         "/test_cases/{id}/attachments",
         "/test_cases/{id}/attachments/{filename}",
+        "/milestones",
+        "/milestones/{id}",
+        "/milestones/{id}/progress",
         "/health",
     ] {
         assert!(

@@ -5,7 +5,13 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-const RESOURCE_DIRS: [&str; 4] = ["projects", "test_cases", "test_suites", "test_runs"];
+const RESOURCE_DIRS: [&str; 5] = [
+    "projects",
+    "test_cases",
+    "test_suites",
+    "test_runs",
+    "milestones",
+];
 
 #[derive(Clone)]
 pub struct FileRepository {

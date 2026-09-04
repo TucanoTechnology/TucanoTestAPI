@@ -99,6 +99,38 @@ pub struct TestRun {
     pub results: Option<Vec<TestCaseResult>>,
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Milestone {
+    pub milestone_id: String,
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub start_date: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_date: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub test_suite_ids: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub test_run_ids: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct MilestoneProgress {
+    pub milestone_id: String,
+    pub total_cases: usize,
+    pub passed: usize,
+    pub failed: usize,
+    pub blocked: usize,
+    pub untested: usize,
+    pub retest: usize,
+    pub pass_percentage: f64,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -270,6 +302,28 @@ mod tests {
 
         let output = serde_json::to_value(&run).expect("serializable run");
         assert_eq!(output["results"][0]["status"], "Passed");
+    }
+
+    #[test]
+    fn milestone_round_trips_and_omits_optional_fields() {
+        let input = r#"{
+            "milestoneId": "M-001.json",
+            "name": "Sprint 42",
+            "startDate": "2026-09-01",
+            "targetDate": "2026-09-15",
+            "status": "Open",
+            "testRunIds": ["RUN-1.json"]
+        }"#;
+
+        let milestone: Milestone = serde_json::from_str(input).expect("valid milestone");
+        assert_eq!(milestone.name, "Sprint 42");
+        assert_eq!(milestone.target_date.as_deref(), Some("2026-09-15"));
+        assert!(milestone.test_suite_ids.is_none());
+
+        let output = serde_json::to_value(&milestone).expect("serializable milestone");
+        assert_eq!(output["milestoneId"], "M-001.json");
+        assert_eq!(output["testRunIds"][0], "RUN-1.json");
+        assert!(output.get("description").is_none());
     }
 
     #[test]
