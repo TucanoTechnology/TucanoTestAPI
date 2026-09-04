@@ -99,3 +99,117 @@ async fn missing_test_suites_return_not_found() {
         assert_error_envelope(&body, "not_found");
     }
 }
+
+#[tokio::test]
+async fn test_suites_support_incremental_case_composition() {
+    let (_directory, app) = test_app();
+
+    // 1. Create a suite and two test cases
+    send_json(
+        &app,
+        json_request(
+            "POST",
+            "/test_suites",
+            &json!({"suiteId": "S-001", "name": "smoke", "testCases": []}),
+        ),
+    )
+    .await;
+
+    send_json(
+        &app,
+        json_request(
+            "POST",
+            "/test_cases",
+            &json!({"testCaseId": "TC-001.json", "title": "Login", "expectedResult": "Success"}),
+        ),
+    )
+    .await;
+
+    send_json(
+        &app,
+        json_request(
+            "POST",
+            "/test_cases",
+            &json!({"testCaseId": "TC-002.json", "title": "Logout", "expectedResult": "Success"}),
+        ),
+    )
+    .await;
+
+    // 2. Reject adding unknown test case
+    let (status, body) = send_json(
+        &app,
+        json_request(
+            "POST",
+            "/test_suites/smoke.json/test_cases",
+            &json!({"testCaseId": "TC-999.json"}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_error_envelope(&body, "not_found");
+
+    // 3. Add TC-001.json to suite
+    let (status, _) = send_json(
+        &app,
+        json_request(
+            "POST",
+            "/test_suites/smoke.json/test_cases",
+            &json!({"testCaseId": "TC-001.json"}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    // 4. Reject duplicate addition
+    let (status, body) = send_json(
+        &app,
+        json_request(
+            "POST",
+            "/test_suites/smoke.json/test_cases",
+            &json!({"testCaseId": "TC-001.json"}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_error_envelope(&body, "conflict");
+
+    // 5. Add TC-002.json to suite preserving ordering
+    let (status, _) = send_json(
+        &app,
+        json_request(
+            "POST",
+            "/test_suites/smoke.json/test_cases",
+            &json!({"testCaseId": "TC-002.json"}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let (_, suite) = send_json(&app, get("/test_suites/smoke.json")).await;
+    let cases = suite["testCases"].as_array().unwrap();
+    assert_eq!(cases.len(), 2);
+    assert_eq!(cases[0]["testCaseId"], "TC-001.json");
+    assert_eq!(cases[1]["testCaseId"], "TC-002.json");
+
+    // 6. Remove TC-001.json from suite
+    let (status, _) = send_json(
+        &app,
+        delete("/test_suites/smoke.json/test_cases/TC-001.json"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let (_, suite) = send_json(&app, get("/test_suites/smoke.json")).await;
+    let cases = suite["testCases"].as_array().unwrap();
+    assert_eq!(cases.len(), 1);
+    assert_eq!(cases[0]["testCaseId"], "TC-002.json");
+
+    // 7. Removing non-existent case from suite returns 404
+    let (status, body) = send_json(
+        &app,
+        delete("/test_suites/smoke.json/test_cases/TC-001.json"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_error_envelope(&body, "not_found");
+}
