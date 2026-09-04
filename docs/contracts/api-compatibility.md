@@ -59,6 +59,15 @@ To record per-case execution outcomes within test runs without breaking existing
 - Existing run JSON files omitting `results` remain valid and deserialize with `results: None`.
 - Serializing `TestRun` instances with `results: None` omits the field, preserving legacy file compatibility.
 
+## Test Suite Composition Plan (Issue #23)
+
+To allow building test suites incrementally while preserving legacy fixture compatibility:
+- `TestSuite` JSON continues embedding full `TestCase` objects in `testCases` to remain compatible with legacy Draft 2020-12 schemas.
+- `POST /test_suites/{id}/test_cases` (payload `{"testCaseId": "TC-001"}`) resolves the specified test case from repository storage, validates that it is not already present in the suite, and appends the case to `testCases`.
+- `DELETE /test_suites/{id}/test_cases/{case_id}` removes the matching test case from `testCases` by ID.
+- Requests referencing unknown test cases return `404 Not Found`.
+- Requests adding duplicate test cases to the same suite return `409 Conflict`.
+
 ## Required case matrix
 
 | Case | Expected evidence |

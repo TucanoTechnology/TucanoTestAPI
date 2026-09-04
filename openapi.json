@@ -14,6 +14,8 @@
     "/projects/{id}": {"$ref": "#/components/x-resource"},
     "/test_suites": {"$ref": "#/components/x-crud"},
     "/test_suites/{id}": {"$ref": "#/components/x-resource"},
+    "/test_suites/{id}/test_cases": {"post": {"summary": "Add test case to suite", "parameters": [{"$ref": "#/components/parameters/id"}], "requestBody": {"required": true, "content": {"application/json": {"schema": {"type": "object", "properties": {"testCaseId": {"type": "string"}}, "required": ["testCaseId"]}}}}, "responses": {"200": {"description": "Added"}, "400": {"$ref": "#/components/responses/Error"}, "404": {"$ref": "#/components/responses/Error"}, "409": {"$ref": "#/components/responses/Error"}}}},
+    "/test_suites/{id}/test_cases/{case_id}": {"delete": {"summary": "Remove test case from suite", "parameters": [{"$ref": "#/components/parameters/id"}, {"name": "case_id", "in": "path", "required": true, "schema": {"type": "string"}}], "responses": {"200": {"description": "Removed"}, "404": {"$ref": "#/components/responses/Error"}}}},
     "/test_runs": {"$ref": "#/components/x-crud"},
     "/test_runs/{id}": {"$ref": "#/components/x-resource"},
     "/test_cases": {"$ref": "#/components/x-crud"},
