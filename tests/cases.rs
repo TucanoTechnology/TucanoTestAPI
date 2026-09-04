@@ -107,3 +107,40 @@ async fn missing_test_cases_return_not_found() {
         assert_error_envelope(&body, "not_found");
     }
 }
+#[tokio::test]
+async fn creating_a_rich_test_case_preserves_preconditions_severity_and_steps() {
+    let (_directory, app) = test_app();
+
+    let payload = json!({
+        "testCaseId": "TC-RICH-001.json",
+        "title": "Rich Order Verification",
+        "preconditions": "User is logged in",
+        "priority": "High",
+        "severity": "Critical",
+        "testType": "Functional",
+        "expectedResult": "Order confirmation modal shown",
+        "steps": [
+            "Open product page",
+            {
+                "action": "Click Checkout",
+                "expectedResult": "Payment screen loaded"
+            }
+        ]
+    });
+
+    let (status, created) = send_json(&app, json_request("POST", "/test_cases", &payload)).await;
+    assert_eq!(status, StatusCode::CREATED);
+    assert_eq!(created["id"], "TC-RICH-001.json");
+
+    let (status, stored) = send_json(&app, get("/test_cases/TC-RICH-001.json")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(stored["preconditions"], "User is logged in");
+    assert_eq!(stored["severity"], "Critical");
+    assert_eq!(stored["testType"], "Functional");
+    assert_eq!(stored["steps"][0], "Open product page");
+    assert_eq!(stored["steps"][1]["action"], "Click Checkout");
+    assert_eq!(
+        stored["steps"][1]["expectedResult"],
+        "Payment screen loaded"
+    );
+}

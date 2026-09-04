@@ -13,16 +13,37 @@ pub struct Attachment {
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TestStep {
+    pub action: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expected_result: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+#[serde(untagged)]
+pub enum TestCaseStep {
+    Simple(String),
+    Structured(TestStep),
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct TestCase {
     pub test_case_id: String,
     pub title: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub steps: Option<Vec<String>>,
+    pub preconditions: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub steps: Option<Vec<TestCaseStep>>,
     pub expected_result: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub priority: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub severity: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub test_type: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub exploratory: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -124,6 +145,54 @@ mod tests {
 
         let output = serde_json::to_value(&case).expect("serializable test case");
         assert_eq!(output["attachments"][0]["originalName"], "shot.png");
+    }
+
+    #[test]
+    fn test_case_supports_structured_steps_preconditions_severity_and_test_type() {
+        let input = r#"{
+            "testCaseId": "TC-002",
+            "title": "Rich Test Case",
+            "preconditions": "User has active account",
+            "priority": "High",
+            "severity": "Critical",
+            "testType": "Functional",
+            "expectedResult": "Order confirmed",
+            "steps": [
+                "Navigate to /checkout",
+                {
+                    "action": "Click Pay Now",
+                    "expectedResult": "Payment processed"
+                }
+            ]
+        }"#;
+
+        let case: TestCase = serde_json::from_str(input).expect("valid rich test case");
+        assert_eq!(
+            case.preconditions.as_deref(),
+            Some("User has active account")
+        );
+        assert_eq!(case.severity.as_deref(), Some("Critical"));
+        assert_eq!(case.test_type.as_deref(), Some("Functional"));
+
+        let steps = case.steps.as_ref().expect("steps present");
+        assert_eq!(steps.len(), 2);
+        assert_eq!(
+            steps[0],
+            TestCaseStep::Simple("Navigate to /checkout".to_string())
+        );
+        assert_eq!(
+            steps[1],
+            TestCaseStep::Structured(TestStep {
+                action: "Click Pay Now".to_string(),
+                expected_result: Some("Payment processed".to_string()),
+            })
+        );
+
+        let output = serde_json::to_value(&case).expect("serializable case");
+        assert_eq!(output["preconditions"], "User has active account");
+        assert_eq!(output["severity"], "Critical");
+        assert_eq!(output["testType"], "Functional");
+        assert_eq!(output["steps"][1]["action"], "Click Pay Now");
     }
 
     #[test]
