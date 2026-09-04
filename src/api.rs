@@ -3,11 +3,12 @@ use crate::repository::FileRepository;
 use axum::{
     Json, Router,
     body::Body,
-    extract::{Multipart, Path, State},
+    extract::{Multipart, Path, Query, State},
     http::{StatusCode, header},
     response::{IntoResponse, Response},
     routing::{delete, get, post},
 };
+use serde::Deserialize;
 use serde_json::{Value, json};
 use std::{
     sync::Arc,
@@ -18,6 +19,11 @@ use tower_http::{limit::RequestBodyLimitLayer, trace::TraceLayer};
 pub const MAX_BODY_BYTES: usize = 50 * 1024 * 1024;
 
 type SharedRepository = Arc<FileRepository>;
+
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct ListQuery {
+    pub filter: Option<String>,
+}
 
 pub fn router(repository: FileRepository) -> Router {
     let state = Arc::new(repository);
@@ -83,8 +89,11 @@ async fn swagger_ui() -> Response {
 
 macro_rules! crud_handlers {
     ($list:ident, $get:ident, $create:ident, $update:ident, $delete:ident, $resource:literal) => {
-        async fn $list(State(repo): State<SharedRepository>) -> Response {
-            list_resource(repo, $resource)
+        async fn $list(
+            State(repo): State<SharedRepository>,
+            Query(query): Query<ListQuery>,
+        ) -> Response {
+            list_resource(repo, $resource, query)
         }
         async fn $get(State(repo): State<SharedRepository>, Path(id): Path<String>) -> Response {
             get_resource(repo, $resource, id)
@@ -141,9 +150,15 @@ crud_handlers!(
     "test_cases"
 );
 
-fn list_resource(repo: SharedRepository, resource: &str) -> Response {
+fn list_resource(repo: SharedRepository, resource: &str, query: ListQuery) -> Response {
     match repo.list(resource) {
-        Ok(items) => Json(items).into_response(),
+        Ok(mut items) => {
+            if let Some(filter) = query.filter {
+                let needle = filter.to_lowercase();
+                items.retain(|item| item.to_lowercase().contains(&needle));
+            }
+            Json(items).into_response()
+        }
         Err(error) => storage_error(error),
     }
 }
