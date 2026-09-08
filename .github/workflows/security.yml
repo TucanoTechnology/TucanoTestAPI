@@ -21,6 +21,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Cache cargo-audit
+        id: cache
         uses: actions/cache@v4
         with:
           path: /usr/local/cargo/bin/cargo-audit
@@ -28,7 +29,7 @@ jobs:
           restore-keys: |
             cargo-audit-${{ runner.os }}-
       - name: Install cargo-audit
-        run: cargo install cargo-audit --locked
+        run: cargo install cargo-audit --locked --force
         if: steps.cache.outputs.cache-hit != 'true'
       - name: Audit dependencies
         run: cargo audit
