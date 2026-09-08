@@ -38,11 +38,13 @@ pub fn router(repository: FileRepository) -> Router {
             "/projects/{id}",
             get(get_project).put(update_project).delete(delete_project),
         )
+        .route("/projects/{id}/duplicate", post(duplicate_project))
         .route("/test_suites", get(list_suites).post(create_suite))
         .route(
             "/test_suites/{id}",
             get(get_suite).put(update_suite).delete(delete_suite),
         )
+        .route("/test_suites/{id}/duplicate", post(duplicate_suite))
         .route("/test_suites/{id}/test_cases", post(add_case_to_suite))
         .route(
             "/test_suites/{id}/test_cases/{case_id}",
@@ -53,6 +55,7 @@ pub fn router(repository: FileRepository) -> Router {
             "/test_runs/{id}",
             get(get_run).put(update_run).delete(delete_run),
         )
+        .route("/test_runs/{id}/duplicate", post(duplicate_run))
         .route("/test_runs/{id}/test_suites", post(add_suite_to_run))
         .route("/test_runs/{id}/test_cases", post(add_case_to_run))
         .route("/test_runs/{id}/results", post(record_run_result))
@@ -61,6 +64,7 @@ pub fn router(repository: FileRepository) -> Router {
             "/test_cases/{id}",
             get(get_case).put(update_case).delete(delete_case),
         )
+        .route("/test_cases/{id}/duplicate", post(duplicate_case))
         .route("/test_cases/{id}/attachments", post(upload_attachment))
         .route(
             "/test_cases/{id}/attachments/{filename}",
@@ -705,6 +709,199 @@ async fn get_milestone_progress(
     };
 
     Json(progress).into_response()
+}
+
+async fn duplicate_project(
+    State(repo): State<SharedRepository>,
+    Path(id): Path<String>,
+    Json(body): Json<Value>,
+) -> Response {
+    let source = match repo.read("projects", &id) {
+        Ok(v) => v,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return not_found("Project not found");
+        }
+        Err(error) => return storage_error(error),
+    };
+
+    let mut new_project = source.clone();
+    if let Some(new_id) = body.get("newId").and_then(|v| v.as_str()) {
+        if let Some(obj) = new_project.as_object_mut() {
+            obj.insert("projectId".to_string(), json!(new_id));
+        }
+    } else {
+        let new_id = format!("{}-copy-{}", id.trim_end_matches(".json"), unique_suffix());
+        if let Some(obj) = new_project.as_object_mut() {
+            obj.insert("projectId".to_string(), json!(new_id));
+        }
+    }
+
+    if let Some(new_name) = body.get("newName").and_then(|v| v.as_str())
+        && let Some(obj) = new_project.as_object_mut()
+    {
+        obj.insert("name".to_string(), json!(new_name));
+    }
+
+    let new_id = new_project
+        .get("projectId")
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown");
+    match repo.write("projects", new_id, &new_project) {
+        Ok(()) => (
+            StatusCode::CREATED,
+            Json(json!({"message": "Project duplicated", "id": new_id})),
+        )
+            .into_response(),
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+            conflict("Project already exists")
+        }
+        Err(error) => storage_error(error),
+    }
+}
+
+async fn duplicate_suite(
+    State(repo): State<SharedRepository>,
+    Path(id): Path<String>,
+    Json(body): Json<Value>,
+) -> Response {
+    let source = match repo.read("test_suites", &id) {
+        Ok(v) => v,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return not_found("Test suite not found");
+        }
+        Err(error) => return storage_error(error),
+    };
+
+    let mut new_suite = source.clone();
+    if let Some(new_id) = body.get("newId").and_then(|v| v.as_str()) {
+        if let Some(obj) = new_suite.as_object_mut() {
+            obj.insert("suiteId".to_string(), json!(new_id));
+        }
+    } else {
+        let new_id = format!("{}-copy-{}", id.trim_end_matches(".json"), unique_suffix());
+        if let Some(obj) = new_suite.as_object_mut() {
+            obj.insert("suiteId".to_string(), json!(new_id));
+        }
+    }
+
+    if let Some(new_name) = body.get("newName").and_then(|v| v.as_str())
+        && let Some(obj) = new_suite.as_object_mut()
+    {
+        obj.insert("name".to_string(), json!(new_name));
+    }
+
+    let new_id = new_suite
+        .get("suiteId")
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown");
+    match repo.write("test_suites", new_id, &new_suite) {
+        Ok(()) => (
+            StatusCode::CREATED,
+            Json(json!({"message": "Test suite duplicated", "id": new_id})),
+        )
+            .into_response(),
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+            conflict("Test suite already exists")
+        }
+        Err(error) => storage_error(error),
+    }
+}
+
+async fn duplicate_case(
+    State(repo): State<SharedRepository>,
+    Path(id): Path<String>,
+    Json(body): Json<Value>,
+) -> Response {
+    let source = match repo.read("test_cases", &id) {
+        Ok(v) => v,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return not_found("Test case not found");
+        }
+        Err(error) => return storage_error(error),
+    };
+
+    let mut new_case = source.clone();
+    if let Some(new_id) = body.get("newId").and_then(|v| v.as_str()) {
+        if let Some(obj) = new_case.as_object_mut() {
+            obj.insert("testCaseId".to_string(), json!(new_id));
+        }
+    } else {
+        let new_id = format!("{}-copy-{}", id.trim_end_matches(".json"), unique_suffix());
+        if let Some(obj) = new_case.as_object_mut() {
+            obj.insert("testCaseId".to_string(), json!(new_id));
+        }
+    }
+
+    if let Some(new_title) = body.get("newTitle").and_then(|v| v.as_str())
+        && let Some(obj) = new_case.as_object_mut()
+    {
+        obj.insert("title".to_string(), json!(new_title));
+    }
+
+    let new_id = new_case
+        .get("testCaseId")
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown");
+    match repo.write("test_cases", new_id, &new_case) {
+        Ok(()) => (
+            StatusCode::CREATED,
+            Json(json!({"message": "Test case duplicated", "id": new_id})),
+        )
+            .into_response(),
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+            conflict("Test case already exists")
+        }
+        Err(error) => storage_error(error),
+    }
+}
+
+async fn duplicate_run(
+    State(repo): State<SharedRepository>,
+    Path(id): Path<String>,
+    Json(body): Json<Value>,
+) -> Response {
+    let source = match repo.read("test_runs", &id) {
+        Ok(v) => v,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return not_found("Test run not found");
+        }
+        Err(error) => return storage_error(error),
+    };
+
+    let mut new_run = source.clone();
+    if let Some(new_id) = body.get("newId").and_then(|v| v.as_str()) {
+        if let Some(obj) = new_run.as_object_mut() {
+            obj.insert("testRunId".to_string(), json!(new_id));
+        }
+    } else {
+        let new_id = format!("{}-copy-{}", id.trim_end_matches(".json"), unique_suffix());
+        if let Some(obj) = new_run.as_object_mut() {
+            obj.insert("testRunId".to_string(), json!(new_id));
+        }
+    }
+
+    // Update timestamp to current time
+    if let Some(obj) = new_run.as_object_mut() {
+        obj.insert("timestamp".to_string(), json!(current_iso_timestamp()));
+        // Remove results - new run should not have results
+        obj.remove("results");
+    }
+
+    let new_id = new_run
+        .get("testRunId")
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown");
+    match repo.write("test_runs", new_id, &new_run) {
+        Ok(()) => (
+            StatusCode::CREATED,
+            Json(json!({"message": "Test run duplicated", "id": new_id})),
+        )
+            .into_response(),
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+            conflict("Test run already exists")
+        }
+        Err(error) => storage_error(error),
+    }
 }
 
 fn current_iso_timestamp() -> String {
