@@ -14,7 +14,7 @@ jobs:
   workflows:
     runs-on: [self-hosted, Linux, X64]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Validate GitHub Actions workflows
         run: docker run --rm -v "$PWD:/repo:ro" --workdir /repo rhysd/actionlint:1.7.12 -color
 
@@ -23,7 +23,7 @@ jobs:
     container:
       image: rust:1.98.0-bookworm
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Install required components
         run: rustup component add rustfmt clippy
       - name: Check formatting
