@@ -20,3 +20,20 @@ This prevents wasted CI cycles and enables faster iteration. If CI fails after p
 immediately before working on other tasks.
 
 Repository-specific commands are documented in each project's `AGENTS.md` file.
+
+## PR Merge Dependencies
+
+When a PR depends on another PR being merged first:
+
+1. **Add dependency to PR title** — Use format: `[Depends on #XX]` or `[Blocked by #XX]`
+2. **Document in description** — Explain why the dependency exists
+3. **Rebase before merge** — Always rebase on main before final merge to resolve conflicts
+
+**Example:**
+- PR Title: `feat: tags UI component [Depends on #58]`
+- Description: "This PR implements the tags UI. Depends on API PR #58 (tags support) being merged first."
+
+**Dependency Order:**
+- API changes before GUI changes that use them
+- Foundation features before dependent features
+- Breaking changes before migrations
