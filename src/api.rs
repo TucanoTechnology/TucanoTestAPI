@@ -78,7 +78,10 @@ pub fn router(repository: FileRepository) -> Router {
                 .delete(delete_milestone),
         )
         .route("/milestones/{id}/progress", get(get_milestone_progress))
-        .route("/configurations", get(list_configurations).post(create_configuration))
+        .route(
+            "/configurations",
+            get(list_configurations).post(create_configuration),
+        )
         .route(
             "/configurations/{id}",
             get(get_configuration)
