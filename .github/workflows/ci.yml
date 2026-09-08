@@ -12,14 +12,14 @@ permissions:
 
 jobs:
   workflows:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64]
     steps:
       - uses: actions/checkout@v4
       - name: Validate GitHub Actions workflows
         run: docker run --rm -v "$PWD:/repo:ro" --workdir /repo rhysd/actionlint:1.7.12 -color
 
   checks:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64]
     container:
       image: rust:1.98.0-bookworm
     steps:
