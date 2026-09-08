@@ -78,6 +78,16 @@ pub fn router(repository: FileRepository) -> Router {
                 .delete(delete_milestone),
         )
         .route("/milestones/{id}/progress", get(get_milestone_progress))
+        .route(
+            "/configurations",
+            get(list_configurations).post(create_configuration),
+        )
+        .route(
+            "/configurations/{id}",
+            get(get_configuration)
+                .put(update_configuration)
+                .delete(delete_configuration),
+        )
         .layer(RequestBodyLimitLayer::new(MAX_BODY_BYTES))
         .layer(TraceLayer::new_for_http())
         .with_state(state)
@@ -172,6 +182,14 @@ crud_handlers!(
     update_milestone,
     delete_milestone,
     "milestones"
+);
+crud_handlers!(
+    list_configurations,
+    get_configuration,
+    create_configuration,
+    update_configuration,
+    delete_configuration,
+    "configurations"
 );
 
 fn list_resource(repo: SharedRepository, resource: &str, query: ListQuery) -> Response {
