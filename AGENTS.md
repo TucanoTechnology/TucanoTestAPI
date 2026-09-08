@@ -98,6 +98,23 @@ Cover CRUD operations, persistence, attachments, malformed input, traversal, sym
 concurrency, and volume behaviour. Test the production image and Compose configuration for
 startup, health, persistence, and restart behaviour.
 
+## CI/CD Validation
+
+**All CI/CD jobs must pass locally before committing and raising a PR.**
+
+Before committing ANY changes:
+
+1. **Build locally**: `cargo build --release`
+2. **Run all tests**: `cargo test --all-targets --all-features`
+3. **Run linters**: `cargo fmt --all -- --check && cargo clippy --all-targets --all-features -- -D warnings`
+4. **Verify locally**: Ensure all tests pass and no warnings exist
+5. **Then commit**: Only after local validation passes
+
+**Never commit code that hasn't been built and tested locally first.**
+
+This prevents wasted CI cycles and enables faster iteration. If CI fails after push, fix immediately
+before working on other tasks.
+
 ---
 
 ## Docker & Deployment
