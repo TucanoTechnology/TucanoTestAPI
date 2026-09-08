@@ -79,7 +79,7 @@ mod malformed_json_tests {
 
     #[test]
     fn test_rejects_malformed_json() {
-        let (repo, _temp) = setup_test_repo();
+        let (_repo, _temp) = setup_test_repo();
         let value = serde_json::from_str::<serde_json::Value>("{ invalid json }");
         assert!(value.is_err(), "Malformed JSON should fail to parse");
     }
@@ -87,7 +87,7 @@ mod malformed_json_tests {
     #[test]
     fn test_repository_accepts_any_valid_json() {
         // Repository layer accepts any valid JSON - validation happens at API layer
-        let (_repo, _temp) = setup_test_repo();
+        let (repo, _temp) = setup_test_repo();
         let value = serde_json::json!({
             "projectId": "P-001",
             "name": "Test",
