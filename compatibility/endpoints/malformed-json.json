@@ -1,0 +1,35 @@
+{
+  "description": "Malformed JSON payload tests",
+  "testCases": [
+    {
+      "id": "malformed-001",
+      "method": "POST",
+      "path": "/projects",
+      "body": "{ invalid json }",
+      "contentType": "application/json",
+      "expectedStatus": 400,
+      "expectedErrorCode": "invalid_request",
+      "description": "Invalid JSON syntax should return 400"
+    },
+    {
+      "id": "malformed-002",
+      "method": "POST",
+      "path": "/projects",
+      "body": "{\"projectId\": \"P-001\", \"name\": \"Test\", \"testSuites\": []",
+      "contentType": "application/json",
+      "expectedStatus": 400,
+      "expectedErrorCode": "invalid_request",
+      "description": "Truncated JSON should return 400"
+    },
+    {
+      "id": "malformed-003",
+      "method": "POST",
+      "path": "/projects",
+      "body": "null",
+      "contentType": "application/json",
+      "expectedStatus": 400,
+      "expectedErrorCode": "invalid_request",
+      "description": "Null body should return 400"
+    }
+  ]
+}

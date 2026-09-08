@@ -1,0 +1,34 @@
+{
+  "description": "Path traversal attempt with dot-dot sequences",
+  "testCases": [
+    {
+      "id": "traversal-001",
+      "method": "GET",
+      "path": "/projects/..%2F..%2F..%2Fetc%2Fpasswd",
+      "expectedStatus": 400,
+      "expectedErrorCode": "invalid_id",
+      "description": "URL-encoded path traversal should be rejected"
+    },
+    {
+      "id": "traversal-002",
+      "method": "GET",
+      "path": "/projects/../../../etc/passwd",
+      "expectedStatus": 400,
+      "expectedErrorCode": "invalid_id",
+      "description": "Raw path traversal should be rejected"
+    },
+    {
+      "id": "traversal-003",
+      "method": "POST",
+      "path": "/projects",
+      "body": {
+        "projectId": "../../etc/passwd.json",
+        "name": "Malicious Project",
+        "testSuites": []
+      },
+      "expectedStatus": 400,
+      "expectedErrorCode": "invalid_request",
+      "description": "Path traversal in resource ID should be rejected"
+    }
+  ]
+}
