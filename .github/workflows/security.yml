@@ -19,7 +19,7 @@ jobs:
     container:
       image: rust:1.98.0-bookworm
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Install cargo-audit
         run: cargo install cargo-audit --locked
       - name: Audit dependencies
@@ -28,7 +28,7 @@ jobs:
   secret-scan:
     runs-on: [self-hosted, Linux, X64]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 0
       - name: Scan repository for secrets
@@ -37,7 +37,7 @@ jobs:
   container-scan:
     runs-on: [self-hosted, Linux, X64]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Build application image
         run: docker build --file Dockerfile --tag tucano-test .
       - uses: aquasecurity/trivy-action@0.35.0
@@ -53,7 +53,7 @@ jobs:
     container:
       image: rust:1.98.0-bookworm
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Install cargo-cyclonedx
         run: cargo install cargo-cyclonedx --locked
       - name: Generate SBOM
