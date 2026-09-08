@@ -48,6 +48,8 @@ pub struct TestCase {
     pub exploratory: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub attachments: Option<Vec<Attachment>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tags: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
@@ -58,6 +60,8 @@ pub struct TestSuite {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
     pub test_cases: Vec<TestCase>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tags: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
@@ -68,6 +72,8 @@ pub struct Project {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
     pub test_suites: Vec<TestSuite>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tags: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
@@ -97,6 +103,8 @@ pub struct TestRun {
     pub test_cases: Option<Vec<TestCase>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub results: Option<Vec<TestCaseResult>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tags: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]

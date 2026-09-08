@@ -23,6 +23,7 @@ type SharedRepository = Arc<FileRepository>;
 #[derive(Debug, Clone, Deserialize, Default)]
 pub struct ListQuery {
     pub filter: Option<String>,
+    pub tags: Option<String>,
 }
 
 pub fn router(repository: FileRepository) -> Router {
@@ -175,6 +176,27 @@ fn list_resource(repo: SharedRepository, resource: &str, query: ListQuery) -> Re
             if let Some(filter) = query.filter {
                 let needle = filter.to_lowercase();
                 items.retain(|item| item.to_lowercase().contains(&needle));
+            }
+            if let Some(tags_param) = query.tags {
+                let requested_tags: Vec<String> = tags_param
+                    .split(',')
+                    .map(|t| t.trim().to_lowercase())
+                    .collect();
+                items.retain(|item| {
+                    if let Ok(value) = repo.read(resource, item) {
+                        if let Some(tags) = value.get("tags").and_then(|t| t.as_array()) {
+                            let item_tags: Vec<String> = tags
+                                .iter()
+                                .filter_map(|t| t.as_str().map(|s| s.to_lowercase()))
+                                .collect();
+                            requested_tags.iter().any(|tag| item_tags.contains(tag))
+                        } else {
+                            false
+                        }
+                    } else {
+                        false
+                    }
+                });
             }
             Json(items).into_response()
         }
