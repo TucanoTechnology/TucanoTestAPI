@@ -45,7 +45,10 @@ mod path_traversal_tests {
             "testSuites": []
         });
         let result = repo.write("projects", "../../etc/passwd.json", &value);
-        assert!(result.is_err(), "Path traversal in write should be rejected");
+        assert!(
+            result.is_err(),
+            "Path traversal in write should be rejected"
+        );
     }
 }
 
@@ -167,9 +170,15 @@ mod data_integrity_tests {
         let result2 = handle2.join().unwrap();
 
         // At least one should succeed, and the file should be valid
-        assert!(result1.is_ok() || result2.is_ok(), "At least one write should succeed");
+        assert!(
+            result1.is_ok() || result2.is_ok(),
+            "At least one write should succeed"
+        );
 
         let final_value = repo.read("projects", "P-001.json").unwrap();
-        assert!(final_value["name"].as_str().is_some(), "Final value should be valid JSON");
+        assert!(
+            final_value["name"].as_str().is_some(),
+            "Final value should be valid JSON"
+        );
     }
 }
