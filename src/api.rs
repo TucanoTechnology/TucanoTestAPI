@@ -715,13 +715,21 @@ async fn duplicate_project(
     }
 
     if let Some(new_name) = body.get("newName").and_then(|v| v.as_str())
-        && let Some(obj) = new_project.as_object_mut() {
+        && let Some(obj) = new_project.as_object_mut()
+    {
         obj.insert("name".to_string(), json!(new_name));
     }
 
-    let new_id = new_project.get("projectId").and_then(|v| v.as_str()).unwrap_or("unknown");
+    let new_id = new_project
+        .get("projectId")
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown");
     match repo.write("projects", new_id, &new_project) {
-        Ok(()) => (StatusCode::CREATED, Json(json!({"message": "Project duplicated", "id": new_id}))).into_response(),
+        Ok(()) => (
+            StatusCode::CREATED,
+            Json(json!({"message": "Project duplicated", "id": new_id})),
+        )
+            .into_response(),
         Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
             conflict("Project already exists")
         }
@@ -755,13 +763,21 @@ async fn duplicate_suite(
     }
 
     if let Some(new_name) = body.get("newName").and_then(|v| v.as_str())
-        && let Some(obj) = new_suite.as_object_mut() {
+        && let Some(obj) = new_suite.as_object_mut()
+    {
         obj.insert("name".to_string(), json!(new_name));
     }
 
-    let new_id = new_suite.get("suiteId").and_then(|v| v.as_str()).unwrap_or("unknown");
+    let new_id = new_suite
+        .get("suiteId")
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown");
     match repo.write("test_suites", new_id, &new_suite) {
-        Ok(()) => (StatusCode::CREATED, Json(json!({"message": "Test suite duplicated", "id": new_id}))).into_response(),
+        Ok(()) => (
+            StatusCode::CREATED,
+            Json(json!({"message": "Test suite duplicated", "id": new_id})),
+        )
+            .into_response(),
         Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
             conflict("Test suite already exists")
         }
@@ -795,13 +811,21 @@ async fn duplicate_case(
     }
 
     if let Some(new_title) = body.get("newTitle").and_then(|v| v.as_str())
-        && let Some(obj) = new_case.as_object_mut() {
+        && let Some(obj) = new_case.as_object_mut()
+    {
         obj.insert("title".to_string(), json!(new_title));
     }
 
-    let new_id = new_case.get("testCaseId").and_then(|v| v.as_str()).unwrap_or("unknown");
+    let new_id = new_case
+        .get("testCaseId")
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown");
     match repo.write("test_cases", new_id, &new_case) {
-        Ok(()) => (StatusCode::CREATED, Json(json!({"message": "Test case duplicated", "id": new_id}))).into_response(),
+        Ok(()) => (
+            StatusCode::CREATED,
+            Json(json!({"message": "Test case duplicated", "id": new_id})),
+        )
+            .into_response(),
         Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
             conflict("Test case already exists")
         }
@@ -841,9 +865,16 @@ async fn duplicate_run(
         obj.remove("results");
     }
 
-    let new_id = new_run.get("testRunId").and_then(|v| v.as_str()).unwrap_or("unknown");
+    let new_id = new_run
+        .get("testRunId")
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown");
     match repo.write("test_runs", new_id, &new_run) {
-        Ok(()) => (StatusCode::CREATED, Json(json!({"message": "Test run duplicated", "id": new_id}))).into_response(),
+        Ok(()) => (
+            StatusCode::CREATED,
+            Json(json!({"message": "Test run duplicated", "id": new_id})),
+        )
+            .into_response(),
         Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
             conflict("Test run already exists")
         }
