@@ -1,6 +1,5 @@
 mod common;
 
-use common::test_app;
 use tempfile::TempDir;
 use tucano_test::repository::FileRepository;
 
@@ -88,7 +87,7 @@ mod malformed_json_tests {
     #[test]
     fn test_repository_accepts_any_valid_json() {
         // Repository layer accepts any valid JSON - validation happens at API layer
-        let (repo, _temp) = setup_test_repo();
+        let (_repo, _temp) = setup_test_repo();
         let value = serde_json::json!({
             "projectId": "P-001",
             "name": "Test",
