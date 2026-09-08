@@ -137,6 +137,7 @@ mod data_integrity_tests {
         use std::thread;
 
         let (repo, _temp) = setup_test_repo();
+        let _temp = _temp; // Keep temp dir alive
         let repo = Arc::new(repo);
         let barrier = Arc::new(Barrier::new(2));
 
