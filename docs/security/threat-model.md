@@ -59,3 +59,24 @@ The service now exposes CRUD and attachment endpoints, so the controls below are
 - Supported operating systems and filesystem behavior
 
 These decisions must be resolved before the HTTP compatibility layer is exposed beyond a trusted local network.
+
+## Implementation Status
+
+### Completed (as of 2026-09-08)
+
+- ✅ Threat model documented with trust boundaries and abuse cases
+- ✅ Security invariants defined and enforced in code
+- ✅ Path traversal tests added (`tests/security/security_tests.rs`)
+- ✅ Symlink escape tests added
+- ✅ Malformed JSON tests added
+- ✅ Data integrity and concurrent write tests added
+- ✅ Compatibility fixtures created (`compatibility/endpoints/`)
+- ✅ Unknown field rejection implemented via `deny_unknown_fields`
+- ✅ Atomic write semantics implemented in repository layer
+
+### Pending
+
+- ⏳ Authentication and authorization implementation
+- ⏳ Container image scanning in CI
+- ⏳ SBOM generation for release artifacts
+- ⏳ Contract tests against Node reference implementation
