@@ -67,11 +67,16 @@ Node.js 18+ (uses native `fetch` and ES modules).
 Populates realistic test cases (with attachments), test suites, projects, test runs (with execution results), and milestones:
 
 ```sh
-# Auto-detects local API (defaulting to http://localhost:3100, http://localhost:8080/api, or http://localhost:3000)
+# From repository root:
+node scripts/seed-data.mjs
+# or (if executable permissions are set):
 ./scripts/seed-data.mjs
 
-# Or provide a custom API base URL:
-./scripts/seed-data.mjs http://localhost:3000
+# From within the scripts/ folder:
+node seed-data.mjs
+
+# Provide a custom API base URL if needed:
+node scripts/seed-data.mjs http://localhost:3000
 ```
 
 ### Clearing Data
@@ -79,10 +84,16 @@ Populates realistic test cases (with attachments), test suites, projects, test r
 Wipes all test cases, test suites, projects, test runs, and milestones from the API:
 
 ```sh
+# From repository root:
+node scripts/clear-data.mjs
+# or (if executable permissions are set):
 ./scripts/clear-data.mjs
 
-# Or provide a custom API base URL:
-./scripts/clear-data.mjs http://localhost:3000
+# From within the scripts/ folder:
+node clear-data.mjs
+
+# Provide a custom API base URL if needed:
+node scripts/clear-data.mjs http://localhost:3000
 ```
 
 ## Release numbering
