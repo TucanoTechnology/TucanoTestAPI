@@ -10,7 +10,7 @@ services:
     ports:
       - "3100:3000"
     volumes:
-      - tucano-data:/data
+      - ./data:/data
     read_only: true
     tmpfs:
       - /tmp
@@ -42,7 +42,3 @@ services:
         limits:
           cpus: "1.0"
           memory: 512M
-
-volumes:
-  tucano-data:
-    name: tucano-test-data
