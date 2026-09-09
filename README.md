@@ -54,6 +54,37 @@ Interactive Swagger UI is available at `http://localhost:3000/api-docs`; the raw
 
 The API process is stateless: replicas do not keep sessions or in-memory records. Horizontal scaling requires a shared persistent POSIX volume mounted at the same `TUCANO_DATA_DIR` for every replica. Repository mutations use an advisory lock file and atomic same-directory renames. A local Docker volume is suitable for one node; multi-node deployments must provide shared storage with working advisory locks. Do not use separate per-replica local volumes, or data will diverge.
 
+## Test Data Seeding and Cleanup
+
+Helper scripts are provided in `scripts/` to quickly populate or wipe sample test data against a running API instance (e.g. for GUI testing or manual verification):
+
+### Prerequisites
+
+Node.js 18+ (uses native `fetch` and ES modules).
+
+### Seeding Data
+
+Populates realistic test cases (with attachments), test suites, projects, test runs (with execution results), and milestones:
+
+```sh
+# Auto-detects local API (defaulting to http://localhost:3100, http://localhost:8080/api, or http://localhost:3000)
+./scripts/seed-data.mjs
+
+# Or provide a custom API base URL:
+./scripts/seed-data.mjs http://localhost:3000
+```
+
+### Clearing Data
+
+Wipes all test cases, test suites, projects, test runs, and milestones from the API:
+
+```sh
+./scripts/clear-data.mjs
+
+# Or provide a custom API base URL:
+./scripts/clear-data.mjs http://localhost:3000
+```
+
 ## Release numbering
 
 Application releases use Semantic Versioning. Update the Cargo package version and create a protected `vMAJOR.MINOR.PATCH` tag for a release; release tags are immutable and must never be reused. Every push to `main` also publishes an immutable GHCR image tagged `build-<GitHub run number>`. Tagged releases publish both the SemVer tag and their build number, while the commit SHA remains the audit identity. Pull requests build and test without publishing release artifacts.
