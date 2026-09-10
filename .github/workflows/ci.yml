@@ -22,6 +22,14 @@ jobs:
     runs-on: [self-hosted, Linux, X64]
     container:
       image: rust:1.98.0-bookworm
+      # The container filesystem is thrown away between runs, so without a cache
+      # this job re-downloads every crate from static.crates.io each time, and a
+      # refused DNS lookup there fails the job (see issue #123). Mounting only
+      # the registry and git subdirectories caches the downloads while leaving
+      # the image's own cargo and rustc binaries in place.
+      volumes:
+        - tucanotestapi-cargo-registry:/usr/local/cargo/registry
+        - tucanotestapi-cargo-git:/usr/local/cargo/git
     steps:
       - uses: actions/checkout@v5
       - name: Install required components
