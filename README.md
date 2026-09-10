@@ -171,6 +171,19 @@ The full reconciliation of the documented error contract and schema strictness i
 
 The API process is stateless: replicas do not keep sessions or in-memory records. Horizontal scaling requires a shared persistent POSIX volume mounted at the same `TUCANO_DATA_DIR` for every replica. Repository mutations use an advisory lock file and atomic same-directory renames. A local Docker volume is suitable for one node; multi-node deployments must provide shared storage with working advisory locks. Do not use separate per-replica local volumes, or data will diverge.
 
+To validate a candidate build before it serves traffic, and to roll back to a previous build safely, follow [docs/deployment/canary-validation-and-rollback.md](docs/deployment/canary-validation-and-rollback.md).
+
+## Smoke validation
+
+`scripts/smoke.sh` exercises a running API with a scratch CRUD round trip — health, create a project and a case, read both back, delete both, and confirm each deletion is observable — and exits non-zero on the first deviation. It needs `curl` and `python3`, removes its scratch data on exit, and accepts a base URL:
+
+```sh
+scripts/smoke.sh                       # defaults to http://localhost:3000
+scripts/smoke.sh http://localhost:3101 # any replica, for example a canary
+```
+
+Use it to validate a candidate build before promotion; the surrounding procedure is in [docs/deployment/canary-validation-and-rollback.md](docs/deployment/canary-validation-and-rollback.md).
+
 ## Test Data Cleanup
 
 Helper scripts are provided in `scripts/` to wipe sample test data against a running API instance:
@@ -281,6 +294,7 @@ Repository contribution and agent workflow rules are documented in [AGENTS.md](A
 | [docs/architecture/gui-client-boundary.md](docs/architecture/gui-client-boundary.md) | The GUI client boundary and the generated-client strategy driven by `openapi.json` |
 | [docs/contracts/api-compatibility.md](docs/contracts/api-compatibility.md) | File-format and endpoint compatibility rules against the legacy implementation |
 | [docs/contracts/test-case-versioning-plan.md](docs/contracts/test-case-versioning-plan.md) | Field names, snapshot shape, trigger rules, and addressing for test-case versioning and revision history |
+| [docs/deployment/canary-validation-and-rollback.md](docs/deployment/canary-validation-and-rollback.md) | Canary validation, the scratch-CRUD smoke check, and safe rollback |
 | [docs/security/threat-model.md](docs/security/threat-model.md) | Trust boundaries, abuse cases, and security invariants |
 | [docs/security/authentication-decision.md](docs/security/authentication-decision.md) | The authentication decision (deferred) and its tracking ticket |
 | [AgentRules/](AgentRules/) | Organisation-wide engineering and process rules |
