@@ -781,8 +781,50 @@ reports.
   absent-field unit tests in `src/models.rs` and `tests/service.rs` holding the `caseVersions` addition to the
   published contract.
 
+## Coverage Report Plan (Issue #94)
+
+Issue: [#94](https://github.com/TucanoTechnology/TucanoTestAPI/issues/94) — the first child of
+[#37](https://github.com/TucanoTechnology/TucanoTestAPI/issues/37), whose scope says to "report test case count per
+project section/suite". This child introduces the shared reports module the summary-report sibling builds on.
+
+- **One read-only route.** `GET /reports/coverage` answers the counts as
+  `{"projectId"?, "totalCases", "suites": [{"suiteId", "name", "caseCount"}]}`, published under
+  `CoverageReport` and `SuiteCoverage` in `openapi.json`. Nothing is written, so no stored document changes.
+- **`projectId` restricts the report; omitting it widens the scope to every project.** The parameter takes the
+  same `<folder>.json` wire id every other project-addressed route takes, and the response echoes it back only
+  when it was supplied. An unknown project is `404 not_found`; an identifier that cannot address a project at
+  all (no `.json`) is `400 invalid_id`, exactly as `require_parent` answers elsewhere.
+- **`totalCases` counts a project's own cases as well as its suites'.** The storage layout lets a case live
+  directly under a project (`projects/<project>/<case>/test-case.json`) as well as inside a suite, and the
+  repository lists both. The issue text says "per project section/suite"; there is no "section" resource in the
+  tree, so a project's directly-held cases are that analogue. The report therefore sums them into `totalCases`
+  while listing only suites, which means `totalCases` **can exceed** the sum of the `caseCount` values. This is
+  recorded here because a client that adds up `caseCount` will otherwise read the totals as inconsistent.
+- **The models follow the response-model convention.** The issue text asks for `deny_unknown_fields` on the new
+  models, but `src/models.rs` applies that only to writable request models; response models (`MilestoneProgress`,
+  `CaseHistoryEntry`) use bare `#[serde(rename_all = "camelCase")]`. `CoverageReport` and `SuiteCoverage` are
+  response-only, so they follow the existing convention and are permissive. The deviation is deliberate and is
+  the only one from the issue text.
+- **A suite's `name` comes from its marker document.** The walk reads each suite's `suite.json` (`name`) and
+  falls back to the identifier when a legacy document omits the field, so the entry is never nameless.
+- Deviation recorded with tests in `tests/reports.rs`
+  (`::an_empty_tree_reports_no_cases`, `::a_scoped_report_counts_the_suites_and_the_projects_own_cases`,
+  `::a_global_report_sums_every_project`, `::a_project_that_does_not_exist_is_not_found`,
+  `::an_unusable_project_identifier_is_invalid_id`), with the aggregation unit tests in `src/domain/reports.rs`
+  (`::an_empty_scope_reports_no_cases_and_no_suites`, `::a_scoped_report_echoes_the_identifier`,
+  `::cases_held_directly_by_a_project_join_the_total`,
+  `::a_global_report_sums_every_project_and_keeps_their_suites`), and with
+  `tests/service.rs::openapi_document_matches_the_registered_routes` holding the path to the registered route.
+
 ## Breaking change accounting
 
+- **Coverage report endpoint added** (Issue #94, plan above). `GET /reports/coverage` and the `CoverageReport` /
+  `SuiteCoverage` schemas are new; nothing is written and no stored document shape changed, so the change is
+  additive. The two schemas are permissive (no `additionalProperties`), and the new operation publishes no
+  request body. Two semantics are recorded here: `totalCases` includes the cases a project holds directly, so it
+  can exceed the sum of the per-suite `caseCount`; and `projectId` is echoed only when the report was scoped,
+  which is why it is absent from the schema's `required` list. Deviation recorded with tests in `tests/reports.rs`
+  and `src/domain/reports.rs` as listed in the plan.
 - **Tags added, and their query parameter withdrawn where it could not match** (Issue #49, plan above).
   `Project`, `TestSuite`, `TestCase` and `TestRun` gain an optional `tags` array and the list operations gain
   `?tags=a,b`. Additive only: no payload that used to succeed is refused, an existing document is never
