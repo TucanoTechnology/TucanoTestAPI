@@ -85,6 +85,17 @@ pub fn raw_json_request(method: &str, uri: &str, body: impl Into<Body>) -> Reque
         .expect("request")
 }
 
+/// Posts an XML body, the content type the JUnit import route reads. The body
+/// is any bytes, so a test can also send one that is not valid UTF-8.
+pub fn xml_request(uri: &str, body: impl Into<Body>) -> Request<Body> {
+    Request::builder()
+        .method("POST")
+        .uri(uri)
+        .header(header::CONTENT_TYPE, "application/xml")
+        .body(body.into())
+        .expect("request")
+}
+
 pub fn multipart_request(uri: &str, filename: &str, contents: &[u8]) -> Request<Body> {
     let mut body = Vec::new();
     body.extend_from_slice(format!("--{BOUNDARY}\r\n").as_bytes());

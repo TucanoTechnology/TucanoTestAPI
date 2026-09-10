@@ -11,6 +11,7 @@
 //! identifier that several parents own is therefore a conflict rather than an
 //! arbitrary pick — the caller has to say which parent it meant.
 
+use std::collections::HashSet;
 use std::io;
 
 use serde::Serialize;
@@ -18,12 +19,14 @@ use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 
 use crate::models::{
-    Milestone, MilestoneProgress, TestCase, TestCaseResult, TestConfiguration, TestRun, TestSuite,
+    ImportCounts, ImportSummary, Milestone, MilestoneProgress, TestCase, TestCaseResult,
+    TestConfiguration, TestRun, TestSuite,
 };
 use crate::storage::{Parent, Placement, Repository, Resource, unique_suffix};
 
 use super::duplicate::{self, DuplicateSpec};
 use super::error::{self, DomainError};
+use super::import::{self, ImportStatus};
 use super::{
     Created, ListQuery, MAX_ATTACHMENT_BYTES, StoredAttachment, composition,
     current_timestamp_string, mime_type, progress, required_string, resources, validation,
@@ -298,6 +301,76 @@ impl<R: Repository> TestService<R> {
         };
         composition::upsert_result(&mut run, result);
         self.save(Resource::Runs, run_id, &run)
+    }
+
+    /// Imports a JUnit report's testcases into a run's results.
+    ///
+    /// Cases the run already records are counted as duplicates and left
+    /// untouched, so re-importing a report is safe and never overwrites a result
+    /// someone recorded by hand. Cases that cannot be named are counted as errors
+    /// rather than failing the whole import.
+    pub fn import_junit_results(
+        &self,
+        run_id: &str,
+        xml: &str,
+    ) -> Result<ImportSummary, DomainError> {
+        let report = import::parse(xml)?;
+
+        let mut run = self.load::<TestRun>(Resource::Runs, run_id, "Test run not found")?;
+        let mut seen: HashSet<String> = run
+            .results
+            .as_ref()
+            .map(|results| {
+                results
+                    .iter()
+                    .map(|result| result.test_case_id.clone())
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        let mut summary = ImportCounts {
+            passed: 0,
+            failed: 0,
+            blocked: 0,
+        };
+        let mut imported = 0;
+        let mut duplicates = 0;
+
+        for case in report.cases {
+            if !seen.insert(case.test_case_id.clone()) {
+                duplicates += 1;
+                continue;
+            }
+
+            match case.status {
+                ImportStatus::Passed => summary.passed += 1,
+                ImportStatus::Failed => summary.failed += 1,
+                ImportStatus::Blocked => summary.blocked += 1,
+            }
+
+            composition::upsert_result(
+                &mut run,
+                TestCaseResult {
+                    test_case_id: case.test_case_id,
+                    status: case.status.as_str().to_owned(),
+                    timestamp: case.timestamp.unwrap_or_else(current_timestamp_string),
+                    notes: case.notes,
+                    attachments: None,
+                },
+            );
+            imported += 1;
+        }
+
+        let errors = report.errors;
+        let outcome = ImportSummary {
+            imported,
+            skipped: duplicates + errors,
+            errors,
+            duplicates,
+            summary,
+        };
+        self.save(Resource::Runs, run_id, &run)?;
+        Ok(outcome)
     }
 
     /// Links the top-level configuration named in `body` to a run by reference,

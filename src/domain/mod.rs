@@ -10,6 +10,7 @@
 pub mod composition;
 pub mod duplicate;
 pub mod error;
+pub mod import;
 pub mod progress;
 pub mod resources;
 pub mod service;
