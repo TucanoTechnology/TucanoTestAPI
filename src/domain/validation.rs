@@ -3,16 +3,16 @@
 //! The legacy handlers accepted any JSON object and persisted whatever fields it
 //! happened to carry. Creating a document now has to agree with the typed models
 //! in [`crate::models`]: the body must be an object, every top-level key must be
-//! one the resource actually defines, and any nested collection must deserialise
-//! into its model. Storage itself stays permissive so already-stored documents
-//! are never rewritten or rejected.
+//! one the resource actually defines, and every supplied field — scalar or
+//! nested collection — must deserialise into the field its model declares.
+//! Storage itself stays permissive so already-stored documents are never
+//! rewritten or rejected.
 
+use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 
-use crate::models::{
-    Attachment, Project, TestCase, TestCaseResult, TestCaseStep, TestConfiguration, TestSuite,
-};
+use crate::models::{Milestone, Project, TestCase, TestConfiguration, TestRun, TestSuite};
 use crate::storage::Resource;
 
 use super::error::DomainError;
@@ -81,33 +81,44 @@ pub fn validate_payload(resource: Resource, value: &Value) -> Result<(), DomainE
     }
 
     match resource {
-        Resource::Projects => validate_nested::<Vec<TestSuite>>(value, "testSuites"),
-        Resource::Suites => validate_nested::<Vec<TestCase>>(value, "testCases"),
-        Resource::Cases => {
-            validate_nested::<Vec<TestCaseStep>>(value, "steps")?;
-            validate_nested::<Vec<Attachment>>(value, "attachments")
-        }
-        Resource::Runs => {
-            validate_nested::<Vec<Project>>(value, "projects")?;
-            validate_nested::<Vec<TestSuite>>(value, "testSuites")?;
-            validate_nested::<Vec<TestCase>>(value, "testCases")?;
-            validate_nested::<Vec<TestCaseResult>>(value, "results")?;
-            validate_nested::<Vec<TestConfiguration>>(value, "configurations")
-        }
-        Resource::Milestones | Resource::Configurations => Ok(()),
+        Resource::Projects => check_against_model::<Project>(object),
+        Resource::Suites => check_against_model::<TestSuite>(object),
+        Resource::Cases => check_against_model::<TestCase>(object),
+        Resource::Runs => check_against_model::<TestRun>(object),
+        Resource::Milestones => check_against_model::<Milestone>(object),
+        Resource::Configurations => check_against_model::<TestConfiguration>(object),
     }
 }
 
-/// Deserialises an optional nested field, treating `null` as absent.
-fn validate_nested<T: DeserializeOwned>(value: &Value, field: &str) -> Result<(), DomainError> {
-    let Some(inner) = value.get(field) else {
-        return Ok(());
-    };
-    if inner.is_null() {
-        return Ok(());
+/// Type-checks each supplied top-level field against the resource's model.
+///
+/// The model drives the check: a template instance is serialised and each
+/// present field is inserted into a copy of it, so a field whose JSON type
+/// contradicts the declared Rust type fails to deserialise. Required fields the
+/// body legitimately omits stay filled by the template, which is what keeps
+/// partial payloads accepted. `null` counts as absent and is skipped, matching
+/// how storage already reads it.
+fn check_against_model<T>(object: &serde_json::Map<String, Value>) -> Result<(), DomainError>
+where
+    T: DeserializeOwned + Serialize + Default,
+{
+    let template = serde_json::to_value(T::default()).expect("a model serialises to JSON");
+    let template = template
+        .as_object()
+        .expect("models serialise to JSON objects");
+
+    for (field, supplied) in object {
+        if supplied.is_null() {
+            continue;
+        }
+        let mut probe = template.clone();
+        probe.insert(field.clone(), supplied.clone());
+        if serde_json::from_value::<T>(Value::Object(probe)).is_err() {
+            return Err(DomainError::invalid_request(format!(
+                "Field `{field}` is invalid"
+            )));
+        }
     }
-    let _: T = T::deserialize(inner)
-        .map_err(|_| DomainError::invalid_request(format!("Field `{field}` is invalid")))?;
     Ok(())
 }
 
@@ -136,6 +147,100 @@ mod tests {
         assert_invalid(
             Resource::Cases,
             json!({ "testCaseId": "TC-1", "title": "t", "expectedResult": "e", "extra": true }),
+        );
+    }
+
+    #[test]
+    fn wrong_typed_scalars_are_rejected() {
+        assert_invalid(
+            Resource::Projects,
+            json!({ "name": "checkout", "tags": "smoke" }),
+        );
+        assert_invalid(
+            Resource::Projects,
+            json!({ "name": "checkout", "description": 7 }),
+        );
+        assert_invalid(
+            Resource::Projects,
+            json!({ "name": "checkout", "tags": { "smoke": true } }),
+        );
+        assert_invalid(
+            Resource::Runs,
+            json!({ "testRunId": "R-1", "timestamp": 123 }),
+        );
+        assert_invalid(
+            Resource::Cases,
+            json!({
+                "testCaseId": "TC-1",
+                "title": "t",
+                "expectedResult": "e",
+                "exploratory": "yes"
+            }),
+        );
+        assert_invalid(
+            Resource::Cases,
+            json!({
+                "testCaseId": "TC-1",
+                "title": "t",
+                "expectedResult": "e",
+                "priority": 3
+            }),
+        );
+        assert_invalid(
+            Resource::Milestones,
+            json!({ "name": "v1.0", "testSuiteIds": "S-1" }),
+        );
+    }
+
+    #[test]
+    fn the_rejected_field_is_named_in_the_message() {
+        let error = validate_payload(
+            Resource::Projects,
+            &json!({ "name": "checkout", "tags": "smoke" }),
+        )
+        .expect_err("a wrong-typed scalar must be rejected");
+        assert!(
+            matches!(
+                &error,
+                DomainError::InvalidRequest { message, .. } if message == "Field `tags` is invalid"
+            ),
+            "{error:?}"
+        );
+    }
+
+    #[test]
+    fn correctly_typed_scalars_are_accepted() {
+        assert!(validate_payload(Resource::Projects, &json!({ "name": "a", "tags": [] })).is_ok());
+        assert!(
+            validate_payload(
+                Resource::Projects,
+                &json!({ "name": "a", "tags": ["smoke", "regression"] })
+            )
+            .is_ok()
+        );
+        assert!(
+            validate_payload(
+                Resource::Cases,
+                &json!({
+                    "testCaseId": "TC-1",
+                    "title": "t",
+                    "expectedResult": "e",
+                    "exploratory": true,
+                    "priority": "High"
+                })
+            )
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn null_scalars_are_treated_as_absent() {
+        assert!(
+            validate_payload(
+                Resource::Projects,
+                &json!({ "name": "alpha", "tags": null, "description": null })
+            )
+            .is_ok()
         );
     }
 
