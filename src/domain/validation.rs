@@ -49,6 +49,7 @@ pub fn known_fields(resource: Resource) -> &'static [&'static str] {
             "results",
             "tags",
             "configurations",
+            "caseVersions",
         ],
         Resource::Milestones => &[
             "milestoneId",
@@ -427,6 +428,7 @@ mod tests {
                     results: None,
                     tags: None,
                     configurations: None,
+                    case_versions: Some(std::collections::HashMap::from([("TC-1".to_owned(), 1)])),
                 })
                 .expect("serialisable run"),
             ),

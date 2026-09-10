@@ -5,9 +5,17 @@
 //! mutations of already-loaded documents so they can be reasoned about — and
 //! tested — without a server or a filesystem.
 
+use std::collections::HashMap;
+
 use crate::models::{DefectLink, TestCase, TestCaseResult, TestConfiguration, TestRun, TestSuite};
 
 use super::error::DomainError;
+
+/// The version a run pins for a case that carries none.
+///
+/// A case written before the API versioned cases has no `version` of its own,
+/// and the run still has to say which revision it snapshotted.
+const UNVERSIONED_CASE: u64 = 1;
 
 /// Adds a case to a suite, refusing a case that is already present.
 ///
@@ -78,6 +86,19 @@ pub fn attach_case_to_run(
     }
     cases.push(test_case.clone());
     Ok(())
+}
+
+/// Pins the version a run records for a case, keeping the first one it saw.
+///
+/// The first capture wins, so re-recording a result — or a later qualifying edit
+/// to the live case — never revises what the run already pinned: the run is a
+/// snapshot, and its `caseVersions` has to stay one too. A case with no version
+/// of its own is pinned as version 1, matching how the API reads such a case.
+pub fn capture_case_version(run: &mut TestRun, case_id: &str, version: Option<u64>) {
+    run.case_versions
+        .get_or_insert_with(HashMap::new)
+        .entry(case_id.to_owned())
+        .or_insert(version.unwrap_or(UNVERSIONED_CASE));
 }
 
 /// Links a top-level configuration to a run, refusing one that is already
@@ -259,6 +280,7 @@ mod tests {
             results: None,
             tags: None,
             configurations: None,
+            case_versions: None,
         }
     }
 
@@ -317,6 +339,46 @@ mod tests {
 
         assert_eq!(target.test_suites.map(|suites| suites.len()), Some(1));
         assert_eq!(target.test_cases.map(|cases| cases.len()), Some(1));
+    }
+
+    #[test]
+    fn a_run_pins_the_first_version_it_captures_for_a_case() {
+        let mut target = run();
+        capture_case_version(&mut target, "TC-1", Some(3));
+        capture_case_version(&mut target, "TC-1", Some(9));
+
+        assert_eq!(
+            target
+                .case_versions
+                .as_ref()
+                .and_then(|pinned| pinned.get("TC-1")),
+            Some(&3),
+            "a second capture must not revise the pinned version"
+        );
+    }
+
+    #[test]
+    fn a_case_without_a_version_is_pinned_as_the_first_revision() {
+        let mut target = run();
+        capture_case_version(&mut target, "TC-1", None);
+        assert_eq!(
+            target
+                .case_versions
+                .as_ref()
+                .and_then(|pinned| pinned.get("TC-1")),
+            Some(&1)
+        );
+    }
+
+    #[test]
+    fn each_case_is_pinned_under_its_own_identifier() {
+        let mut target = run();
+        capture_case_version(&mut target, "TC-1", Some(2));
+        capture_case_version(&mut target, "TC-2", None);
+
+        let pinned = target.case_versions.expect("pinned versions");
+        assert_eq!(pinned.get("TC-1"), Some(&2));
+        assert_eq!(pinned.get("TC-2"), Some(&1));
     }
 
     #[test]
