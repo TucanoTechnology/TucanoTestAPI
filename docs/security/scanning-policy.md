@@ -25,7 +25,10 @@ The following security scans run automatically on every PR and push to main:
 
 ### 4. SBOM Generation (`cargo-cyclonedx`)
 - Generates a Software Bill of Materials (SBOM) in CycloneDX JSON format
-- Uploaded as a build artifact for compliance and auditing
+- Uploaded as a build artifact (`sbom.json`) for compliance and auditing
+- The job parses the document before uploading it and **fails** if it is missing,
+  empty, malformed, or lists no components, so an empty generation can never be
+  published as a successful artifact
 - Provides complete dependency inventory for security reviews
 
 ## Dependency Management
