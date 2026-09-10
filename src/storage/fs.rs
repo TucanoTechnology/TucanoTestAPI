@@ -365,6 +365,34 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn a_symlinked_document_cannot_leak_a_file_outside_the_root() {
+        use std::os::unix::fs::symlink;
+
+        let (directory, repository) = repository();
+
+        // A valid-JSON file living outside the data root. Without symlink
+        // confinement, `read` would follow the link and return its contents.
+        let outside = directory
+            .path()
+            .parent()
+            .expect("parent")
+            .join("secret.json");
+        fs::write(
+            &outside,
+            serde_json::to_string(&json!({"name": "secret"})).expect("json"),
+        )
+        .expect("outside file");
+
+        symlink(&outside, directory.path().join("projects/evil.json")).expect("symlink");
+
+        let error = repository
+            .read(Resource::Projects, "evil.json")
+            .expect_err("symlink escape must be rejected");
+        assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+    }
+
     #[test]
     fn attachments_round_trip_and_reject_traversal() {
         let (_directory, repository) = repository();

@@ -60,16 +60,25 @@ mod symlink_tests {
     fn test_rejects_symlink_escape() {
         let (repo, temp) = setup_test_repo();
 
-        // Create a symlink pointing outside the data root
-        let symlink_path = temp.path().join("projects").join("evil.json");
-        std::fs::create_dir_all(temp.path().join("projects")).unwrap();
+        // A valid-JSON file outside the data root: if the link were followed,
+        // `read` would succeed and leak its contents, so an `InvalidData` error
+        // would prove the check never ran.
+        let outside = temp.path().parent().unwrap().join("outside-secret.json");
+        std::fs::write(
+            &outside,
+            serde_json::to_string(&serde_json::json!({"name": "secret"})).unwrap(),
+        )
+        .unwrap();
 
-        // This would point outside if followed
-        let result = symlink("/etc/passwd", &symlink_path);
-        if result.is_ok() {
-            let read_result = repo.read(Resource::Projects, "evil.json");
-            assert!(read_result.is_err(), "Symlink escape should be rejected");
-        }
+        let symlink_path = temp.path().join("projects").join("evil.json");
+        symlink(&outside, &symlink_path).unwrap();
+
+        let read_result = repo.read(Resource::Projects, "evil.json");
+        assert_eq!(
+            read_result.unwrap_err().kind(),
+            std::io::ErrorKind::PermissionDenied,
+            "symlink escape should be rejected as permission denied"
+        );
     }
 }
 
