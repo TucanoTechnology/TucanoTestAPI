@@ -246,15 +246,33 @@ Issue: [#69](https://github.com/TucanoTechnology/TucanoTestAPI/issues/69)
   the other flat resources; `tests/service.rs` route coverage is extended accordingly. Full environment-matrix
   semantics remain out of scope here and stay tracked by Issues #34 and #51.
 
-## API Handler Decomposition Plan (Issue #70)
+## Layered Architecture Plan (Issue #71)
 
-Issue: [#70](https://github.com/TucanoTechnology/TucanoTestAPI/issues/70)
+Issue: [#71](https://github.com/TucanoTechnology/TucanoTestAPI/issues/71) — supersedes the Issue #70 handler
+decomposition plan, which is closed as superseded. #71 is the first step of the combined P0 refactor.
 
-- `src/api.rs` is decomposed into a `src/api/` module directory: `mod.rs` keeps the router, shared state, and the
-  shared validation/error helpers; per-resource modules hold projects, suites, cases, runs, milestones,
-  configurations, and attachments handlers.
-- This is a pure structural refactor: no route, payload, or behaviour change; `lib.rs` continues to expose
-  `pub mod api;` and the full test suite passes unchanged at that merge point. No file-format impact.
+- The crate is layered bottom-up, and each layer depends only on the layer beneath it:
+  - `src/models.rs` — the serialisable documents, including the legacy camelCase shapes.
+  - `src/storage/` — the `Repository` trait and its `FileRepository` implementation, the on-disk layout, atomic
+    writes, permissions, and the identifier/filename conventions (`layout.rs`, `fs.rs`). This is the only module
+    that touches the filesystem.
+  - `src/domain/` — every business rule: payload validation, identifier derivation, suite/run composition,
+    duplication and milestone progress, behind `TestService`. Unit tested without starting a server.
+  - `src/api/` — one module per resource (`projects`, `suites`, `runs`, `cases`, `milestones`, `configurations`),
+    plus `crud.rs` for the handlers every resource shares and `error.rs` for the response envelope. A handler only
+    translates a request, calls `TestService`, and shapes the response.
+- `src/api.rs` no longer exists. `src/repository.rs` remains as a compatibility shim that re-exports
+  `FileRepository`, `Repository`, and `Resource` from `src/storage/`.
+- Failures are a single typed `DomainError` mapped onto the stable `{"error":{"code","message"}}` envelope. The
+  status codes and error codes issued for existing cases are unchanged.
+- The public crate surface is unchanged: `api::router`, `api::MAX_BODY_BYTES`, `api::ListQuery`, `models`, and the
+  `repository` re-exports keep their signatures, so `main.rs` and all integration suites are untouched by the
+  move.
+- `openapi.json` is asserted equal to the router's registered path set (`api::ROUTES` minus the
+  `api::UNDOCUMENTED_ROUTES` aliases) and a test proves every declared route is actually served.
+- **Payload change**: create and update validate the body against the resource's typed model before persisting,
+  so a body carrying a field the resource does not define is rejected rather than stored. See *Breaking change
+  accounting*.
 
 ## Breaking change accounting
 
@@ -268,6 +286,14 @@ Issue: [#70](https://github.com/TucanoTechnology/TucanoTestAPI/issues/70)
   the integration suites.
 - **Parent-required creation and copy/move placement** change the composition wire contract described by the
   Issue #23/#24 notes above; those notes remain valid only for the payload shapes that this plan keeps.
+- **Create and update validate payloads before persisting** (Issue #71). A body carrying a top-level key the
+  resource does not define is now rejected with `400 Bad Request` and the stable envelope
+  (`{"error":{"code":"invalid_request","message":"Unknown field `x`"}}`), and nothing is written; previously any
+  JSON object was stored verbatim, so documents carrying unknown keys could exist. Stored documents are never
+  re-validated or rewritten, so existing data keeps working, and the partial payloads the API has always accepted
+  (for example `{"name": "alpha"}`) still succeed. Composition, run-result, and duplicate endpoints keep their
+  permissive parsing. Deviation recorded with tests in
+  `tests/service.rs::create_and_update_reject_unknown_fields`.
 
 ## Required case matrix
 

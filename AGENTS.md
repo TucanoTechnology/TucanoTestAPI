@@ -82,9 +82,8 @@ When making decisions about features, architecture, or implementation:
 
 ### File structure
 
-- API handlers: `src/api.rs`
-- Domain models: `src/models.rs`
-- Filesystem repository: `src/repository.rs`
+- Layered source: `src/models.rs` (documents), `src/storage/` (the `Repository` trait and its filesystem implementation), `src/domain/` (rules behind `TestService`), `src/api/` (HTTP, one module per resource plus `crud.rs` and `error.rs`)
+- Compatibility shim: `src/repository.rs` re-exports the storage types for existing imports
 - Library target: `src/lib.rs`; binary entry point: `src/main.rs`
 - OpenAPI contract: `openapi.json`; interactive UI: `swagger.html`
 - Unit tests: alongside the relevant module

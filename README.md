@@ -148,6 +148,24 @@ node scripts/clear-data.mjs http://localhost:3000
 
 Application releases use Semantic Versioning. Update the Cargo package version and create a protected `vMAJOR.MINOR.PATCH` tag for a release; release tags are immutable and must never be reused. Every push to `main` also publishes an immutable GHCR image tagged `build-<GitHub run number>`. Tagged releases publish both the SemVer tag and their build number, while the commit SHA remains the audit identity. Pull requests build and test without publishing release artifacts.
 
+## Module layout
+
+The API is layered so that each concern has exactly one home; a layer only depends on the layers
+beneath it, and nothing below the HTTP layer knows about Axum:
+
+| Path | Role |
+| --- | --- |
+| `src/models.rs` | The stored documents (projects, suites, cases, runs, milestones, configurations) in their legacy JSON shapes |
+| `src/storage/` | The only code that touches the filesystem: the `Repository` trait, its `FileRepository` implementation, the path layout, and path confinement |
+| `src/domain/` | The business rules — validation, composition, duplication, milestone progress — behind `TestService<R: Repository>` |
+| `src/api/` | The HTTP layer: one module per resource, plus `crud.rs` (the shared handler macros) and `error.rs` (the error envelope) |
+| `src/repository.rs` | Compatibility re-export of the storage types so existing imports keep resolving |
+
+`src/api.rs` no longer exists as a monolith: the HTTP surface lives in `src/api/`. The domain layer
+is covered by unit tests that never start an HTTP server, while the integration suites drive the
+router in-process. The public crate surface is unchanged — `api::router` is still the entry point
+used by `main.rs` and the tests.
+
 ## Local checks
 
 From the container or a host with the pinned toolchain installed:
@@ -168,7 +186,7 @@ docker run --rm -v "$PWD:/repo:ro" --workdir /repo rhysd/actionlint:1.7.12 -colo
 
 Tests are split into two layers and both run in CI on every push and pull request:
 
-- **Unit tests** live beside the code in `src/models.rs` and `src/repository.rs`. They cover legacy JSON compatibility, required and unknown field handling, atomic writes, path confinement, attachment storage, concurrent writers, and file permissions.
+- **Unit tests** live beside the code in `src/models.rs`, `src/storage/`, and `src/domain/`. They cover legacy JSON compatibility, payload validation, composition and duplication rules, milestone progress, atomic writes, path confinement, attachment storage, concurrent writers, and file permissions.
 - **Integration tests** live in `tests/` and exercise the HTTP surface in-process through the Axum router against a temporary data directory. Each API area has its own suite:
 
 | Suite | Covers |
@@ -178,7 +196,9 @@ Tests are split into two layers and both run in CI on every push and pull reques
 | `tests/suites.rs` | Test suite CRUD, validation, conflicts, missing resources |
 | `tests/runs.rs` | Test run CRUD, validation, conflicts, missing resources |
 | `tests/cases.rs` | Test case CRUD, required fields, conflicts, missing resources |
+| `tests/milestones.rs` | Milestone CRUD, validation, conflicts, and progress derived from the referenced runs |
 | `tests/attachments.rs` | Upload, download, delete, content types, removal with the parent test case |
+| `tests/security_tests.rs` | Path traversal, symlink escape, malformed JSON, repository-level leniency, and concurrent writers |
 
 Shared request builders and assertions live in `tests/common/mod.rs`. Cargo compiles only top-level files in `tests/` as test binaries, so a subdirectory module is shared across suites without running as one itself.
 
