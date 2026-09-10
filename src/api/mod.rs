@@ -68,6 +68,7 @@ pub const ROUTES: &[&str] = &[
     "/test_runs/{id}/test_cases",
     "/test_runs/{id}/results",
     "/test_runs/{id}/import/junit",
+    "/test_runs/{id}/import/json",
     "/test_runs/{id}/configurations",
     "/test_runs/{id}/configurations/{config_id}",
     "/test_cases",

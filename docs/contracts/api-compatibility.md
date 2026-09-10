@@ -597,6 +597,42 @@ it did rather than failing on the parts it cannot use.
   covering the documented route and resolving its `ImportSummary` schema references, and the `roxmltree`
   dependency recorded in `docs/architecture/rust-service-core.md`.
 
+## JSON Result Import Plan (Issue #86)
+
+Issue: [#86](https://github.com/TucanoTechnology/TucanoTestAPI/issues/86) — Issue #85 reads a JUnit XML report, but
+a runner without a JUnit reporter emits JSON. `POST /test_runs/{id}/import/json` reads an array of result entries
+and records them against the run, reusing the `ImportSummary` envelope Issue #85 introduced.
+
+- **The body is a bare array, or an object whose only field is `results`.** `[]` and `{"results": []}` both parse
+  to no cases; a top-level object with any other key, or with a `results` that is not an array, is a
+  `400 invalid_request`, so the wrapper cannot smuggle a second field past the importer.
+- **An entry names a case and a status, and nothing else is assumed.** Each entry is an object with `testCaseId`
+  and `status` required, and optional `notes` and `timestamp`. `testCaseId` must be non-empty and `timestamp` is
+  stored verbatim, defaulting to the current time in Unix seconds — the same rule the single-result route and the
+  JUnit importer apply. Unknown or misspelled fields are refused by `deny_unknown_fields` rather than silently
+  dropped, because a misspelt `testCaseId` is the failure a caller most needs to hear about.
+- **Only the three runner outcomes are accepted.** `status` must be `Passed`, `Failed` or `Blocked`. `Untested`
+  and `Retest` are run-level states no runner report means, so they answer `400 invalid_status` (a distinct
+  constructor from the five-status message the results route uses, which would name statuses an import never
+  accepts). The per-status counts in the response therefore stay the three `ImportCounts` carries.
+- **The import is strict and atomic, so `errors` is always zero.** Unlike the JUnit importer — which skips a
+  testcase it cannot name and reports it as an error — a JSON body is either wholly usable or wholly refused: a
+  malformed document, an unusable entry, or any bad field anywhere in the array answers `400` and writes nothing,
+  because the entire body is parsed before the run is loaded. The run is then loaded, its results overlaid, and
+  the document written once, so a failure at any point leaves the stored run exactly as it was. A case the run
+  already records — including one repeated within the same body — is counted as a duplicate and left untouched.
+- **The response is the shared summary.** `ImportSummary` carries `imported`, `skipped`, `errors`, `duplicates`
+  and the nested per-status `summary`. `skipped` is `duplicates + errors`, and with a strict body `errors` is
+  always 0, so a JSON import's `skipped` equals its `duplicates`.
+- **The route addresses a run like the result and JUnit routes do.** An unknown run is `404 not_found`, an
+  unusable run identifier is `400 invalid_id`, and a body larger than the request limit is the router's
+  plain-text `413`.
+- Deviation recorded with tests in `tests/runs.rs` — the field mapping and timestamp default, the `results`
+  wrapper, duplicates left untouched, an entry missing or emptying a required field, an unknown field, a status
+  outside the three, and a body that is not a readable array all rejected with nothing written, and an unknown
+  run answered `404` — plus `src/domain/import.rs` unit tests over `parse_json` itself and `tests/service.rs`
+  covering the documented route and its `ImportEntry` schema.
+
 ## Breaking change accounting
 
 - **Tags added, and their query parameter withdrawn where it could not match** (Issue #49, plan above).
@@ -684,6 +720,12 @@ it did rather than failing on the parts it cannot use.
   only: no request that used to succeed is refused, and a report can only add results a run did not already
   record. Deviation recorded with tests in `tests/runs.rs`, `src/domain/import.rs` and `tests/service.rs` as
   listed in the plan.
+- **JSON result import added** (Issue #86, plan above). `POST /test_runs/{id}/import/json` and its `ImportEntry`
+  schema are new; the route writes the same `TestCaseResult` the results route already does and reuses the
+  `ImportSummary` / `ImportCounts` schemas Issue #85 introduced, so no stored document shape changed and no
+  response that existed before was altered. Additive only: no request that used to succeed is refused, and an
+  import can only add results a run did not already record. Deviation recorded with tests in `tests/runs.rs`,
+  `src/domain/import.rs` and `tests/service.rs` as listed in the plan.
 
 ## Required case matrix
 

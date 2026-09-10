@@ -4,7 +4,7 @@ use axum::Router;
 use axum::http::StatusCode;
 use common::{
     app_at, assert_error_envelope, create_case_in, create_named, create_project, create_suite,
-    delete, get, json_request, send_json, test_app, xml_request,
+    delete, get, json_request, raw_json_request, send_json, test_app, xml_request,
 };
 use serde_json::json;
 use tempfile::TempDir;
@@ -882,6 +882,274 @@ async fn importing_into_an_unknown_run_is_not_found() {
         xml_request(
             "/test_runs/missing.json/import/junit",
             "<testsuite/>".to_owned(),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_error_envelope(&body, "not_found");
+}
+
+#[tokio::test]
+async fn a_json_import_maps_its_fields_and_defaults_the_timestamp() {
+    let (_directory, app) = test_app();
+    create_run(&app, "nightly").await;
+
+    let (status, summary) = send_json(
+        &app,
+        json_request(
+            "POST",
+            "/test_runs/nightly.json/import/json",
+            &json!([
+                {"testCaseId": "TC-1", "status": "Passed", "notes": "looks good", "timestamp": "2026-09-10T12:00:00Z"},
+                {"testCaseId": "TC-2", "status": "Failed"},
+                {"testCaseId": "TC-3", "status": "Blocked", "notes": "environment down"},
+            ]),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "importing: {summary}");
+    assert_eq!(
+        summary,
+        json!({
+            "imported": 3,
+            "skipped": 0,
+            "errors": 0,
+            "duplicates": 0,
+            "summary": {"passed": 1, "failed": 1, "blocked": 1},
+        })
+    );
+
+    let (status, stored) = send_json(&app, get("/test_runs/nightly.json")).await;
+    assert_eq!(status, StatusCode::OK);
+    let results = stored["results"].as_array().expect("results recorded");
+    assert_eq!(results.len(), 3);
+    assert_eq!(results[0]["testCaseId"], "TC-1");
+    assert_eq!(results[0]["status"], "Passed");
+    assert_eq!(results[0]["notes"], "looks good");
+    assert_eq!(results[0]["timestamp"], "2026-09-10T12:00:00Z");
+    assert_eq!(results[1]["testCaseId"], "TC-2");
+    assert_eq!(results[1]["status"], "Failed");
+    assert_eq!(results[2]["testCaseId"], "TC-3");
+    assert_eq!(results[2]["status"], "Blocked");
+    assert_eq!(results[2]["notes"], "environment down");
+
+    // An entry without a timestamp falls back to Unix seconds, like the
+    // single-result route.
+    let recorded_at = results[1]["timestamp"]
+        .as_str()
+        .expect("a timestamp is always recorded");
+    assert!(
+        recorded_at.parse::<u64>().is_ok(),
+        "a missing timestamp falls back to Unix seconds, got {recorded_at}"
+    );
+}
+
+#[tokio::test]
+async fn a_json_import_may_wrap_its_entries_in_a_results_field() {
+    let (_directory, app) = test_app();
+    create_run(&app, "nightly").await;
+
+    let (status, summary) = send_json(
+        &app,
+        json_request(
+            "POST",
+            "/test_runs/nightly.json/import/json",
+            &json!({"results": [{"testCaseId": "TC-1", "status": "Passed"}]}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "importing: {summary}");
+    assert_eq!(
+        summary,
+        json!({
+            "imported": 1,
+            "skipped": 0,
+            "errors": 0,
+            "duplicates": 0,
+            "summary": {"passed": 1, "failed": 0, "blocked": 0},
+        })
+    );
+
+    let (_, stored) = send_json(&app, get("/test_runs/nightly.json")).await;
+    assert_eq!(stored["results"][0]["testCaseId"], "TC-1");
+    assert_eq!(stored["results"][0]["status"], "Passed");
+}
+
+#[tokio::test]
+async fn a_json_import_counts_duplicates_and_leaves_them_alone() {
+    let (_directory, app) = test_app();
+    create_run(&app, "nightly").await;
+
+    // A result recorded by hand first, so the import meets an existing one.
+    let (status, _) = send_json(
+        &app,
+        json_request(
+            "POST",
+            "/test_runs/nightly.json/results",
+            &json!({"testCaseId": "TC-1", "status": "Failed", "timestamp": "1"}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    // TC-1 is already recorded and also appears twice in the body; only the case
+    // the run does not know is written.
+    let (status, summary) = send_json(
+        &app,
+        json_request(
+            "POST",
+            "/test_runs/nightly.json/import/json",
+            &json!([
+                {"testCaseId": "TC-1", "status": "Passed"},
+                {"testCaseId": "TC-1", "status": "Passed"},
+                {"testCaseId": "TC-2", "status": "Passed"},
+            ]),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "importing: {summary}");
+    assert_eq!(
+        summary,
+        json!({
+            "imported": 1,
+            "skipped": 2,
+            "errors": 0,
+            "duplicates": 2,
+            "summary": {"passed": 1, "failed": 0, "blocked": 0},
+        })
+    );
+
+    let (_, stored) = send_json(&app, get("/test_runs/nightly.json")).await;
+    let results = stored["results"].as_array().expect("results recorded");
+    assert_eq!(results.len(), 2);
+    // The hand-recorded result survives the import untouched.
+    assert_eq!(results[0]["testCaseId"], "TC-1");
+    assert_eq!(results[0]["status"], "Failed");
+    assert_eq!(results[0]["timestamp"], "1");
+    assert_eq!(results[1]["testCaseId"], "TC-2");
+    assert_eq!(results[1]["status"], "Passed");
+}
+
+#[tokio::test]
+async fn a_json_import_rejects_an_unusable_entry_and_writes_nothing() {
+    let (_directory, app) = test_app();
+    create_run(&app, "nightly").await;
+
+    for body in [
+        // A required field is missing.
+        json!([{"status": "Passed"}]),
+        // The identifier is present but empty.
+        json!([{"testCaseId": "", "status": "Passed"}]),
+        json!([{"testCaseId": "TC-1"}]),
+        // A field carries the wrong type.
+        json!([{"testCaseId": "TC-1", "status": 5}]),
+        // An entry is not an object at all.
+        json!(["TC-1"]),
+        // One bad entry fails the whole body, even after a good one.
+        json!([
+            {"testCaseId": "TC-1", "status": "Passed"},
+            {"testCaseId": "TC-2"},
+        ]),
+    ] {
+        let (status, error) = send_json(
+            &app,
+            json_request("POST", "/test_runs/nightly.json/import/json", &body),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "for {body}: {error}");
+        assert_error_envelope(&error, "invalid_request");
+    }
+
+    let (_, stored) = send_json(&app, get("/test_runs/nightly.json")).await;
+    assert!(stored["results"].is_null(), "nothing was written: {stored}");
+}
+
+#[tokio::test]
+async fn a_json_import_rejects_an_unknown_field() {
+    let (_directory, app) = test_app();
+    create_run(&app, "nightly").await;
+
+    let (status, body) = send_json(
+        &app,
+        json_request(
+            "POST",
+            "/test_runs/nightly.json/import/json",
+            &json!([{"testCaseId": "TC-1", "status": "Passed", "result": "Passed"}]),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_error_envelope(&body, "invalid_request");
+
+    let (_, stored) = send_json(&app, get("/test_runs/nightly.json")).await;
+    assert!(stored["results"].is_null(), "nothing was written: {stored}");
+}
+
+#[tokio::test]
+async fn a_json_import_rejects_a_status_outside_the_three() {
+    let (_directory, app) = test_app();
+    create_run(&app, "nightly").await;
+
+    for status in ["Untested", "Retest", "passed", "Unknown", ""] {
+        let (code, body) = send_json(
+            &app,
+            json_request(
+                "POST",
+                "/test_runs/nightly.json/import/json",
+                &json!([{"testCaseId": "TC-1", "status": status}]),
+            ),
+        )
+        .await;
+        assert_eq!(code, StatusCode::BAD_REQUEST, "for status {status}: {body}");
+        assert_error_envelope(&body, "invalid_status");
+    }
+
+    let (_, stored) = send_json(&app, get("/test_runs/nightly.json")).await;
+    assert!(stored["results"].is_null(), "nothing was written: {stored}");
+}
+
+#[tokio::test]
+async fn a_json_import_rejects_a_body_it_cannot_read() {
+    let (_directory, app) = test_app();
+    create_run(&app, "nightly").await;
+
+    for body in [
+        r#"[{"testCaseId": "TC-1", "status": "Passed"}"#,
+        r#"{"cases": []}"#,
+        r#"{"results": [], "extra": 1}"#,
+        r#"{"results": "nope"}"#,
+        r#"{"results": {}}"#,
+        r#""results""#,
+        "null",
+        "42",
+    ] {
+        let (status, error) = send_json(
+            &app,
+            raw_json_request(
+                "POST",
+                "/test_runs/nightly.json/import/json",
+                body.to_owned(),
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "for {body}: {error}");
+        assert_error_envelope(&error, "invalid_request");
+    }
+
+    let (_, stored) = send_json(&app, get("/test_runs/nightly.json")).await;
+    assert!(stored["results"].is_null(), "nothing was written: {stored}");
+}
+
+#[tokio::test]
+async fn importing_json_into_an_unknown_run_is_not_found() {
+    let (_directory, app) = test_app();
+
+    let (status, body) = send_json(
+        &app,
+        json_request(
+            "POST",
+            "/test_runs/missing.json/import/json",
+            &json!([{"testCaseId": "TC-1", "status": "Passed"}]),
         ),
     )
     .await;

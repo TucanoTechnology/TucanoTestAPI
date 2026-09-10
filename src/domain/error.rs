@@ -50,6 +50,18 @@ impl DomainError {
             message: "Status must be Passed, Failed, Blocked, Untested, or Retest".to_owned(),
         }
     }
+
+    /// `invalid_status` — an imported status is not one the importer can map.
+    ///
+    /// Reports and result arrays can only describe the three outcomes a runner
+    /// produces, so an import narrows the run's five statuses rather than
+    /// accepting `Untested` or `Retest`, which no report can mean.
+    pub fn invalid_import_status() -> Self {
+        Self::InvalidRequest {
+            code: "invalid_status",
+            message: "Imported status must be Passed, Failed, or Blocked".to_owned(),
+        }
+    }
 }
 
 impl Display for DomainError {
