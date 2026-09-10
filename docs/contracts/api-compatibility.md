@@ -516,8 +516,55 @@ operations the fix adds, recorded before the implementation commits.
   `steps/<index>/` layout and `tests/service.rs` covering the documented routes and the strict `StepAttachment`
   schema.
 
+## Tags Plan (Issue #49)
+
+Issue: [#49](https://github.com/TucanoTechnology/TucanoTestAPI/issues/49) — projects, suites, cases and runs carry a
+free-form `tags` array for labelling, filtering and release planning. The field, the filter and the document
+entries are already on `main`; this note records the contract they stand for, so the behaviour the integration
+suite pins is written down rather than inferred from it.
+
+- **The field is additive and optional.** `Project`, `TestSuite`, `TestCase` and `TestRun` each gain
+  `tags: Option<Vec<String>>`, so a document that carries none is unchanged: the key is skipped when absent, and
+  neither create nor update ever writes an empty array in its place. A resource stored without tags reads back
+  without the key, which is why an untagged document can never be matched by the filter.
+- **Storage is verbatim.** Tags are stored exactly as supplied — case, order and duplicates preserved — and a
+  partial update that names `tags` replaces the whole array while leaving the other keys alone, an explicit `[]`
+  clearing it. The field is not normalised on write; only the comparison the filter performs is
+  case-insensitive.
+- **The filter is a shared comma-separated OR over the listed resource.** `?tags=a,b` keeps a resource when it
+  carries *at least one* of the requested tags, compared case-insensitively with surrounding whitespace
+  trimmed, and a resource without a `tags` array never matches. It composes with `?filter=` (substring over
+  ids) and, on runs only, with `?configuration=`; the filters are applied in that order and all are
+  conjunction.
+- **Publishing the parameter is what this note corrects.** `?tags=` was published on all four top-level list
+  operations, including `GET /milestones` and `GET /configurations`, whose models define no `tags` field and
+  whose writes refuse one with `400 invalid_request` — so the documented filter could only ever answer an empty
+  listing there. The parameter is now withheld from those two operations and stays on `GET /projects` and
+  `GET /test_runs`, the list operations whose resource can actually store a tag. This is documentation only: the
+  routes still accept and ignore the query parameter, and no response shape changed. `GET /test_suites` and
+  `GET /test_cases` also filter by tags but are retired from the document as a whole
+  (`api::UNDOCUMENTED_ROUTES`), as recorded under Issue #66.
+- **Nested and parent-scoped listings take no query filter.** `GET /projects/{id}/test_suites`,
+  `GET /projects/{id}/test_cases` and `GET /test_suites/{id}/test_cases` return the complete child set; only the
+  four top-level list operations read `ListQuery`. A client that needs a filtered view of a project's suites
+  filters the ids it receives.
+- Deviation recorded with tests in `tests/tags.rs` — create/read/update round trips including an explicit
+  empty array, case-insensitive and whitespace-trimmed matching, the any-of semantics, the untagged-never-matches
+  rule, the filter on suites, cases and runs, the unknown-key rejection that keeps `deny_unknown_fields` intact,
+  and the document assertion that `?tags=` is published only where a tag can be stored.
+
 ## Breaking change accounting
 
+- **Tags added, and their query parameter withdrawn where it could not match** (Issue #49, plan above).
+  `Project`, `TestSuite`, `TestCase` and `TestRun` gain an optional `tags` array and the list operations gain
+  `?tags=a,b`. Additive only: no payload that used to succeed is refused, an existing document is never
+  rewritten, and a response that carried no `tags` key still carries none. The one document change is the
+  opposite direction — `?tags=` is removed from `GET /milestones` and `GET /configurations`, because neither
+  resource can store a tag, so the parameter advertised a filter that always answered an empty listing. The
+  routes still accept and ignore the parameter, so no request changes its answer. Deviation recorded with tests
+  in `tests/tags.rs`, including
+  `::the_tags_parameter_is_published_only_where_a_tag_can_be_stored`, which holds the document to the set of
+  resources the models let carry tags.
 - **Per-step attachments** (Issue #93, plan above). `TestStep` gains an optional `attachments` array and
   `/test_cases/{id}/steps/{step_index}/attachments` (GET, POST) and `.../attachments/{filename}` (DELETE) are
   added. The field is written only when a step owns attachments, so existing cases sign on disk and on the wire
