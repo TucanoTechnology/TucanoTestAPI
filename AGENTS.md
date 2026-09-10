@@ -46,6 +46,26 @@ database. The API is designed to be portable via a production container and pers
 When making decisions about features, architecture, or implementation:
 
 - Preserve the file-based approach — all CRUD operations read/write JSON files below `TUCANO_DATA_DIR`.
+- **Storage mirrors the conceptual organisation.** A project is a folder that contains its test
+  suites and may also contain test cases directly. A test suite is a folder, always inside a
+  project, that contains its test cases. A test case is a folder — inside a project or inside a
+  suite — holding its JSON document, steps, and supplementary files (e.g. attachments). The API is
+  the only actor that creates, edits, deletes, duplicates, and links these folders — nothing below
+  `TUCANO_DATA_DIR` is modified outside the API. See the storage concept in `README.md`.
+- **Every case and suite has one real home; a real parent is required at creation.** A suite is
+  created inside a project, a case inside a project or a suite. Nothing is created in a standalone
+  top-level pool, and the on-disk tree mirrors the homes: a suite folder lives under its project, a
+  case folder under its project or under one suite. Reads stay global — listing and retrieval
+  search the whole tree, so an entity is always findable regardless of home.
+- **Placing an existing entity elsewhere is copy by default, move opt-in.** Composition requests
+  accept `"mode": "copy" | "move"` and default to `copy`: `copy` duplicates the entity into the
+  target parent (duplicate-on-include — the source keeps its home and both copies are editable
+  independently); `move` relocates the entity so the target parent becomes its only physical home.
+- **Test runs are point-in-time execution snapshots, not live views.** A run selects the test cases
+  and suites under test, records each case's result for that run, and never mutates the source cases
+  or suites it executed. The same case or suite may therefore appear in several runs with different
+  results. Milestones reference suites and runs; their progress derives from the referenced runs'
+  results (or a recorded snapshot) — never from live source documents.
 - Do not introduce databases, ORMs, or external persistence services.
 - Keep the API stateless so replicas can share the configured persistent storage.
 - Require shared storage with working advisory locks for multi-replica deployments; never use
