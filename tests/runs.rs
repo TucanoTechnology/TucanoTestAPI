@@ -1,9 +1,10 @@
 mod common;
 
+use axum::Router;
 use axum::http::StatusCode;
 use common::{
     app_at, assert_error_envelope, create_case_in, create_named, create_project, create_suite,
-    delete, get, json_request, send_json, test_app,
+    delete, get, json_request, send_json, test_app, xml_request,
 };
 use serde_json::json;
 use tempfile::TempDir;
@@ -659,4 +660,231 @@ async fn listing_runs_filters_by_the_configuration_they_link() {
         listing,
         json!(["chrome-linux.json", "firefox-windows.json"])
     );
+}
+
+/// Creates a run to import into and returns the identifier.
+async fn create_run(app: &Router, name: &str) -> String {
+    let (status, created) = send_json(
+        app,
+        json_request("POST", "/test_runs", &json!({"name": name})),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::CREATED,
+        "creating run {name}: {created}"
+    );
+    created["id"].as_str().expect("run id").to_owned()
+}
+
+#[tokio::test]
+async fn a_junit_report_imports_and_maps_statuses() {
+    let (_directory, app) = test_app();
+    create_run(&app, "nightly").await;
+
+    let report = r#"<testsuite name="Checkout" timestamp="2026-09-10T12:00:00Z">
+        <testcase classname="Checkout" name="pays"/>
+        <testcase classname="Checkout" name="declines"><failure message="card declined"/></testcase>
+        <testcase classname="Checkout" name="times out"><error message="timeout"/></testcase>
+        <testcase classname="Checkout" name="is skipped"><skipped/></testcase>
+      </testsuite>"#;
+    let (status, summary) = send_json(
+        &app,
+        xml_request("/test_runs/nightly.json/import/junit", report.to_owned()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "importing: {summary}");
+    assert_eq!(
+        summary,
+        json!({
+            "imported": 4,
+            "skipped": 0,
+            "errors": 0,
+            "duplicates": 0,
+            "summary": {"passed": 1, "failed": 2, "blocked": 1},
+        })
+    );
+
+    let (status, stored) = send_json(&app, get("/test_runs/nightly.json")).await;
+    assert_eq!(status, StatusCode::OK);
+    let results = stored["results"].as_array().expect("results recorded");
+    let statuses: Vec<(&str, &str)> = results
+        .iter()
+        .map(|result| {
+            (
+                result["testCaseId"].as_str().expect("case id"),
+                result["status"].as_str().expect("status"),
+            )
+        })
+        .collect();
+    assert_eq!(
+        statuses,
+        vec![
+            ("Checkout.pays", "Passed"),
+            ("Checkout.declines", "Failed"),
+            ("Checkout.times out", "Failed"),
+            ("Checkout.is skipped", "Blocked"),
+        ]
+    );
+
+    // The failing case carries the report's message as its notes, and every case
+    // records the enclosing suite's timestamp rather than the wall clock.
+    assert_eq!(results[1]["notes"], "card declined");
+    assert_eq!(results[2]["notes"], "timeout");
+    assert_eq!(results[0]["timestamp"], "2026-09-10T12:00:00Z");
+    assert_eq!(results[3]["timestamp"], "2026-09-10T12:00:00Z");
+}
+
+#[tokio::test]
+async fn a_junit_report_counts_duplicates_and_leaves_them_alone() {
+    let (_directory, app) = test_app();
+    create_run(&app, "nightly").await;
+
+    // A result recorded by hand first, so the import meets an existing one.
+    let (status, _) = send_json(
+        &app,
+        json_request(
+            "POST",
+            "/test_runs/nightly.json/results",
+            &json!({"testCaseId": "Checkout.pays", "status": "Failed", "timestamp": "1"}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    // The same case appears twice in the report as well as in the run, and only
+    // the case the run does not know is written.
+    let report = r#"<testsuite>
+        <testcase classname="Checkout" name="pays"/>
+        <testcase classname="Checkout" name="pays"/>
+        <testcase classname="Checkout" name="checks out"/>
+      </testsuite>"#;
+    let (status, summary) = send_json(
+        &app,
+        xml_request("/test_runs/nightly.json/import/junit", report.to_owned()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "importing: {summary}");
+    assert_eq!(
+        summary,
+        json!({
+            "imported": 1,
+            "skipped": 2,
+            "errors": 0,
+            "duplicates": 2,
+            "summary": {"passed": 1, "failed": 0, "blocked": 0},
+        })
+    );
+
+    let (_, stored) = send_json(&app, get("/test_runs/nightly.json")).await;
+    let results = stored["results"].as_array().expect("results recorded");
+    assert_eq!(results.len(), 2);
+    // The hand-recorded result survives the import untouched.
+    assert_eq!(results[0]["testCaseId"], "Checkout.pays");
+    assert_eq!(results[0]["status"], "Failed");
+    assert_eq!(results[0]["timestamp"], "1");
+    assert_eq!(results[1]["testCaseId"], "Checkout.checks out");
+    assert_eq!(results[1]["status"], "Passed");
+}
+
+#[tokio::test]
+async fn a_junit_report_without_a_suite_timestamp_uses_the_current_time() {
+    let (_directory, app) = test_app();
+    create_run(&app, "nightly").await;
+
+    let report = r#"<testsuite><testcase classname="Suite" name="bare"/></testsuite>"#;
+    let (status, summary) = send_json(
+        &app,
+        xml_request("/test_runs/nightly.json/import/junit", report.to_owned()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "importing: {summary}");
+    assert_eq!(summary["imported"], 1);
+
+    let (_, stored) = send_json(&app, get("/test_runs/nightly.json")).await;
+    let recorded_at = stored["results"][0]["timestamp"]
+        .as_str()
+        .expect("a timestamp is always recorded");
+    assert!(
+        recorded_at.parse::<u64>().is_ok(),
+        "a report without a timestamp falls back to Unix seconds, got {recorded_at}"
+    );
+}
+
+#[tokio::test]
+async fn a_testcase_without_a_name_is_counted_as_an_error() {
+    let (_directory, app) = test_app();
+    create_run(&app, "nightly").await;
+
+    let report = r#"<testsuite>
+        <testcase classname="Suite"/>
+        <testcase classname="Suite" name="named"/>
+      </testsuite>"#;
+    let (status, summary) = send_json(
+        &app,
+        xml_request("/test_runs/nightly.json/import/junit", report.to_owned()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "importing: {summary}");
+    assert_eq!(
+        summary,
+        json!({
+            "imported": 1,
+            "skipped": 1,
+            "errors": 1,
+            "duplicates": 0,
+            "summary": {"passed": 1, "failed": 0, "blocked": 0},
+        })
+    );
+
+    // The nameless case is not written; the named one is.
+    let (_, stored) = send_json(&app, get("/test_runs/nightly.json")).await;
+    let results = stored["results"].as_array().expect("results recorded");
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0]["testCaseId"], "Suite.named");
+}
+
+#[tokio::test]
+async fn malformed_junit_xml_is_rejected_and_writes_nothing() {
+    let (_directory, app) = test_app();
+    create_run(&app, "nightly").await;
+
+    let (status, body) = send_json(
+        &app,
+        xml_request(
+            "/test_runs/nightly.json/import/junit",
+            "<testsuite><testcase></testsuite>".to_owned(),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_error_envelope(&body, "invalid_request");
+
+    // A body that is not UTF-8 is rejected the same way.
+    let (status, body) = send_json(
+        &app,
+        xml_request("/test_runs/nightly.json/import/junit", vec![0xff, 0xfe]),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_error_envelope(&body, "invalid_request");
+
+    let (_, stored) = send_json(&app, get("/test_runs/nightly.json")).await;
+    assert!(stored["results"].is_null(), "nothing was written: {stored}");
+}
+
+#[tokio::test]
+async fn importing_into_an_unknown_run_is_not_found() {
+    let (_directory, app) = test_app();
+
+    let (status, body) = send_json(
+        &app,
+        xml_request(
+            "/test_runs/missing.json/import/junit",
+            "<testsuite/>".to_owned(),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_error_envelope(&body, "not_found");
 }
