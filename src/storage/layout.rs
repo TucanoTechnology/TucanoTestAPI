@@ -78,6 +78,16 @@ impl Resource {
     pub const fn is_flat(self) -> bool {
         self.dir_name().is_some() && !self.is_hierarchical()
     }
+
+    /// Whether an identifier of this resource ends in `.json`.
+    ///
+    /// Test cases are the single exception: they are addressed by a bare
+    /// identifier. Every other resource is reached through a path builder that
+    /// insists on the suffix — flat documents through [`document_path`], project
+    /// and suite folders through [`node_folder`].
+    pub const fn id_requires_json_suffix(self) -> bool {
+        !matches!(self, Resource::Cases)
+    }
 }
 
 /// The parent that owns a hierarchy node: a project, or a suite inside one.
@@ -453,6 +463,20 @@ mod tests {
             document_path(directory.path(), Resource::Runs, "nightly.json").expect("path"),
             directory.path().join("test_runs/nightly.json")
         );
+    }
+
+    #[test]
+    fn only_test_cases_are_addressed_without_a_json_suffix() {
+        assert!(!Resource::Cases.id_requires_json_suffix());
+        for resource in [
+            Resource::Projects,
+            Resource::Suites,
+            Resource::Runs,
+            Resource::Milestones,
+            Resource::Configurations,
+        ] {
+            assert!(resource.id_requires_json_suffix(), "{resource:?}");
+        }
     }
 
     #[test]

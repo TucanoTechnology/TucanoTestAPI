@@ -240,6 +240,15 @@ required `.json` suffix, so an auto-derived duplicate is rejected by storage (`4
 fix, with tests: file-backed resources (`projects`, `test_suites`, `test_runs`, `milestones`) derive
 `{wire id base}-copy-{nanos}.json`; `test_cases` keep bare ids. The document id field is set to the new id only
 when no `newId`/`newName`/`newTitle` override is present, preserving the legacy observable behaviour.
+- Implementation note: `POST /milestones/{id}/duplicate` is published in `openapi.json` through the
+  `x-duplicate-milestone` component, and the `tests/service.rs` route coverage includes the path. The parity fix
+  lives in `Resource::id_requires_json_suffix()` (`src/storage/layout.rs`), which the shared duplicate helper
+  consults when it derives an identifier; the milestone operation accepts `newId` only, because the contract
+  above enumerates no renaming override and the copy must retain the source `name`. Coverage:
+  `src/domain/duplicate.rs` asserts the derived shape for all four file-backed resources and the bare test-case
+  id, `tests/projects.rs` proves the fix end-to-end over HTTP, and `tests/milestones.rs` covers the new
+  endpoint's lifecycle, the independence of the two documents, the derived progress, `409 Conflict`, and
+  `404 Not Found`.
 
 ## Configurations Activation Plan (Issue #69)
 

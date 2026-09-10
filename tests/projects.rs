@@ -117,6 +117,35 @@ async fn duplicate_projects_are_rejected_with_conflict() {
 }
 
 #[tokio::test]
+async fn a_duplicate_without_a_new_id_derives_an_addressable_identifier() {
+    let (_directory, app) = test_app();
+
+    send_json(
+        &app,
+        json_request("POST", "/projects", &json!({"name": "checkout"})),
+    )
+    .await;
+
+    let (status, duplicated) = send_json(
+        &app,
+        json_request("POST", "/projects/checkout.json/duplicate", &json!({})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "duplicating: {duplicated}");
+    let copy = duplicated["id"].as_str().expect("copy id");
+    assert!(
+        copy.starts_with("checkout-copy-"),
+        "unexpected copy id {copy}"
+    );
+    assert!(copy.ends_with(".json"), "unexpected copy id {copy}");
+
+    let (status, stored) = send_json(&app, get(&format!("/projects/{copy}"))).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(stored["projectId"], copy);
+    assert_eq!(stored["name"], "checkout");
+}
+
+#[tokio::test]
 async fn missing_projects_return_a_stable_error_envelope() {
     let (_directory, app) = test_app();
 
