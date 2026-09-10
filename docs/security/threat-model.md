@@ -51,8 +51,11 @@ The service now exposes CRUD and attachment endpoints, so the controls below are
 
 ## Open decisions
 
-- Authentication mechanism and token/session lifetime
-- Authorization roles and resource ownership model
+- Authentication mechanism and token/session lifetime — **decided**: implementation is deferred, and the chosen
+  mechanism is a short-lived JWT access token plus a refresh token with no database
+  ([authentication-decision.md](authentication-decision.md); tracked in #130).
+- Authorization roles and resource ownership model — **decided**: project-scoped RBAC, a role granted per project
+  ([authentication-decision.md](authentication-decision.md)).
 - Maximum request, JSON, attachment, and nesting sizes
 - Locking implementation and overwrite/conflict semantics
 - Whether to reject unknown JSON fields during the compatibility period
@@ -76,7 +79,7 @@ These decisions must be resolved before the HTTP compatibility layer is exposed 
 
 ### Pending
 
-- ⏳ Authentication and authorization implementation
+- ⏳ Authentication and authorization implementation (tracked in #130)
 - ⏳ Container image scanning in CI
 - ⏳ SBOM generation for release artifacts
 - ⏳ Contract tests against Node reference implementation
