@@ -241,7 +241,7 @@ Tests are split into two layers and both run in CI on every push and pull reques
 | `tests/service.rs` | Health, OpenAPI document and its error contract, Swagger UI, malformed bodies, traversal rejection, the identifier and size-limit error answers, the on-disk tree layout, persistence across restarts |
 | `tests/projects.rs` | Project CRUD, validation, conflicts, error envelopes |
 | `tests/suites.rs` | Test suite CRUD, parent-scoped creation, copy/move composition, ambiguity conflicts, missing resources |
-| `tests/runs.rs` | Test run CRUD, validation, conflicts, missing resources, and JUnit XML and JSON result import |
+| `tests/runs.rs` | Test run CRUD, validation, conflicts, missing resources, JUnit XML and JSON result import, and listing the defect links a result carries |
 | `tests/cases.rs` | Test case CRUD, required fields, parent-scoped creation, copy/move composition, conflicts, missing resources |
 | `tests/milestones.rs` | Milestone CRUD, validation, conflicts, duplication, and progress derived from the referenced runs |
 | `tests/configurations.rs` | Configuration CRUD, validation, conflicts, missing resources, restart persistence, and use by a run |

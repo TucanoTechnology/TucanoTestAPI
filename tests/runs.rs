@@ -1156,3 +1156,124 @@ async fn importing_json_into_an_unknown_run_is_not_found() {
     assert_eq!(status, StatusCode::NOT_FOUND);
     assert_error_envelope(&body, "not_found");
 }
+
+#[tokio::test]
+async fn a_result_without_links_lists_no_defects() {
+    let (_directory, app) = test_app();
+    create_run(&app, "nightly").await;
+    let (status, _) = send_json(
+        &app,
+        json_request(
+            "POST",
+            "/test_runs/nightly.json/results",
+            &json!({"testCaseId": "TC-1", "status": "Failed", "timestamp": "1"}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    // An empty list is the answer for a result that exists and links nothing,
+    // which is a different answer from "no such result" (asserted below).
+    let (status, body) = send_json(&app, get("/test_runs/nightly.json/results/TC-1/defects")).await;
+    assert_eq!(status, StatusCode::OK, "listing: {body}");
+    assert_eq!(body, json!({"defects": []}));
+}
+
+#[tokio::test]
+async fn listing_defects_returns_the_links_a_result_carries() {
+    let (directory, app) = test_app();
+    create_run(&app, "nightly").await;
+    let (status, _) = send_json(
+        &app,
+        json_request(
+            "POST",
+            "/test_runs/nightly.json/results",
+            &json!({"testCaseId": "TC-1", "status": "Failed", "timestamp": "1"}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    // The links belong to the result, not the run, so they are written where the
+    // route that will create them stores them — and read back through the same
+    // document the API serves.
+    let path = directory.path().join("test_runs/nightly.json");
+    let mut run: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&path).expect("run readable"))
+            .expect("run is valid JSON");
+    run["results"][0]["defectLinks"] = json!([
+        {
+            "linkId": "L-1",
+            "defectId": "BUG-42",
+            "defectUrl": "https://tracker.example/BUG-42",
+            "trackerType": "jira",
+            "title": "Card is declined twice",
+            "status": "Open",
+            "linkedAt": "1",
+        }
+    ]);
+    std::fs::write(
+        &path,
+        serde_json::to_string_pretty(&run).expect("run serialises"),
+    )
+    .expect("run written");
+
+    let (status, body) = send_json(&app, get("/test_runs/nightly.json/results/TC-1/defects")).await;
+    assert_eq!(status, StatusCode::OK, "listing: {body}");
+    assert_eq!(
+        body,
+        json!({
+            "defects": [{
+                "linkId": "L-1",
+                "defectId": "BUG-42",
+                "defectUrl": "https://tracker.example/BUG-42",
+                "trackerType": "jira",
+                "title": "Card is declined twice",
+                "status": "Open",
+                "linkedAt": "1",
+            }]
+        })
+    );
+}
+
+#[tokio::test]
+async fn listing_defects_needs_a_run_and_a_result_to_read() {
+    let (_directory, app) = test_app();
+    create_run(&app, "nightly").await;
+    let (status, _) = send_json(
+        &app,
+        json_request(
+            "POST",
+            "/test_runs/nightly.json/results",
+            &json!({"testCaseId": "TC-1", "status": "Passed", "timestamp": "1"}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    // An identifier that is not a single `.json` component is a 400 before the
+    // storage is consulted, an unknown run is a 404, and so is a case the run
+    // never recorded a result for.
+    for (route, expected) in [
+        (
+            "/test_runs/not-a-document/results/TC-1/defects",
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            "/test_runs/missing.json/results/TC-1/defects",
+            StatusCode::NOT_FOUND,
+        ),
+        (
+            "/test_runs/nightly.json/results/TC-2/defects",
+            StatusCode::NOT_FOUND,
+        ),
+    ] {
+        let (status, body) = send_json(&app, get(route)).await;
+        assert_eq!(status, expected, "GET {route}: {body}");
+        if expected == StatusCode::BAD_REQUEST {
+            assert_error_envelope(&body, "invalid_id");
+        } else {
+            assert_error_envelope(&body, "not_found");
+        }
+    }
+}

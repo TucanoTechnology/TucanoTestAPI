@@ -58,6 +58,14 @@ async fn record_run_result<R: Repository>(
     Ok(Json(json!({ "message": "Test result recorded in run" })))
 }
 
+async fn list_result_defects<R: Repository>(
+    State(service): State<AppState<R>>,
+    Path((id, case_id)): Path<(String, String)>,
+) -> Result<Json<Value>, DomainError> {
+    let defects = service.list_defects(&id, &case_id)?;
+    Ok(Json(json!({ "defects": defects })))
+}
+
 async fn import_junit_results<R: Repository>(
     State(service): State<AppState<R>>,
     Path(id): Path<String>,
@@ -113,6 +121,10 @@ pub(crate) fn routes<R: Repository + 'static>() -> Router<AppState<R>> {
         .route("/test_runs/{id}/test_suites", post(add_suite_to_run::<R>))
         .route("/test_runs/{id}/test_cases", post(add_case_to_run::<R>))
         .route("/test_runs/{id}/results", post(record_run_result::<R>))
+        .route(
+            "/test_runs/{id}/results/{case_id}/defects",
+            get(list_result_defects::<R>),
+        )
         .route(
             "/test_runs/{id}/import/junit",
             post(import_junit_results::<R>),
