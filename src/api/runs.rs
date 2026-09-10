@@ -68,6 +68,14 @@ async fn import_junit_results<R: Repository>(
     Ok(Json(service.import_junit_results(&id, xml)?))
 }
 
+async fn import_json_results<R: Repository>(
+    State(service): State<AppState<R>>,
+    Path(id): Path<String>,
+    body: Bytes,
+) -> Result<Json<ImportSummary>, DomainError> {
+    Ok(Json(service.import_json_results(&id, &body)?))
+}
+
 async fn link_run_configuration<R: Repository>(
     State(service): State<AppState<R>>,
     Path(id): Path<String>,
@@ -108,6 +116,10 @@ pub(crate) fn routes<R: Repository + 'static>() -> Router<AppState<R>> {
         .route(
             "/test_runs/{id}/import/junit",
             post(import_junit_results::<R>),
+        )
+        .route(
+            "/test_runs/{id}/import/json",
+            post(import_json_results::<R>),
         )
         .route(
             "/test_runs/{id}/configurations",
