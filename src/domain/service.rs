@@ -19,8 +19,8 @@ use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 
 use crate::models::{
-    ImportCounts, ImportSummary, Milestone, MilestoneProgress, TestCase, TestCaseResult,
-    TestConfiguration, TestRun, TestSuite,
+    DefectLink, ImportCounts, ImportSummary, Milestone, MilestoneProgress, TestCase,
+    TestCaseResult, TestConfiguration, TestRun, TestSuite,
 };
 use crate::storage::{Parent, Placement, Repository, Resource, unique_suffix};
 
@@ -298,9 +298,29 @@ impl<R: Repository> TestService<R> {
             timestamp: required_string(body, "timestamp").unwrap_or_else(current_timestamp_string),
             notes: required_string(body, "notes"),
             attachments: None,
+            defect_links: None,
         };
         composition::upsert_result(&mut run, result);
         self.save(Resource::Runs, run_id, &run)
+    }
+
+    /// Lists the defects linked to one case's result in a run.
+    ///
+    /// A run that does not exist, or one that records no result for `case_id`,
+    /// answers `404`: an empty list means "this result has no linked defect",
+    /// which is a different answer from "there is no result to link to".
+    pub fn list_defects(
+        &self,
+        run_id: &str,
+        case_id: &str,
+    ) -> Result<Vec<DefectLink>, DomainError> {
+        let run = self.load::<TestRun>(Resource::Runs, run_id, "Test run not found")?;
+        let result = run
+            .results
+            .as_ref()
+            .and_then(|results| results.iter().find(|result| result.test_case_id == case_id))
+            .ok_or_else(|| DomainError::NotFound("Test result not found in test run".to_owned()))?;
+        Ok(result.defect_links.clone().unwrap_or_default())
     }
 
     /// Imports a JUnit report's testcases into a run's results.
@@ -387,6 +407,7 @@ impl<R: Repository> TestService<R> {
                     timestamp: case.timestamp.unwrap_or_else(current_timestamp_string),
                     notes: case.notes,
                     attachments: None,
+                    defect_links: None,
                 },
             );
             imported += 1;
