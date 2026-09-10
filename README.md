@@ -138,6 +138,24 @@ The API listens on port `3000`, runs as an unprivileged user, and stores inspect
 
 Interactive Swagger UI is available at `http://localhost:3000/api-docs`; the raw OpenAPI document is at `http://localhost:3000/openapi.json`.
 
+### Errors and request limits
+
+Every rejection the application raises answers the stable envelope
+`{"error": {"code": "…", "message": "…"}}`. Published codes are `invalid_id`, `invalid_request`,
+`invalid_status`, `invalid_multipart`, `missing_file`, `not_found`, `conflict`, and `storage_error`.
+`openapi.json` names, per operation, the codes that operation can return.
+
+Two answers do not use the envelope, because they come from the router or an extractor rather than from a
+handler:
+
+- A request body larger than 50 MiB is refused by the router's size limit with `413` and the plain-text body
+  `length limit exceeded`. The limit applies to every route, so it is checked before any handler runs.
+- A body the multipart extractor cannot frame — an upload sent as JSON, or without a boundary — is answered
+  with `400 text/plain`. Once the framing parses, upload rejections use the envelope.
+
+The full reconciliation of the documented error contract and schema strictness is recorded in
+[docs/contracts/api-compatibility.md](docs/contracts/api-compatibility.md).
+
 The API process is stateless: replicas do not keep sessions or in-memory records. Horizontal scaling requires a shared persistent POSIX volume mounted at the same `TUCANO_DATA_DIR` for every replica. Repository mutations use an advisory lock file and atomic same-directory renames. A local Docker volume is suitable for one node; multi-node deployments must provide shared storage with working advisory locks. Do not use separate per-replica local volumes, or data will diverge.
 
 ## Test Data Cleanup
@@ -212,7 +230,7 @@ Tests are split into two layers and both run in CI on every push and pull reques
 
 | Suite | Covers |
 | --- | --- |
-| `tests/service.rs` | Health, OpenAPI document, Swagger UI, malformed bodies, traversal rejection, the on-disk tree layout, persistence across restarts |
+| `tests/service.rs` | Health, OpenAPI document and its error contract, Swagger UI, malformed bodies, traversal rejection, the identifier and size-limit error answers, the on-disk tree layout, persistence across restarts |
 | `tests/projects.rs` | Project CRUD, validation, conflicts, error envelopes |
 | `tests/suites.rs` | Test suite CRUD, parent-scoped creation, copy/move composition, ambiguity conflicts, missing resources |
 | `tests/runs.rs` | Test run CRUD, validation, conflicts, missing resources |
