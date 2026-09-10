@@ -119,6 +119,7 @@ mod tests {
             ),
             tags: None,
             configurations: None,
+            case_versions: None,
         }
     }
 

@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
@@ -186,6 +188,8 @@ pub struct TestRun {
     pub tags: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub configurations: Option<Vec<TestConfiguration>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub case_versions: Option<HashMap<String, u64>>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq)]
@@ -490,6 +494,24 @@ mod tests {
         assert!(output.get("testSuites").is_none());
         assert!(output.get("testCases").is_none());
         assert!(output.get("results").is_none());
+        assert!(output.get("caseVersions").is_none());
+    }
+
+    #[test]
+    fn test_run_round_trips_the_versions_it_pinned() {
+        let input = r#"{
+            "testRunId": "R-004",
+            "timestamp": "2026-09-05T00:00:00Z",
+            "caseVersions": {"TC-001": 2, "TC-002": 1}
+        }"#;
+
+        let run: TestRun = serde_json::from_str(input).expect("valid run");
+        let pinned = run.case_versions.as_ref().expect("pinned versions");
+        assert_eq!(pinned.get("TC-001"), Some(&2));
+        assert_eq!(pinned.get("TC-002"), Some(&1));
+
+        let output = serde_json::to_value(&run).expect("serializable run");
+        assert_eq!(output["caseVersions"]["TC-001"], 2);
     }
 
     #[test]
