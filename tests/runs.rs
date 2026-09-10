@@ -2,10 +2,11 @@ mod common;
 
 use axum::http::StatusCode;
 use common::{
-    assert_error_envelope, create_case_in, create_named, create_project, create_suite, delete, get,
-    json_request, send_json, test_app,
+    app_at, assert_error_envelope, create_case_in, create_named, create_project, create_suite,
+    delete, get, json_request, send_json, test_app,
 };
 use serde_json::json;
+use tempfile::TempDir;
 
 #[tokio::test]
 async fn test_runs_support_the_full_crud_lifecycle() {
@@ -353,4 +354,309 @@ async fn a_partial_update_keeps_the_fields_the_body_leaves_out() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(stored["results"][0]["status"], "Passed");
     assert_eq!(stored["name"], "nightly");
+}
+
+#[tokio::test]
+async fn a_run_links_and_unlinks_a_top_level_configuration() {
+    let (_directory, app) = test_app();
+    assert_eq!(
+        create_named(&app, "/test_runs", "nightly").await,
+        "nightly.json"
+    );
+    assert_eq!(
+        create_named(&app, "/configurations", "chrome-linux").await,
+        "chrome-linux.json"
+    );
+
+    let (status, body) = send_json(
+        &app,
+        json_request(
+            "POST",
+            "/test_runs/nightly.json/configurations",
+            &json!({"configId": "chrome-linux.json"}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "linking: {body}");
+
+    // The run keeps a reference, not a copy of the configuration document.
+    let (status, stored) = send_json(&app, get("/test_runs/nightly.json")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        stored["configurations"][0],
+        json!({"configId": "chrome-linux.json", "name": "chrome-linux"})
+    );
+
+    // Linking the same configuration twice is a conflict.
+    let (status, body) = send_json(
+        &app,
+        json_request(
+            "POST",
+            "/test_runs/nightly.json/configurations",
+            &json!({"configId": "chrome-linux.json"}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_error_envelope(&body, "conflict");
+
+    let (status, body) = send_json(
+        &app,
+        delete("/test_runs/nightly.json/configurations/chrome-linux.json"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "unlinking: {body}");
+
+    let (_, stored) = send_json(&app, get("/test_runs/nightly.json")).await;
+    assert_eq!(stored["configurations"], json!([]));
+}
+
+#[tokio::test]
+async fn a_configuration_link_validates_the_run_the_configuration_and_the_body() {
+    let (_directory, app) = test_app();
+    assert_eq!(
+        create_named(&app, "/test_runs", "nightly").await,
+        "nightly.json"
+    );
+    assert_eq!(
+        create_named(&app, "/configurations", "chrome-linux").await,
+        "chrome-linux.json"
+    );
+
+    // An unknown run is a 404 even when the configuration exists.
+    let (status, body) = send_json(
+        &app,
+        json_request(
+            "POST",
+            "/test_runs/missing.json/configurations",
+            &json!({"configId": "chrome-linux.json"}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_error_envelope(&body, "not_found");
+
+    // An unknown configuration is a 404 even when the run exists.
+    let (status, body) = send_json(
+        &app,
+        json_request(
+            "POST",
+            "/test_runs/nightly.json/configurations",
+            &json!({"configId": "missing.json"}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_error_envelope(&body, "not_found");
+
+    // The body must name the configuration it links.
+    let (status, body) = send_json(
+        &app,
+        json_request("POST", "/test_runs/nightly.json/configurations", &json!({})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_error_envelope(&body, "invalid_request");
+}
+
+#[tokio::test]
+async fn unlinking_a_configuration_the_run_does_not_reference_is_not_found() {
+    let (_directory, app) = test_app();
+    assert_eq!(
+        create_named(&app, "/test_runs", "nightly").await,
+        "nightly.json"
+    );
+
+    let (status, body) = send_json(
+        &app,
+        delete("/test_runs/nightly.json/configurations/chrome-linux.json"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_error_envelope(&body, "not_found");
+
+    let (status, body) = send_json(
+        &app,
+        delete("/test_runs/missing.json/configurations/chrome-linux.json"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_error_envelope(&body, "not_found");
+}
+
+#[tokio::test]
+async fn duplicating_a_run_preserves_its_configuration_links() {
+    let (_directory, app) = test_app();
+    assert_eq!(
+        create_named(&app, "/test_runs", "nightly").await,
+        "nightly.json"
+    );
+    assert_eq!(
+        create_named(&app, "/configurations", "chrome-linux").await,
+        "chrome-linux.json"
+    );
+    let (status, _) = send_json(
+        &app,
+        json_request(
+            "POST",
+            "/test_runs/nightly.json/configurations",
+            &json!({"configId": "chrome-linux.json"}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let (status, body) = send_json(
+        &app,
+        json_request(
+            "POST",
+            "/test_runs/nightly.json/duplicate",
+            &json!({"newId": "copy.json"}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "duplicating: {body}");
+
+    let (_, copy) = send_json(&app, get("/test_runs/copy.json")).await;
+    assert_eq!(
+        copy["configurations"][0],
+        json!({"configId": "chrome-linux.json", "name": "chrome-linux"})
+    );
+
+    let (_, original) = send_json(&app, get("/test_runs/nightly.json")).await;
+    assert_eq!(
+        original["configurations"][0]["configId"],
+        "chrome-linux.json"
+    );
+}
+
+#[tokio::test]
+async fn configuration_links_survive_a_repository_restart() {
+    let directory = TempDir::new().expect("temp dir");
+
+    {
+        let app = app_at(directory.path());
+        assert_eq!(
+            create_named(&app, "/test_runs", "nightly").await,
+            "nightly.json"
+        );
+        assert_eq!(
+            create_named(&app, "/configurations", "chrome-linux").await,
+            "chrome-linux.json"
+        );
+        let (status, _) = send_json(
+            &app,
+            json_request(
+                "POST",
+                "/test_runs/nightly.json/configurations",
+                &json!({"configId": "chrome-linux.json"}),
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+    }
+
+    let app = app_at(directory.path());
+    let (status, stored) = send_json(&app, get("/test_runs/nightly.json")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        stored["configurations"][0],
+        json!({"configId": "chrome-linux.json", "name": "chrome-linux"})
+    );
+}
+
+#[tokio::test]
+async fn listing_runs_filters_by_the_configuration_they_link() {
+    let (_directory, app) = test_app();
+
+    for (id, name) in [("R-1", "nightly"), ("R-2", "weekly"), ("R-3", "release")] {
+        let (status, body) = send_json(
+            &app,
+            json_request(
+                "POST",
+                "/test_runs",
+                &json!({
+                    "testRunId": id,
+                    "name": name,
+                    "timestamp": "2026-09-02T00:00:00Z",
+                    "tags": ["ci"],
+                }),
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED, "creating {name}: {body}");
+    }
+    for name in ["chrome-linux", "firefox-windows"] {
+        assert_eq!(
+            create_named(&app, "/configurations", name).await,
+            format!("{name}.json")
+        );
+    }
+    for (run, configuration) in [("nightly", "chrome-linux"), ("weekly", "firefox-windows")] {
+        let (status, body) = send_json(
+            &app,
+            json_request(
+                "POST",
+                &format!("/test_runs/{run}.json/configurations"),
+                &json!({"configId": format!("{configuration}.json")}),
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "linking {run}: {body}");
+    }
+
+    // Only the runs that link the configuration are listed, so the run that
+    // links nothing is excluded.
+    let (status, listing) =
+        send_json(&app, get("/test_runs?configuration=chrome-linux.json")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(listing, json!(["nightly.json"]));
+
+    let (status, listing) =
+        send_json(&app, get("/test_runs?configuration=firefox-windows.json")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(listing, json!(["weekly.json"]));
+
+    // A configuration no run links yields an empty listing, not a 404, matching
+    // how the substring and tag filters already behave.
+    let (status, listing) =
+        send_json(&app, get("/test_runs?configuration=firefox-linux.json")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(listing, json!([]));
+
+    // The configuration filter composes with the substring and tag filters, and
+    // the substring filter can still exclude a linked run.
+    let (status, listing) = send_json(
+        &app,
+        get("/test_runs?filter=NIGHT&tags=ci&configuration=chrome-linux.json"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(listing, json!(["nightly.json"]));
+
+    let (status, listing) = send_json(
+        &app,
+        get("/test_runs?filter=WEEK&configuration=chrome-linux.json"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(listing, json!([]));
+
+    let (status, listing) = send_json(
+        &app,
+        get("/test_runs?tags=ci&configuration=chrome-linux.json"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(listing, json!(["nightly.json"]));
+
+    // Only runs carry configuration references, so the parameter is inert for
+    // the other listings rather than emptying them.
+    let (status, listing) =
+        send_json(&app, get("/configurations?configuration=chrome-linux.json")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        listing,
+        json!(["chrome-linux.json", "firefox-windows.json"])
+    );
 }
