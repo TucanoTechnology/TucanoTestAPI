@@ -14,6 +14,7 @@ mod error;
 mod milestones;
 mod projects;
 mod reports;
+mod request_id;
 mod runs;
 mod suites;
 
@@ -23,6 +24,7 @@ use axum::{
     Json, Router,
     body::Body,
     http::header,
+    middleware,
     response::{IntoResponse, Response},
     routing::get,
 };
@@ -121,7 +123,8 @@ where
         .merge(reports::routes::<R>())
         .merge(configurations::routes::<R>())
         .layer(RequestBodyLimitLayer::new(MAX_BODY_BYTES))
-        .layer(TraceLayer::new_for_http())
+        .layer(TraceLayer::new_for_http().make_span_with(request_id::request_span))
+        .layer(middleware::from_fn(request_id::propagate))
         .with_state(state)
 }
 

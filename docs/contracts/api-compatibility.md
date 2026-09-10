@@ -874,8 +874,60 @@ module the coverage sibling introduced.
   `::a_date_filter_accepts_a_bare_date_or_a_timestamp`), and with
   `tests/service.rs::openapi_document_matches_the_registered_routes` holding the path to the registered route.
 
+## Request ID Plan (Issue #106)
+
+Issue: [#106](https://github.com/TucanoTechnology/TucanoTestAPI/issues/106) — the request-id child of
+[#14](https://github.com/TucanoTechnology/TucanoTestAPI/issues/14), the observability parent.
+
+- **One middleware at the router boundary.** `src/api/request_id.rs` resolves an id before the request reaches
+  any route, publishes it for the rest of the request, and echoes it on the response. Nothing is written, so no
+  stored document changes.
+- **An inbound `X-Request-Id` is honoured when it is usable.** The header is accepted verbatim — including the
+  exact bytes, so the response echoes what the client sent — unless it is absent, empty, or not visible ASCII,
+  in which case one is minted. Client input is never trusted into a panic.
+- **A minted id is 16 hexadecimal characters.** It combines a process-local [`RandomState`] and an `AtomicU64`
+  counter, so two requests differ without adding a dependency. It is **not** cryptographic: the id is a
+  correlation handle, not a secret, and the plan deliberately does not call it one.
+- **The id is published in a task-local scope, not an `Extension` alone.** Both exist: the `Extension` lets the
+  span maker read it, and the task-local scope lets the error envelope read it without threading it through
+  every handler.
+- **Every answer carries the response header.** The middleware is the outermost layer, so the plain-text
+  rejections the multipart extractor and the body-limit layer produce carry `X-Request-Id` too, not only the
+  answers that pass through a handler.
+- **The error envelope gains an optional `requestId`.** `ErrorBody` serialises it with
+  `skip_serializing_if = "Option::is_none"`, so a caller outside a request scope — and the enum's own unit test —
+  still sees the historical `{"error":{"code":…,"message":…}}`. `Error.properties.error` documents the field but
+  does not add it to `required`, and `Error` stays free of `additionalProperties` to satisfy
+  `tests/service.rs::openapi_schemas_are_strict_only_where_the_api_rejects_unknown_fields`.
+- **The id is written to the request span.** `TraceLayer::make_span_with` is replaced with a `http.request` span
+  carrying `method`, `uri` and `request_id`. No subscriber is installed here: #15 owns logging configuration, so
+  the span exists and is populated but nothing renders it by default.
+- **The contract declares the header on every response.** `openapi.json` gains
+  `components.headers.XRequestId` and a `X-Request-Id` reference on **all** response objects — the eleven shared
+  `components.responses.*` members and the inline answers alike — because OpenAPI forbids a `$ref` response from
+  carrying sibling keys, so a header cannot be added at the reference site.
+- **`tracing` is added without growing the lockfile.** `Cargo.toml` pins
+  `tracing = { version = "0.1", default-features = false, features = ["std"] }`: the crate was already in
+  `Cargo.lock` transitively through `tower-http`, and trimming the default `attributes` feature keeps the second
+  `syn` it would otherwise pull out of the graph, so `audit`, `sbom` and `container-scan` see no new crate. The
+  deliberate omission of `tracing-subscriber` is the same call — it belongs to #15.
+- Deviation recorded with tests in `tests/request_id.rs`
+  (`::a_request_without_the_header_gets_one`, `::a_request_with_the_header_echoes_it`,
+  `::an_empty_header_is_replaced`, `::two_requests_get_different_ids`,
+  `::an_error_envelope_carries_the_request_id`, `::a_plain_text_rejection_carries_the_header`,
+  `::the_span_carries_the_request_id`), with the unit tests in `src/api/request_id.rs`
+  (`::minted_ids_differ_and_are_sixteen_hex_characters`, `::current_is_absent_outside_a_request`), and with
+  `src/api/error.rs::the_envelope_carries_a_code_and_a_message` holding the out-of-band shape unchanged.
+
 ## Breaking change accounting
 
+- **Request id propagated, echoed and published in the error envelope** (Issue #106, plan above). `X-Request-Id`
+  is a new response header on every answer, and the error envelope gains an optional `requestId`. The change is
+  additive: no request that used to succeed is refused, no stored document changes, and an envelope a client
+  reads only for `code` / `message` is unchanged apart from the extra key. The id is a correlation handle, not a
+  secret — it is minted from a process-local random state and a counter, and an inbound header is accepted
+  verbatim up to the empty/visibility checks. Deviation recorded with tests in `tests/request_id.rs` as listed in
+  the plan.
 - **Coverage report endpoint added** (Issue #94, plan above). `GET /reports/coverage` and the `CoverageReport` /
   `SuiteCoverage` schemas are new; nothing is written and no stored document shape changed, so the change is
   additive. The two schemas are permissive (no `additionalProperties`), and the new operation publishes no
