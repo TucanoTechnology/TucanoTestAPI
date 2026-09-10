@@ -1,16 +1,22 @@
-//! JUnit XML import: the mapping from a JUnit report to run results.
+//! Report import: the mapping from a JUnit XML report or a JSON results array
+//! to run results.
 //!
-//! A JUnit document is a tree of `<testsuite>` elements, each holding
-//! `<testcase>` elements; a testcase sits at whatever depth its author chose, so
-//! this walks every descendant rather than one fixed level. The parser is
-//! read-only and matches by local name, so a namespaced document imports
-//! exactly like a plain one.
+//! Both readers produce [`ParsedCase`]es, so the service stores them the same
+//! way and a case the run already records is left alone either way. They differ
+//! in how they treat input they cannot use. A JUnit document is a tree of
+//! `<testsuite>` elements, each holding `<testcase>` elements; a testcase sits
+//! at whatever depth its author chose, so this walks every descendant rather
+//! than one fixed level, and a testcase it cannot name is counted rather than
+//! rejected so a partly unusable report still imports the part that is not. A
+//! JSON body is written by a caller of this API, so anything it gets wrong —
+//! malformed JSON, an unknown field, a status that cannot be mapped — fails the
+//! whole request and writes nothing.
 //!
-//! Every testcase it can name becomes a [`ParsedCase`]. One it cannot name — no
-//! `name` attribute — is counted as an error rather than rejected, because a
-//! report that is partly unusable should still import the part that is not.
+//! Both parsers are read-only and never touch storage.
 
 use roxmltree::{Document, Node};
+use serde::Deserialize;
+use serde_json::Value;
 
 use super::error::DomainError;
 
@@ -73,6 +79,82 @@ pub fn parse(xml: &str) -> Result<ParsedReport, DomainError> {
     }
 
     Ok(ParsedReport { cases, errors })
+}
+
+/// One entry of a JSON import body, before it meets the run it lands in.
+///
+/// The fields are strict in both directions: an unknown or misspelled field, a
+/// missing `testCaseId` or `status`, or a wrong JSON type is rejected rather
+/// than ignored, matching the models that carry `deny_unknown_fields`.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct JsonEntry {
+    test_case_id: String,
+    status: String,
+    notes: Option<String>,
+    timestamp: Option<String>,
+}
+
+/// Reads a JSON results body: a bare array of entries, or an object whose only
+/// field `results` holds that array.
+///
+/// Unlike [`parse`], every problem is fatal. A body that is not valid JSON, an
+/// entry that is not an object, an unknown or misspelled field, a missing or
+/// empty `testCaseId`, or a `status` the importer cannot map all answer a `400`
+/// and nothing is written. `notes` and `timestamp` are optional, and `null`
+/// means absent.
+pub fn parse_json(body: &[u8]) -> Result<Vec<ParsedCase>, DomainError> {
+    let value: Value = serde_json::from_slice(body)
+        .map_err(|_| DomainError::invalid_request("Import body must be valid JSON"))?;
+
+    let entries = match value {
+        Value::Array(entries) => entries,
+        Value::Object(mut object) if object.len() == 1 => match object.remove("results") {
+            Some(Value::Array(entries)) => entries,
+            _ => return Err(unusable_body()),
+        },
+        _ => return Err(unusable_body()),
+    };
+
+    entries
+        .into_iter()
+        .enumerate()
+        .map(|(index, entry)| map_json_entry(index, entry))
+        .collect()
+}
+
+/// The error for a body that is neither a results array nor the wrapper object.
+fn unusable_body() -> DomainError {
+    DomainError::invalid_request(
+        "Import body must be an array of results, or an object whose only field is `results`",
+    )
+}
+
+/// Maps one JSON entry, naming its position when the entry is unusable.
+fn map_json_entry(index: usize, entry: Value) -> Result<ParsedCase, DomainError> {
+    let entry: JsonEntry = serde_json::from_value(entry).map_err(|error| {
+        DomainError::invalid_request(format!("Import entry {index} is invalid: {error}"))
+    })?;
+
+    if entry.test_case_id.is_empty() {
+        return Err(DomainError::invalid_request(format!(
+            "Import entry {index} is missing testCaseId"
+        )));
+    }
+
+    let status = match entry.status.as_str() {
+        "Passed" => ImportStatus::Passed,
+        "Failed" => ImportStatus::Failed,
+        "Blocked" => ImportStatus::Blocked,
+        _ => return Err(DomainError::invalid_import_status()),
+    };
+
+    Ok(ParsedCase {
+        test_case_id: entry.test_case_id,
+        status,
+        notes: entry.notes,
+        timestamp: entry.timestamp,
+    })
 }
 
 /// Maps one `<testcase>` to the result it records, or `None` when it cannot be
@@ -255,5 +337,131 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn a_json_array_maps_its_fields_and_statuses() {
+        let cases = parse_json(
+            br#"[{"testCaseId":"TC-1","status":"Passed","notes":"ok"},
+                 {"testCaseId":"TC-2","status":"Failed"},
+                 {"testCaseId":"TC-3","status":"Blocked","timestamp":"1"}]"#,
+        )
+        .expect("valid JSON");
+
+        assert_eq!(cases.len(), 3);
+        assert_eq!(cases[0].test_case_id, "TC-1");
+        assert_eq!(cases[0].status, ImportStatus::Passed);
+        assert_eq!(cases[0].notes.as_deref(), Some("ok"));
+        assert_eq!(cases[0].timestamp, None);
+        assert_eq!(cases[1].status, ImportStatus::Failed);
+        assert_eq!(cases[1].notes, None);
+        assert_eq!(cases[2].status, ImportStatus::Blocked);
+        assert_eq!(cases[2].timestamp.as_deref(), Some("1"));
+    }
+
+    #[test]
+    fn a_json_body_may_be_wrapped_in_a_results_field() {
+        let cases = parse_json(br#"{"results":[{"testCaseId":"TC-1","status":"Passed"}]}"#)
+            .expect("valid wrapper");
+        assert_eq!(cases.len(), 1);
+        assert_eq!(cases[0].test_case_id, "TC-1");
+
+        // An object is the wrapper only when `results` is its single field and
+        // holds an array; anything else is not a results body.
+        let bodies: &[&[u8]] = &[
+            br#"{"cases":[]}"#,
+            br#"{"results":[],"extra":1}"#,
+            br#"{"results":"nope"}"#,
+            br#"{"results":{}}"#,
+            b"\"results\"",
+            b"null",
+            b"42",
+        ];
+        for body in bodies {
+            let error = parse_json(body).expect_err("unusable body");
+            assert!(
+                matches!(
+                    error,
+                    DomainError::InvalidRequest {
+                        code: "invalid_request",
+                        ..
+                    }
+                ),
+                "rejected {body:?} as {error:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_empty_json_body_parses_to_no_cases() {
+        assert!(parse_json(b"[]").expect("valid").is_empty());
+        assert!(parse_json(br#"{"results":[]}"#).expect("valid").is_empty());
+    }
+
+    #[test]
+    fn json_null_optional_fields_mean_absent() {
+        let cases = parse_json(
+            br#"[{"testCaseId":"TC-1","status":"Passed","notes":null,"timestamp":null}]"#,
+        )
+        .expect("valid");
+        assert_eq!(cases[0].notes, None);
+        assert_eq!(cases[0].timestamp, None);
+    }
+
+    #[test]
+    fn a_json_entry_problem_names_its_position() {
+        let bodies: &[&[u8]] = &[
+            br#"[{"status":"Passed"}]"#,
+            br#"[{"testCaseId":"TC-1"}]"#,
+            br#"[{"testCaseId":"TC-1","status":"Passed","unknown":1}]"#,
+            br#"[{"testCaseId":"TC-1","status":"Passed","notes":5}]"#,
+            br#"[{"testCaseId":"","status":"Passed"}]"#,
+            br#"["not an object"]"#,
+        ];
+        for body in bodies {
+            let error = parse_json(body).expect_err("unusable entry");
+            match error {
+                DomainError::InvalidRequest {
+                    code: "invalid_request",
+                    message,
+                } => assert!(
+                    message.contains("entry 0"),
+                    "names the entry, got {message}"
+                ),
+                other => panic!("unexpected error: {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn a_json_status_outside_the_three_is_rejected_as_invalid_status() {
+        for status in ["Untested", "Retest", "passed", "Unknown", ""] {
+            let body = format!(r#"[{{"testCaseId":"TC-1","status":"{status}"}}]"#);
+            let error = parse_json(body.as_bytes()).expect_err("unmappable status");
+            assert!(
+                matches!(
+                    error,
+                    DomainError::InvalidRequest {
+                        code: "invalid_status",
+                        ..
+                    }
+                ),
+                "rejected {status:?} as {error:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn malformed_json_is_an_invalid_request() {
+        for body in [&b"{not json"[..], b"", b"[{\"testCaseId\":]", b"[1,2,3"] {
+            let error = parse_json(body).expect_err("malformed");
+            assert!(matches!(
+                error,
+                DomainError::InvalidRequest {
+                    code: "invalid_request",
+                    ..
+                }
+            ));
+        }
     }
 }

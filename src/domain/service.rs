@@ -26,7 +26,7 @@ use crate::storage::{Parent, Placement, Repository, Resource, unique_suffix};
 
 use super::duplicate::{self, DuplicateSpec};
 use super::error::{self, DomainError};
-use super::import::{self, ImportStatus};
+use super::import::{self, ImportStatus, ParsedCase};
 use super::{
     Created, ListQuery, MAX_ATTACHMENT_BYTES, StoredAttachment, composition,
     current_timestamp_string, mime_type, progress, required_string, resources, validation,
@@ -315,7 +315,38 @@ impl<R: Repository> TestService<R> {
         xml: &str,
     ) -> Result<ImportSummary, DomainError> {
         let report = import::parse(xml)?;
+        self.store_imported_results(run_id, report.cases, report.errors)
+    }
 
+    /// Imports a JSON result array into a run's results.
+    ///
+    /// Every entry must be usable: the whole body is parsed before anything is
+    /// written, so a body that is malformed, names an unknown field, omits
+    /// `testCaseId` or `status`, or carries a status that is not `Passed`,
+    /// `Failed` or `Blocked` answers a `400` and leaves the run exactly as it
+    /// was. Cases the run already records are counted as duplicates and left
+    /// untouched, exactly as the JUnit importer does.
+    pub fn import_json_results(
+        &self,
+        run_id: &str,
+        body: &[u8],
+    ) -> Result<ImportSummary, DomainError> {
+        let cases = import::parse_json(body)?;
+        self.store_imported_results(run_id, cases, 0)
+    }
+
+    /// Writes already-parsed import cases into a run, refusing to overwrite a
+    /// case the run already records and reporting what was written.
+    ///
+    /// Both importers share this: they differ only in how they read a body and
+    /// in whether a case they cannot use fails the request or is counted in
+    /// `errors`.
+    fn store_imported_results(
+        &self,
+        run_id: &str,
+        cases: Vec<ParsedCase>,
+        errors: usize,
+    ) -> Result<ImportSummary, DomainError> {
         let mut run = self.load::<TestRun>(Resource::Runs, run_id, "Test run not found")?;
         let mut seen: HashSet<String> = run
             .results
@@ -336,7 +367,7 @@ impl<R: Repository> TestService<R> {
         let mut imported = 0;
         let mut duplicates = 0;
 
-        for case in report.cases {
+        for case in cases {
             if !seen.insert(case.test_case_id.clone()) {
                 duplicates += 1;
                 continue;
@@ -361,7 +392,6 @@ impl<R: Repository> TestService<R> {
             imported += 1;
         }
 
-        let errors = report.errors;
         let outcome = ImportSummary {
             imported,
             skipped: duplicates + errors,
