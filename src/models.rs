@@ -251,6 +251,27 @@ pub struct CaseHistoryEntry {
     pub changed_fields: Vec<String>,
 }
 
+/// How many cases the tree holds, per suite and in total, for one project or
+/// for every project. The identifier is echoed back only when the report was
+/// scoped to one project.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct CoverageReport {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub project_id: Option<String>,
+    pub total_cases: usize,
+    pub suites: Vec<SuiteCoverage>,
+}
+
+/// One suite's contribution to a coverage report.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SuiteCoverage {
+    pub suite_id: String,
+    pub name: String,
+    pub case_count: usize,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

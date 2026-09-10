@@ -13,6 +13,7 @@ pub mod duplicate;
 pub mod error;
 pub mod import;
 pub mod progress;
+pub mod reports;
 pub mod resources;
 pub mod service;
 pub mod validation;
