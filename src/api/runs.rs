@@ -3,7 +3,7 @@
 use axum::{
     Json, Router,
     extract::{Path, State},
-    routing::{get, post},
+    routing::{delete, get, post},
 };
 use serde_json::{Value, json};
 
@@ -56,6 +56,27 @@ async fn record_run_result<R: Repository>(
     Ok(Json(json!({ "message": "Test result recorded in run" })))
 }
 
+async fn link_run_configuration<R: Repository>(
+    State(service): State<AppState<R>>,
+    Path(id): Path<String>,
+    Json(body): Json<Value>,
+) -> Result<Json<Value>, DomainError> {
+    service.link_configuration_to_run(&id, &body)?;
+    Ok(Json(
+        json!({ "message": "Test configuration linked to test run" }),
+    ))
+}
+
+async fn unlink_run_configuration<R: Repository>(
+    State(service): State<AppState<R>>,
+    Path((id, config_id)): Path<(String, String)>,
+) -> Result<Json<Value>, DomainError> {
+    service.unlink_configuration_from_run(&id, &config_id)?;
+    Ok(Json(
+        json!({ "message": "Test configuration unlinked from test run" }),
+    ))
+}
+
 pub(crate) fn routes<R: Repository + 'static>() -> Router<AppState<R>> {
     Router::new()
         .route(
@@ -72,4 +93,12 @@ pub(crate) fn routes<R: Repository + 'static>() -> Router<AppState<R>> {
         .route("/test_runs/{id}/test_suites", post(add_suite_to_run::<R>))
         .route("/test_runs/{id}/test_cases", post(add_case_to_run::<R>))
         .route("/test_runs/{id}/results", post(record_run_result::<R>))
+        .route(
+            "/test_runs/{id}/configurations",
+            post(link_run_configuration::<R>),
+        )
+        .route(
+            "/test_runs/{id}/configurations/{config_id}",
+            delete(unlink_run_configuration::<R>),
+        )
 }

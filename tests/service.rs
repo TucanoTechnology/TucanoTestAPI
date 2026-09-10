@@ -548,6 +548,7 @@ async fn openapi_schemas_are_strict_only_where_the_api_rejects_unknown_fields() 
         "TestCaseResult",
         "Milestone",
         "TestConfiguration",
+        "TestRun",
     ] {
         assert_eq!(
             schemas[name]["additionalProperties"],
@@ -601,6 +602,22 @@ async fn openapi_schemas_are_strict_only_where_the_api_rejects_unknown_fields() 
     assert!(
         timestamp["description"].is_string(),
         "the shape is documented"
+    );
+
+    // A run snapshot embeds a copy of the documents it recorded, so the schema
+    // publishes the tags and configurations the list filters read.
+    let test_run = &schemas["TestRun"];
+    assert!(test_run["properties"]["tags"].is_object());
+    assert_eq!(
+        test_run["properties"]["configurations"]["items"]["$ref"],
+        "#/components/schemas/TestConfiguration"
+    );
+
+    // The run read response is where that snapshot's shape is published.
+    assert_eq!(
+        document["paths"]["/test_runs/{id}"]["get"]["responses"]["200"]["content"]["application/json"]
+            ["schema"]["$ref"],
+        "#/components/schemas/TestRun"
     );
 }
 

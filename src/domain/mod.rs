@@ -26,10 +26,15 @@ use std::time::{SystemTime, UNIX_EPOCH};
 pub const MAX_ATTACHMENT_BYTES: usize = 50 * 1024 * 1024;
 
 /// Query parameters accepted by every list endpoint.
+///
+/// `configuration` names a top-level configuration and only means something for
+/// `test_runs`, the one collection whose documents carry configuration
+/// references; the other listings ignore it.
 #[derive(Debug, Clone, Deserialize, Default)]
 pub struct ListQuery {
     pub filter: Option<String>,
     pub tags: Option<String>,
+    pub configuration: Option<String>,
 }
 
 /// Identifier assigned to a freshly created resource.
