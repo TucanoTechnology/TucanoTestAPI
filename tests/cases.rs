@@ -358,6 +358,15 @@ async fn creating_a_rich_test_case_preserves_preconditions_severity_and_steps() 
             {
                 "action": "Click Checkout",
                 "expectedResult": "Payment screen loaded"
+            },
+            {
+                "action": "Capture the receipt",
+                "attachments": [{
+                    "filename": "1-receipt.png",
+                    "originalName": "receipt.png",
+                    "mimeType": "image/png",
+                    "size": 4096
+                }]
             }
         ]
     });
@@ -380,6 +389,19 @@ async fn creating_a_rich_test_case_preserves_preconditions_severity_and_steps() 
     assert_eq!(
         stored["steps"][1]["expectedResult"],
         "Payment screen loaded"
+    );
+
+    // A structured step round-trips the attachments the body carried, and a
+    // step that carried none omits the key rather than recording an empty list.
+    assert!(stored["steps"][1].get("attachments").is_none());
+    assert_eq!(
+        stored["steps"][2]["attachments"],
+        json!([{
+            "filename": "1-receipt.png",
+            "originalName": "receipt.png",
+            "mimeType": "image/png",
+            "size": 4096,
+        }])
     );
 }
 

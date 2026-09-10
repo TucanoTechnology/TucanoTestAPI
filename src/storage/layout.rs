@@ -252,6 +252,37 @@ pub fn attachment_path(
     Ok(path)
 }
 
+/// Folder holding the attachments of one structured step inside a case folder.
+///
+/// Step attachments live in a `steps/<index>` subdirectory so the step
+/// namespace can never collide with the case-level attachment namespace.
+pub fn step_dir(
+    root: &Path,
+    parent: &Parent,
+    case_id: &str,
+    step_index: usize,
+) -> io::Result<PathBuf> {
+    let path = case_dir(root, parent, case_id)?
+        .join("steps")
+        .join(step_index.to_string());
+    ensure_within(root, &path)?;
+    Ok(path)
+}
+
+/// Path of an attachment inside one structured step of a test case.
+pub fn step_attachment_path(
+    root: &Path,
+    parent: &Parent,
+    case_id: &str,
+    step_index: usize,
+    filename: &str,
+) -> io::Result<PathBuf> {
+    validate_component(filename)?;
+    let path = step_dir(root, parent, case_id, step_index)?.join(filename);
+    ensure_within(root, &path)?;
+    Ok(path)
+}
+
 /// Reject anything that is not a single, plain path component.
 pub fn validate_component(component: &str) -> io::Result<()> {
     if component.is_empty()
@@ -428,6 +459,34 @@ mod tests {
             attachment_path(root, &suite_parent(), "TC-001", "notes.txt").expect("attachment"),
             root.join("projects/checkout/smoke/TC-001/notes.txt")
         );
+    }
+
+    #[test]
+    fn step_attachments_live_in_an_indexed_subfolder() {
+        let directory = TempDir::new().expect("temp dir");
+        let root = directory.path();
+
+        assert_eq!(
+            step_dir(root, &suite_parent(), "TC-001", 0).expect("step dir"),
+            root.join("projects/checkout/smoke/TC-001/steps/0")
+        );
+        assert_eq!(
+            step_attachment_path(root, &suite_parent(), "TC-001", 2, "shot.png")
+                .expect("step attachment"),
+            root.join("projects/checkout/smoke/TC-001/steps/2/shot.png")
+        );
+    }
+
+    #[test]
+    fn step_attachment_names_may_not_traverse() {
+        let directory = TempDir::new().expect("temp dir");
+        let root = directory.path();
+
+        for filename in ["../escape", "nested/child.txt", "", "."] {
+            let error = step_attachment_path(root, &suite_parent(), "TC-001", 0, filename)
+                .expect_err("rejected");
+            assert_eq!(error.kind(), io::ErrorKind::InvalidInput, "{filename:?}");
+        }
     }
 
     #[test]

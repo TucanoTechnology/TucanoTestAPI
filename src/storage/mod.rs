@@ -10,8 +10,8 @@ pub use fs::FileRepository;
 pub use layout::{
     Parent, Placement, Resource, attachment_path, case_dir, case_marker, document_path,
     ensure_within, folder_name, folder_wire_id, node_folder, parent_dir, parent_marker,
-    project_dir, project_marker, root_dir, set_private_permissions, suite_dir, suite_marker,
-    unique_suffix, validate_component,
+    project_dir, project_marker, root_dir, set_private_permissions, step_attachment_path, step_dir,
+    suite_dir, suite_marker, unique_suffix, validate_component,
 };
 
 use serde_json::Value;
@@ -80,4 +80,27 @@ pub trait Repository: Send + Sync {
 
     /// Remove a supplementary file of a case and its stored metadata.
     fn delete_attachment(&self, parent: &Parent, case: &str, filename: &str) -> io::Result<()>;
+
+    /// Store a supplementary file for one structured step of a case and record
+    /// it in that step's metadata, under one lock so file and metadata never
+    /// diverge.
+    fn save_step_attachment(
+        &self,
+        parent: &Parent,
+        case: &str,
+        step_index: usize,
+        filename: &str,
+        entry: &Value,
+        contents: &[u8],
+    ) -> io::Result<()>;
+
+    /// Remove a supplementary file of one structured step of a case and its
+    /// stored metadata.
+    fn delete_step_attachment(
+        &self,
+        parent: &Parent,
+        case: &str,
+        step_index: usize,
+        filename: &str,
+    ) -> io::Result<()>;
 }

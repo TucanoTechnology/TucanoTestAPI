@@ -190,6 +190,44 @@ mod tests {
     }
 
     #[test]
+    fn structured_steps_are_validated_for_step_attachments() {
+        let case = json!({
+            "testCaseId": "TC-001",
+            "title": "Attach evidence to a step",
+            "expectedResult": "Stored",
+            "steps": ["Open the form", {
+                "action": "Pick a file",
+                "attachments": [{
+                    "filename": "1-shot.png",
+                    "originalName": "shot.png",
+                    "mimeType": "image/png",
+                    "size": 2048
+                }]
+            }]
+        });
+        assert!(validate_payload(Resource::Cases, &case).is_ok());
+
+        assert_invalid(
+            Resource::Cases,
+            json!({
+                "testCaseId": "TC-001",
+                "title": "t",
+                "expectedResult": "e",
+                "steps": [{ "action": "Pick a file", "attachments": [{ "filename": "1.png" }] }]
+            }),
+        );
+        assert_invalid(
+            Resource::Cases,
+            json!({
+                "testCaseId": "TC-001",
+                "title": "t",
+                "expectedResult": "e",
+                "steps": [{ "action": "Pick a file", "attachments": [{ "sneaky": true }] }]
+            }),
+        );
+    }
+
+    #[test]
     fn malformed_nested_collections_are_rejected() {
         assert_invalid(
             Resource::Projects,
