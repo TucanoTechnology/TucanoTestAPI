@@ -633,6 +633,36 @@ and records them against the run, reusing the `ImportSummary` envelope Issue #85
   run answered `404` — plus `src/domain/import.rs` unit tests over `parse_json` itself and `tests/service.rs`
   covering the documented route and its `ImportEntry` schema.
 
+## Defect Link Plan (Issue #87)
+
+Issue: [#87](https://github.com/TucanoTechnology/TucanoTestAPI/issues/87) — a failed result needs to name the defect
+it raised, and the first read of that link is a listing. This issue adds the `DefectLink` shape and
+`GET /test_runs/{id}/results/{case_id}/defects`; creating and removing links is Issue #88.
+
+- **The link is a document, not a bare URL.** `DefectLink` carries `linkId`, `defectId`, `defectUrl`,
+  `trackerType` and `linkedAt` as required fields, with optional `title` and `status`. `trackerType` is one of
+  `jira`, `github`, `gitlab` or `custom`, and `linkedAt` is stored verbatim (this API renders the current time as
+  Unix seconds in a string, but a client-supplied value is kept as given). `linkId` is the link's own identity so
+  the same defect can be linked, unlinked and relinked without the list position mattering — which is what makes
+  the Issue #88 routes addressable.
+- **Links live on the result, inside the run.** `TestCaseResult` gains an optional `defectLinks` array, so a
+  link travels with the run snapshot that recorded it, and a run persisted before this change still reads
+  (`defectLinks` is absent, not empty). The field is omitted from the wire when a result links nothing, the same
+  way `attachments` and the other optional fields are.
+- **The listing answers an empty list and a missing result differently.** A result that exists and links nothing
+  answers `200 {"defects": []}`; a run that does not exist, or one that records no result for `case_id`, answers
+  `404 not_found`, because "nothing is linked" and "there is nothing to link to" are different answers. An
+  unusable run identifier answers `400 invalid_id` before storage is consulted, the rule every run-scoped route
+  follows.
+- **The response is an envelope.** `{"defects": [...]}` rather than a bare array, so a later issue can add
+  summary fields beside the list without changing the response's shape. This is the first list route to use a
+  named key; the other collection reads keep their bare arrays.
+- Deviation recorded with tests in `tests/runs.rs` — an empty list for a result that links nothing, the links a
+  stored result carries read back in order, and the `400`/`404` answers for an unusable identifier, an unknown
+  run and a case the run never ran — plus `tests/service.rs` holding the `DefectLink` schema to
+  `additionalProperties: false` and the route to the published contract, and model unit tests in
+  `src/models.rs` for the camelCase wire shape and the omission of `title`/`status`.
+
 ## Breaking change accounting
 
 - **Tags added, and their query parameter withdrawn where it could not match** (Issue #49, plan above).

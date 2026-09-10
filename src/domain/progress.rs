@@ -111,6 +111,7 @@ mod tests {
                         timestamp: "1".to_owned(),
                         notes: None,
                         attachments: None,
+                        defect_links: None,
                     })
                     .collect(),
             ),

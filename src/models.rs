@@ -87,6 +87,26 @@ pub struct Project {
     pub tags: Option<Vec<String>>,
 }
 
+/// A reference from a run result to the defect a failure raised.
+///
+/// `tracker_type` names the system the defect lives in — `jira`, `github`,
+/// `gitlab` or `custom` — and `defect_url` is the address a human follows to
+/// reach it. `link_id` is the link's own identity, so the same defect can be
+/// linked, unlinked and relinked without depending on its position in the list.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DefectLink {
+    pub link_id: String,
+    pub defect_id: String,
+    pub defect_url: String,
+    pub tracker_type: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
+    pub linked_at: String,
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct TestCaseResult {
@@ -97,6 +117,8 @@ pub struct TestCaseResult {
     pub notes: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub attachments: Option<Vec<Attachment>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub defect_links: Option<Vec<DefectLink>>,
 }
 
 /// Counts of the results one import wrote, split by the status it mapped them
@@ -423,6 +445,82 @@ mod tests {
     }
 
     #[test]
+    fn defect_link_round_trips_and_omits_optional_fields() {
+        let input = r#"{
+            "linkId": "L-001",
+            "defectId": "BUG-42",
+            "defectUrl": "https://jira.example.com/browse/BUG-42",
+            "trackerType": "jira",
+            "title": "Login fails under load",
+            "status": "Open",
+            "linkedAt": "2026-09-10T12:00:00Z"
+        }"#;
+
+        let link: DefectLink = serde_json::from_str(input).expect("valid defect link");
+        assert_eq!(link.link_id, "L-001");
+        assert_eq!(link.tracker_type, "jira");
+        assert_eq!(link.title.as_deref(), Some("Login fails under load"));
+
+        let output = serde_json::to_value(&link).expect("serializable defect link");
+        assert_eq!(output["linkId"], "L-001");
+        assert_eq!(
+            output["defectUrl"],
+            "https://jira.example.com/browse/BUG-42"
+        );
+        assert_eq!(output["trackerType"], "jira");
+        assert_eq!(output["status"], "Open");
+
+        let minimal: DefectLink = serde_json::from_str(
+            r#"{
+                "linkId": "L-002",
+                "defectId": "123",
+                "defectUrl": "https://github.com/org/repo/issues/123",
+                "trackerType": "github",
+                "linkedAt": "2026-09-10T12:00:00Z"
+            }"#,
+        )
+        .expect("valid minimal defect link");
+        assert!(minimal.title.is_none());
+        assert!(minimal.status.is_none());
+
+        let output = serde_json::to_value(&minimal).expect("serializable minimal link");
+        assert!(output.get("title").is_none());
+        assert!(output.get("status").is_none());
+    }
+
+    #[test]
+    fn test_case_result_carries_defect_links_and_omits_absent_ones() {
+        let input = r#"{
+            "testCaseId": "TC-001.json",
+            "status": "Failed",
+            "timestamp": "2026-09-10T12:00:00Z",
+            "defectLinks": [{
+                "linkId": "L-001",
+                "defectId": "BUG-42",
+                "defectUrl": "https://jira.example.com/browse/BUG-42",
+                "trackerType": "jira",
+                "linkedAt": "2026-09-10T12:00:00Z"
+            }]
+        }"#;
+
+        let result: TestCaseResult = serde_json::from_str(input).expect("valid result");
+        let links = result.defect_links.as_ref().expect("defect links present");
+        assert_eq!(links.len(), 1);
+        assert_eq!(links[0].defect_id, "BUG-42");
+
+        let output = serde_json::to_value(&result).expect("serializable result");
+        assert_eq!(output["defectLinks"][0]["defectId"], "BUG-42");
+
+        let bare: TestCaseResult = serde_json::from_str(
+            r#"{"testCaseId":"TC-002.json","status":"Passed","timestamp":"2026-09-10T12:00:00Z"}"#,
+        )
+        .expect("valid result without links");
+        assert!(bare.defect_links.is_none());
+        let output = serde_json::to_value(&bare).expect("serializable bare result");
+        assert!(output.get("defectLinks").is_none());
+    }
+
+    #[test]
     fn milestone_round_trips_and_omits_optional_fields() {
         let input = r#"{
             "milestoneId": "M-001.json",
@@ -532,6 +630,12 @@ mod tests {
         assert!(
             serde_json::from_str::<TestCase>(
                 r#"{"testCaseId":"TC-001","title":"X","expectedResult":"Y","rogue":1}"#
+            )
+            .is_err()
+        );
+        assert!(
+            serde_json::from_str::<DefectLink>(
+                r#"{"linkId":"L-001","defectId":"B-1","defectUrl":"https://x/1","trackerType":"jira","linkedAt":"2026-09-10T12:00:00Z","rogue":1}"#
             )
             .is_err()
         );
