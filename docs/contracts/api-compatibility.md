@@ -749,6 +749,38 @@ the run-side capture to [#92](https://github.com/TucanoTechnology/TucanoTestAPI/
   holding the `TestCase` additions to the published contract and `src/domain/mod.rs`, `src/models.rs` and
   `src/storage/layout.rs` carrying the formatter, the fields and the `revisions/` path as unit tests.
 
+## Run Case-Version Capture Plan (Issue #92)
+
+Issue: [#92](https://github.com/TucanoTechnology/TucanoTestAPI/issues/92) — the run-side capture the test-case
+versioning plan leaves to a sibling of [#52](https://github.com/TucanoTechnology/TucanoTestAPI/issues/52). It
+makes a run record the revision of each case it snapshotted, so editing a case never changes what a past run
+reports.
+
+- **`TestRun` gains one optional field.** `caseVersions` is a JSON object keyed by the case's `testCaseId` and
+  valued with the revision the run pinned for it. The Rust field is
+  `case_versions: Option<HashMap<String, u64>>` with `skip_serializing_if`, so a run that pinned nothing — every
+  run written before this issue — keeps its exact stored shape and still deserializes.
+- **The capture is first-write-wins.** `add_case_to_run` and `record_run_result` both call one helper
+  (`composition::capture_case_version`) that inserts with `or_insert`, so re-recording a result, or a later
+  qualifying edit to the live case, never revises a version the run already pinned: the run is a snapshot, and
+  its `caseVersions` has to stay one too.
+- **A case with no version of its own is pinned as `1`.** A case written before
+  [#90](https://github.com/TucanoTechnology/TucanoTestAPI/issues/90) carries no `version`; the capture stores
+  `1` for it, matching how the read routes treat such a case.
+- **A result may name a case the store does not hold.** The results route has always accepted a `testCaseId` no
+  case document matches, and it still does: the case is looked up best-effort, pinned at its own version when it
+  can be read and at `1` when it cannot.
+- **The field is client-editable through the run's own write routes.** The route capture is what *the API*
+  writes on the two capture routes; a whole-document `PUT` that supplies `caseVersions` is accepted and stored,
+  exactly as the run's other client-editable collections (`results`, `configurations`) are. The alternative —
+  refusing the key — would break the read-modify-write `PUT` a client uses to round-trip a run it just read.
+- **The import paths do not capture versions.** #92 scopes the capture to `add_case_to_run` and
+  `record_run_result`, so a JUnit or JSON import still writes results without pinning versions.
+- Deviation recorded with tests in `tests/runs.rs` (`::a_run_pins_the_case_version_it_snapshotted` and
+  `::recording_a_result_pins_the_version_of_the_case_the_store_holds`), with the `TestRun` round-trip and
+  absent-field unit tests in `src/models.rs` and `tests/service.rs` holding the `caseVersions` addition to the
+  published contract.
+
 ## Breaking change accounting
 
 - **Tags added, and their query parameter withdrawn where it could not match** (Issue #49, plan above).
@@ -873,6 +905,12 @@ the run-side capture to [#92](https://github.com/TucanoTechnology/TucanoTestAPI/
   `tests/service.rs::openapi_schemas_are_strict_only_where_the_api_rejects_unknown_fields` holding
   `CaseHistoryEntry` to the permissive set, and `::openapi_document_matches_the_registered_routes` proving both
   paths are published and registered.
+- **Test-case versions captured in runs** (Issue #92, plan above). `TestRun` gains an optional `caseVersions`
+  map, written when a case is added to a run or a result is recorded. Additive for stored data and reads: a run
+  written before the issue keeps its exact shape and is never rewritten by a read, and a run the API has since
+  versioned simply carries one more key. The loosening mirrors #90 — a run payload supplying `caseVersions` used
+  to be refused as an unknown field and is now accepted, so no request that used to succeed is refused.
+  Deviation recorded with tests in `tests/runs.rs` and `src/models.rs` as listed in the plan.
 
 ## Required case matrix
 

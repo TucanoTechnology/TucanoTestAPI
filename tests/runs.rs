@@ -1624,3 +1624,126 @@ async fn a_defect_link_can_be_removed_and_is_then_gone() {
         }
     }
 }
+
+#[tokio::test]
+async fn a_run_pins_the_case_version_it_snapshotted() {
+    let (_directory, app) = test_app();
+    let project = create_project(&app, "checkout").await;
+    create_case_in(&app, &format!("/projects/{project}/test_cases"), "TC-001").await;
+    assert_eq!(
+        create_named(&app, "/test_runs", "nightly").await,
+        "nightly.json"
+    );
+
+    // Adding the case snapshots it at the version it carries; the API stamps 1
+    // when it creates a case.
+    let (status, body) = send_json(
+        &app,
+        json_request(
+            "POST",
+            "/test_runs/nightly.json/test_cases",
+            &json!({"testCaseId": "TC-001"}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "adding the case: {body}");
+
+    let (_, run) = send_json(&app, get("/test_runs/nightly.json")).await;
+    assert_eq!(run["caseVersions"]["TC-001"], json!(1));
+    assert_eq!(run["testCases"][0]["version"], json!(1));
+
+    // A qualifying edit advances the live case to version 2...
+    let (status, body) = send_json(
+        &app,
+        json_request(
+            "PUT",
+            "/test_cases/TC-001",
+            &json!({"title": "Login twice"}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (_, live) = send_json(&app, get("/test_cases/TC-001")).await;
+    assert_eq!(live["version"], json!(2));
+
+    // ...but the run is a snapshot: the version it pinned and the copy of the
+    // case it embedded both stay at 1, so the run still describes the case as
+    // it was when the run captured it.
+    let (_, run) = send_json(&app, get("/test_runs/nightly.json")).await;
+    assert_eq!(run["caseVersions"]["TC-001"], json!(1));
+    assert_eq!(run["testCases"][0]["version"], json!(1));
+    assert_eq!(run["testCases"][0]["title"], "Login");
+
+    // The first capture wins, so recording a result for the now-version-2 case
+    // leaves the pinned version alone too.
+    let (status, body) = send_json(
+        &app,
+        json_request(
+            "POST",
+            "/test_runs/nightly.json/results",
+            &json!({"testCaseId": "TC-001", "status": "Passed"}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "recording the result: {body}");
+
+    let (_, run) = send_json(&app, get("/test_runs/nightly.json")).await;
+    assert_eq!(run["caseVersions"]["TC-001"], json!(1));
+}
+
+#[tokio::test]
+async fn recording_a_result_pins_the_version_of_the_case_the_store_holds() {
+    let (_directory, app) = test_app();
+    let project = create_project(&app, "checkout").await;
+    create_case_in(&app, &format!("/projects/{project}/test_cases"), "TC-001").await;
+    assert_eq!(
+        create_named(&app, "/test_runs", "nightly").await,
+        "nightly.json"
+    );
+
+    // Recording a result for a case the store does not hold stays legal — the
+    // API has always accepted it — and the run pins that case at version 1
+    // rather than leaving it unversioned.
+    let (status, body) = send_json(
+        &app,
+        json_request(
+            "POST",
+            "/test_runs/nightly.json/results",
+            &json!({"testCaseId": "TC-404", "status": "Failed"}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "recording the result: {body}");
+
+    let (_, run) = send_json(&app, get("/test_runs/nightly.json")).await;
+    assert_eq!(run["caseVersions"]["TC-404"], json!(1));
+
+    // A case the store does hold is pinned at the version that case carries.
+    let (status, _) = send_json(
+        &app,
+        json_request(
+            "PUT",
+            "/test_cases/TC-001",
+            &json!({"title": "Login twice"}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (_, live) = send_json(&app, get("/test_cases/TC-001")).await;
+    assert_eq!(live["version"], json!(2));
+
+    let (status, body) = send_json(
+        &app,
+        json_request(
+            "POST",
+            "/test_runs/nightly.json/results",
+            &json!({"testCaseId": "TC-001", "status": "Passed"}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "recording the result: {body}");
+
+    let (_, run) = send_json(&app, get("/test_runs/nightly.json")).await;
+    assert_eq!(run["caseVersions"]["TC-001"], json!(2));
+    assert_eq!(run["caseVersions"]["TC-404"], json!(1));
+}
