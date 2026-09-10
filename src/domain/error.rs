@@ -94,7 +94,8 @@ pub fn read_error(error: io::Error) -> DomainError {
     }
 }
 
-/// Translation for delete and for the update path's `exists` probe.
+/// Translation for delete, where a missing document is reported and an
+/// unusable identifier is a client error.
 pub fn delete_error(error: io::Error) -> DomainError {
     match error.kind() {
         io::ErrorKind::NotFound => DomainError::NotFound("Resource not found".to_owned()),

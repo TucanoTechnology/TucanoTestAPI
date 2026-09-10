@@ -386,3 +386,50 @@ async fn a_suite_can_be_placed_into_another_project() {
         "two projects now hold a suite named smoke"
     );
 }
+
+#[tokio::test]
+async fn a_partial_update_keeps_the_fields_the_body_leaves_out() {
+    let (_directory, app) = test_app();
+    let project = create_project(&app, "checkout").await;
+
+    let (status, _) = send_json(
+        &app,
+        json_request(
+            "POST",
+            &format!("/projects/{project}/test_suites"),
+            &json!({
+                "suiteId": "S-001",
+                "name": "regression",
+                "description": "nightly",
+                "tags": ["smoke"],
+            }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    let (status, body) = send_json(
+        &app,
+        json_request("PUT", "/test_suites/regression.json", &json!({})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "updating: {body}");
+
+    let (status, stored) = send_json(&app, get("/test_suites/regression.json")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(stored["suiteId"], "S-001");
+    assert_eq!(stored["name"], "regression");
+    assert_eq!(stored["description"], "nightly");
+    assert_eq!(stored["tags"], json!(["smoke"]));
+    assert_eq!(
+        stored["testCases"],
+        json!([]),
+        "membership stays in the folders"
+    );
+
+    // The project still owns the suite, and reading it assembles the same fields.
+    let (status, assembled) = send_json(&app, get(&format!("/projects/{project}"))).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(assembled["testSuites"][0]["suiteId"], "S-001");
+    assert_eq!(assembled["testSuites"][0]["description"], "nightly");
+}
