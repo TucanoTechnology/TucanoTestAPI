@@ -65,6 +65,33 @@ async fn milestones_support_the_full_crud_lifecycle() {
 }
 
 #[tokio::test]
+async fn a_milestone_created_from_a_name_alone_reads_back_and_reports_progress() {
+    let (_directory, app) = test_app();
+
+    // The body names the milestone and nothing else: no `milestoneId`.
+    let (status, created) = send_json(
+        &app,
+        json_request("POST", "/milestones", &json!({"name": "M1"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "creating: {created}");
+    assert_eq!(created["id"], "M1.json");
+
+    let (status, stored) = send_json(&app, get("/milestones/M1.json")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(stored["milestoneId"], "M1.json");
+    assert_eq!(stored["name"], "M1");
+
+    // Progress deserialises the milestone, so it used to answer 500 here.
+    let (status, progress) = send_json(&app, get("/milestones/M1.json/progress")).await;
+    assert_eq!(status, StatusCode::OK, "progress: {progress}");
+    assert_eq!(progress["milestoneId"], "M1.json");
+    assert_eq!(progress["totalCases"], 0);
+    assert_eq!(progress["passed"], 0);
+    assert_eq!(progress["failed"], 0);
+}
+
+#[tokio::test]
 async fn creating_a_milestone_requires_a_non_empty_name() {
     let (_directory, app) = test_app();
 
