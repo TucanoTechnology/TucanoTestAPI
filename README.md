@@ -37,6 +37,14 @@ recursively assembled) plus an optional response-only `testCases` field of direc
 `GET /test_suites/{id}` returns its member cases. Because membership lives in the folders, the
 stored markers can never contradict the tree.
 
+Every document the API writes also carries the identity field its model requires. When a create
+body omits the `projectId`, `suiteId`, `testRunId`, `milestoneId`, or `configId` that its id is
+derived from, the stored document records it, and a test run stored without a `timestamp` records
+when it was written. A value the body did supply is never overwritten, so a name-only create such
+as `POST /test_runs {"name": "nightly"}` stores a run that reads back as its typed model instead of
+one that fails to load. The rules are recorded in
+[docs/contracts/api-compatibility.md](docs/contracts/api-compatibility.md).
+
 The conceptual hierarchy, as distinct from the exact on-disk encoding:
 
 - **Project** — the container for the work being tested. Contains multiple test cases and multiple

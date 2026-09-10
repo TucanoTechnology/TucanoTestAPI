@@ -292,17 +292,12 @@ async fn an_unusable_path_identifier_is_answered_with_invalid_id() {
     }
 
     // The run routes also take the identifier of the resource they attach from
-    // the body, and refuse an unusable one there the same way. The run is
-    // created with the identity fields its model requires: a run stored from a
-    // name alone cannot be read back (see the follow-up ticket on identity
-    // fields the create body omits).
+    // the body, and refuse an unusable one there the same way. The run is named
+    // only, so reaching the identifier at all depends on the identity fields the
+    // API records for a run created from a name alone.
     let (status, created) = send_json(
         &app,
-        json_request(
-            "POST",
-            "/test_runs",
-            &json!({"testRunId": "R-001", "timestamp": "1", "name": "nightly"}),
-        ),
+        json_request("POST", "/test_runs", &json!({"name": "nightly"})),
     )
     .await;
     assert_eq!(status, StatusCode::CREATED, "creating the run: {created}");
