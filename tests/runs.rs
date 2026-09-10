@@ -564,3 +564,99 @@ async fn configuration_links_survive_a_repository_restart() {
         json!({"configId": "chrome-linux.json", "name": "chrome-linux"})
     );
 }
+
+#[tokio::test]
+async fn listing_runs_filters_by_the_configuration_they_link() {
+    let (_directory, app) = test_app();
+
+    for (id, name) in [("R-1", "nightly"), ("R-2", "weekly"), ("R-3", "release")] {
+        let (status, body) = send_json(
+            &app,
+            json_request(
+                "POST",
+                "/test_runs",
+                &json!({
+                    "testRunId": id,
+                    "name": name,
+                    "timestamp": "2026-09-02T00:00:00Z",
+                    "tags": ["ci"],
+                }),
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED, "creating {name}: {body}");
+    }
+    for name in ["chrome-linux", "firefox-windows"] {
+        assert_eq!(
+            create_named(&app, "/configurations", name).await,
+            format!("{name}.json")
+        );
+    }
+    for (run, configuration) in [("nightly", "chrome-linux"), ("weekly", "firefox-windows")] {
+        let (status, body) = send_json(
+            &app,
+            json_request(
+                "POST",
+                &format!("/test_runs/{run}.json/configurations"),
+                &json!({"configId": format!("{configuration}.json")}),
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "linking {run}: {body}");
+    }
+
+    // Only the runs that link the configuration are listed, so the run that
+    // links nothing is excluded.
+    let (status, listing) =
+        send_json(&app, get("/test_runs?configuration=chrome-linux.json")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(listing, json!(["nightly.json"]));
+
+    let (status, listing) =
+        send_json(&app, get("/test_runs?configuration=firefox-windows.json")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(listing, json!(["weekly.json"]));
+
+    // A configuration no run links yields an empty listing, not a 404, matching
+    // how the substring and tag filters already behave.
+    let (status, listing) =
+        send_json(&app, get("/test_runs?configuration=firefox-linux.json")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(listing, json!([]));
+
+    // The configuration filter composes with the substring and tag filters, and
+    // the substring filter can still exclude a linked run.
+    let (status, listing) = send_json(
+        &app,
+        get("/test_runs?filter=NIGHT&tags=ci&configuration=chrome-linux.json"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(listing, json!(["nightly.json"]));
+
+    let (status, listing) = send_json(
+        &app,
+        get("/test_runs?filter=WEEK&configuration=chrome-linux.json"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(listing, json!([]));
+
+    let (status, listing) = send_json(
+        &app,
+        get("/test_runs?tags=ci&configuration=chrome-linux.json"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(listing, json!(["nightly.json"]));
+
+    // Only runs carry configuration references, so the parameter is inert for
+    // the other listings rather than emptying them.
+    let (status, listing) =
+        send_json(&app, get("/configurations?configuration=chrome-linux.json")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        listing,
+        json!(["chrome-linux.json", "firefox-windows.json"])
+    );
+}
