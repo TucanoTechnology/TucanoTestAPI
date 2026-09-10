@@ -165,3 +165,66 @@ async fn stored_documents_survive_a_repository_restart() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(stored["name"], "checkout");
 }
+
+#[tokio::test]
+async fn the_tree_is_stored_as_folders_that_mirror_the_hierarchy() {
+    let directory = TempDir::new().expect("temp dir");
+    let app = app_at(directory.path());
+
+    let project = common::create_project(&app, "checkout").await;
+    let suite = common::create_suite(&app, &project, "smoke").await;
+    let direct =
+        common::create_case_in(&app, &format!("/projects/{project}/test_cases"), "TC-001").await;
+    let nested =
+        common::create_case_in(&app, &format!("/test_suites/{suite}/test_cases"), "TC-002").await;
+
+    // The disk mirrors the conceptual organisation: a project folder holds its
+    // suites and its own cases, and a suite folder holds its cases.
+    let root = directory.path();
+    assert!(root.join("projects/checkout/project.json").is_file());
+    assert!(root.join("projects/checkout/smoke/suite.json").is_file());
+    assert!(
+        root.join(format!("projects/checkout/{direct}/test-case.json"))
+            .is_file()
+    );
+    assert!(
+        root.join(format!("projects/checkout/smoke/{nested}/test-case.json"))
+            .is_file()
+    );
+
+    // Membership lives in the folders, so the markers keep their child arrays
+    // empty — and a name-only creation still records the identity its folder
+    // name stands for, so a stored document reads back as its typed model.
+    let suite_marker = read_json(&root.join("projects/checkout/smoke/suite.json"));
+    assert_eq!(suite_marker["suiteId"], suite);
+    assert_eq!(suite_marker["testCases"], json!([]));
+
+    let project_marker = read_json(&root.join("projects/checkout/project.json"));
+    assert_eq!(project_marker["projectId"], project);
+    assert_eq!(project_marker["testSuites"], json!([]));
+
+    // Reads assemble what the folders hold rather than serving the markers.
+    let (_, assembled) = send_json(&app, get(&format!("/projects/{project}"))).await;
+    assert_eq!(assembled["testSuites"][0]["suiteId"], suite);
+    assert_eq!(
+        assembled["testSuites"][0]["testCases"][0]["testCaseId"],
+        nested
+    );
+    assert_eq!(assembled["testCases"][0]["testCaseId"], direct);
+
+    // Deleting a project cascades: no folder below it survives.
+    let (status, _) = send_json(&app, common::delete(&format!("/projects/{project}"))).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        !root.join("projects/checkout").exists(),
+        "a cascade delete leaves no folder behind"
+    );
+    let (status, _) = send_json(&app, get(&format!("/test_suites/{suite}"))).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+/// Reads a stored JSON document from the volume for assertions on the layout.
+fn read_json(path: &std::path::Path) -> serde_json::Value {
+    let bytes = std::fs::read(path).expect("stored document");
+    serde_json::from_slice(&bytes).expect("stored document is JSON")
+}

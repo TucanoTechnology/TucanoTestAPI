@@ -16,7 +16,7 @@ pub mod service;
 pub mod validation;
 
 pub use error::DomainError;
-pub use service::TestService;
+pub use service::{Composed, TestService};
 
 use serde::Deserialize;
 use serde_json::Value;
@@ -65,4 +65,23 @@ pub fn current_timestamp_string() -> String {
         .unwrap_or_default()
         .as_secs();
     format!("{now}")
+}
+
+/// Content type recorded for, and served with, a stored attachment.
+pub fn mime_type(filename: &str) -> &'static str {
+    match filename
+        .rsplit('.')
+        .next()
+        .unwrap_or_default()
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "pdf" => "application/pdf",
+        "txt" => "text/plain",
+        "json" => "application/json",
+        _ => "application/octet-stream",
+    }
 }

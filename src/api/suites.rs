@@ -1,21 +1,25 @@
 //! `/test_suites` — a group of test cases inside a project.
+//!
+//! A suite has no top-level collection: it is created inside a project, either
+//! through `/projects/{id}/test_suites` or by placing an existing suite there.
 
 use axum::{
     Json, Router,
     extract::{Path, State},
+    http::StatusCode,
     routing::{delete, get, post},
 };
 use serde_json::{Value, json};
 
 use crate::{
     domain::{DomainError, duplicate},
-    storage::{Repository, Resource},
+    storage::{Parent, Repository, Resource},
 };
 
 use super::{
     AppState,
     crud::prelude::*,
-    crud::{crud_handlers, duplicate_handler},
+    crud::{composed_response, crud_handlers, duplicate_handler},
 };
 
 crud_handlers!(
@@ -29,13 +33,48 @@ crud_handlers!(
 
 duplicate_handler!(duplicate_suite, duplicate::SUITE);
 
+async fn list_project_suites<R: Repository>(
+    State(service): State<AppState<R>>,
+    Path(id): Path<String>,
+) -> Result<Json<Value>, DomainError> {
+    let items = service.list_children(&Parent::Project(id), Resource::Suites)?;
+    Ok(Json(json!(items)))
+}
+
+async fn create_project_suite<R: Repository>(
+    State(service): State<AppState<R>>,
+    Path(id): Path<String>,
+    Json(body): Json<Value>,
+) -> Result<(StatusCode, Json<Value>), DomainError> {
+    let composed = service.compose(Resource::Suites, &Parent::Project(id), &body)?;
+    Ok(composed_response(&composed, "Test suite"))
+}
+
+async fn delete_project_suite<R: Repository>(
+    State(service): State<AppState<R>>,
+    Path((id, suite_id)): Path<(String, String)>,
+) -> Result<Json<Value>, DomainError> {
+    service.delete_in(Resource::Suites, &Parent::Project(id), &suite_id)?;
+    Ok(Json(json!({ "message": "Test suite deleted" })))
+}
+
+async fn list_suite_cases<R: Repository>(
+    State(service): State<AppState<R>>,
+    Path(id): Path<String>,
+) -> Result<Json<Value>, DomainError> {
+    let parent = service.suite_parent(&id)?;
+    let items = service.list_children(&parent, Resource::Cases)?;
+    Ok(Json(json!(items)))
+}
+
 async fn add_case_to_suite<R: Repository>(
     State(service): State<AppState<R>>,
     Path(id): Path<String>,
     Json(body): Json<Value>,
-) -> Result<Json<Value>, DomainError> {
-    service.add_case_to_suite(&id, &body)?;
-    Ok(Json(json!({ "message": "Test case added to suite" })))
+) -> Result<(StatusCode, Json<Value>), DomainError> {
+    let parent = service.suite_parent(&id)?;
+    let composed = service.compose(Resource::Cases, &parent, &body)?;
+    Ok(composed_response(&composed, "Test case"))
 }
 
 async fn remove_case_from_suite<R: Repository>(
@@ -48,6 +87,8 @@ async fn remove_case_from_suite<R: Repository>(
 
 pub(crate) fn routes<R: Repository + 'static>() -> Router<AppState<R>> {
     Router::new()
+        // Retired: a suite is created inside a project. The handler answers with
+        // an explanation rather than a document.
         .route(
             "/test_suites",
             get(list_test_suites::<R>).post(create_test_suite::<R>),
@@ -59,9 +100,20 @@ pub(crate) fn routes<R: Repository + 'static>() -> Router<AppState<R>> {
                 .delete(delete_test_suite::<R>),
         )
         .route("/test_suites/{id}/duplicate", post(duplicate_suite::<R>))
-        .route("/test_suites/{id}/test_cases", post(add_case_to_suite::<R>))
+        .route(
+            "/test_suites/{id}/test_cases",
+            get(list_suite_cases::<R>).post(add_case_to_suite::<R>),
+        )
         .route(
             "/test_suites/{id}/test_cases/{case_id}",
             delete(remove_case_from_suite::<R>),
+        )
+        .route(
+            "/projects/{id}/test_suites",
+            get(list_project_suites::<R>).post(create_project_suite::<R>),
+        )
+        .route(
+            "/projects/{id}/test_suites/{suite_id}",
+            delete(delete_project_suite::<R>),
         )
 }
