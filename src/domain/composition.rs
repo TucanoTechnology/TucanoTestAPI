@@ -5,7 +5,7 @@
 //! mutations of already-loaded documents so they can be reasoned about — and
 //! tested — without a server or a filesystem.
 
-use crate::models::{TestCase, TestCaseResult, TestConfiguration, TestRun, TestSuite};
+use crate::models::{DefectLink, TestCase, TestCaseResult, TestConfiguration, TestRun, TestSuite};
 
 use super::error::DomainError;
 
@@ -138,6 +138,69 @@ pub fn upsert_result(run: &mut TestRun, result: TestCaseResult) {
         Some(existing) => *existing = result,
         None => results.push(result),
     }
+}
+
+/// Adds a defect link to the result a run records for `case_id`, refusing a
+/// defect that is already linked.
+///
+/// The duplicate check compares the defect the link names rather than the link's
+/// own identifier: linking the same defect twice would record the same failure
+/// twice, and the API derives the identifiers anyway.
+pub fn attach_defect_to_result(
+    run: &mut TestRun,
+    case_id: &str,
+    link: DefectLink,
+) -> Result<(), DomainError> {
+    let result = result_mut(run, case_id)?;
+    let links = result.defect_links.get_or_insert_with(Vec::new);
+    if links
+        .iter()
+        .any(|existing| existing.defect_id == link.defect_id)
+    {
+        return Err(DomainError::Conflict(
+            "Defect is already linked to test result".to_owned(),
+        ));
+    }
+    links.push(link);
+    Ok(())
+}
+
+/// Removes a defect link from the result a run records for `case_id`; a link
+/// the result does not carry is a 404.
+pub fn detach_defect_from_result(
+    run: &mut TestRun,
+    case_id: &str,
+    link_id: &str,
+) -> Result<(), DomainError> {
+    let result = result_mut(run, case_id)?;
+    let links = result.defect_links.get_or_insert_with(Vec::new);
+    let before = links.len();
+    links.retain(|existing| existing.link_id != link_id);
+    if links.len() == before {
+        return Err(DomainError::NotFound(
+            "Defect link not found in test result".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+/// Finds the result a run records for a case, as a 404 when there is none.
+///
+/// A run with no results and a run whose results name other cases are the same
+/// answer to the client — there is nothing here to link a defect to — so both
+/// are reported the same way.
+fn result_mut<'a>(
+    run: &'a mut TestRun,
+    case_id: &str,
+) -> Result<&'a mut TestCaseResult, DomainError> {
+    run.results
+        .as_mut()
+        .and_then(|results| {
+            results
+                .iter_mut()
+                .find(|result| result.test_case_id == case_id)
+        })
+        .ok_or_else(|| DomainError::NotFound("Test result not found in test run".to_owned()))
 }
 
 #[cfg(test)]
@@ -330,5 +393,94 @@ mod tests {
                 .map(|configurations| configurations.len()),
             Some(0)
         );
+    }
+
+    fn link(link_id: &str, defect_id: &str) -> DefectLink {
+        DefectLink {
+            link_id: link_id.to_owned(),
+            defect_id: defect_id.to_owned(),
+            defect_url: format!("https://tracker.example/{defect_id}"),
+            tracker_type: "custom".to_owned(),
+            title: None,
+            status: None,
+            linked_at: "1".to_owned(),
+        }
+    }
+
+    #[test]
+    fn a_defect_joins_a_result_exactly_once() {
+        let mut target = run();
+        upsert_result(&mut target, result("TC-1", "Failed"));
+        attach_defect_to_result(&mut target, "TC-1", link("L-1", "BUG-42")).expect("link");
+
+        let links = target.results.as_ref().expect("results")[0]
+            .defect_links
+            .as_ref()
+            .expect("links");
+        assert_eq!(links.len(), 1);
+        assert_eq!(links[0].defect_id, "BUG-42");
+
+        let error = attach_defect_to_result(&mut target, "TC-1", link("L-2", "BUG-42"))
+            .expect_err("the same defect must conflict");
+        assert!(matches!(error, DomainError::Conflict(_)));
+        assert_eq!(
+            target.results.as_ref().expect("results")[0]
+                .defect_links
+                .as_ref()
+                .map(|links| links.len()),
+            Some(1)
+        );
+    }
+
+    #[test]
+    fn linking_a_defect_needs_the_result_it_belongs_to() {
+        let mut empty = run();
+        let error = attach_defect_to_result(&mut empty, "TC-1", link("L-1", "BUG-42"))
+            .expect_err("a run with no results has nothing to link to");
+        assert!(matches!(error, DomainError::NotFound(_)));
+
+        let mut other = run();
+        upsert_result(&mut other, result("TC-2", "Passed"));
+        let error = attach_defect_to_result(&mut other, "TC-1", link("L-1", "BUG-42"))
+            .expect_err("the case must be the one the run recorded");
+        assert!(matches!(error, DomainError::NotFound(_)));
+    }
+
+    #[test]
+    fn removing_an_absent_defect_link_is_not_found() {
+        let mut target = run();
+        let error = detach_defect_from_result(&mut target, "TC-1", "L-1")
+            .expect_err("a run with no results has nothing to unlink");
+        assert!(matches!(error, DomainError::NotFound(_)));
+
+        upsert_result(&mut target, result("TC-1", "Failed"));
+        attach_defect_to_result(&mut target, "TC-1", link("L-1", "BUG-42")).expect("link");
+        let error = detach_defect_from_result(&mut target, "TC-1", "L-2")
+            .expect_err("the link must be the one the result carries");
+        assert!(matches!(error, DomainError::NotFound(_)));
+
+        detach_defect_from_result(&mut target, "TC-1", "L-1").expect("unlink");
+        let links = target.results.as_ref().expect("results")[0]
+            .defect_links
+            .as_ref()
+            .expect("links");
+        assert!(links.is_empty(), "{links:?}");
+    }
+
+    #[test]
+    fn unlinking_one_defect_leaves_the_others_in_place() {
+        let mut target = run();
+        upsert_result(&mut target, result("TC-1", "Failed"));
+        attach_defect_to_result(&mut target, "TC-1", link("L-1", "BUG-42")).expect("first");
+        attach_defect_to_result(&mut target, "TC-1", link("L-2", "BUG-43")).expect("second");
+
+        detach_defect_from_result(&mut target, "TC-1", "L-1").expect("unlink");
+
+        let links = target.results.as_ref().expect("results")[0]
+            .defect_links
+            .as_ref()
+            .expect("links");
+        assert_eq!(links.len(), 1);
+        assert_eq!(links[0].defect_id, "BUG-43");
     }
 }

@@ -66,6 +66,28 @@ async fn list_result_defects<R: Repository>(
     Ok(Json(json!({ "defects": defects })))
 }
 
+async fn link_result_defect<R: Repository>(
+    State(service): State<AppState<R>>,
+    Path((id, case_id)): Path<(String, String)>,
+    Json(body): Json<Value>,
+) -> Result<(StatusCode, Json<Value>), DomainError> {
+    let link = service.link_defect_to_result(&id, &case_id, &body)?;
+    Ok((
+        StatusCode::CREATED,
+        Json(json!({ "message": "Defect linked to test result", "id": link.link_id })),
+    ))
+}
+
+async fn unlink_result_defect<R: Repository>(
+    State(service): State<AppState<R>>,
+    Path((id, case_id, link_id)): Path<(String, String, String)>,
+) -> Result<Json<Value>, DomainError> {
+    service.unlink_defect_from_result(&id, &case_id, &link_id)?;
+    Ok(Json(
+        json!({ "message": "Defect unlinked from test result" }),
+    ))
+}
+
 async fn import_junit_results<R: Repository>(
     State(service): State<AppState<R>>,
     Path(id): Path<String>,
@@ -123,7 +145,11 @@ pub(crate) fn routes<R: Repository + 'static>() -> Router<AppState<R>> {
         .route("/test_runs/{id}/results", post(record_run_result::<R>))
         .route(
             "/test_runs/{id}/results/{case_id}/defects",
-            get(list_result_defects::<R>),
+            get(list_result_defects::<R>).post(link_result_defect::<R>),
+        )
+        .route(
+            "/test_runs/{id}/results/{case_id}/defects/{link_id}",
+            delete(unlink_result_defect::<R>),
         )
         .route(
             "/test_runs/{id}/import/junit",

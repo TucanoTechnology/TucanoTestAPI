@@ -8,6 +8,7 @@
 //! without spinning up a server.
 
 pub mod composition;
+pub mod defect;
 pub mod duplicate;
 pub mod error;
 pub mod import;

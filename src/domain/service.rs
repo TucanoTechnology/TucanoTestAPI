@@ -29,7 +29,7 @@ use super::error::{self, DomainError};
 use super::import::{self, ImportStatus, ParsedCase};
 use super::{
     Created, ListQuery, MAX_ATTACHMENT_BYTES, StoredAttachment, composition,
-    current_timestamp_string, mime_type, progress, required_string, resources, validation,
+    current_timestamp_string, defect, mime_type, progress, required_string, resources, validation,
 };
 
 /// Result statuses a test run accepts.
@@ -448,6 +448,45 @@ impl<R: Repository> TestService<R> {
     ) -> Result<(), DomainError> {
         let mut run = self.load::<TestRun>(Resource::Runs, run_id, "Test run not found")?;
         composition::detach_configuration_from_run(&mut run, config_id)?;
+        self.save(Resource::Runs, run_id, &run)
+    }
+
+    /// Links a defect to the result a run records for `case_id`.
+    ///
+    /// The client names where the defect lives; the API derives the link's own
+    /// identifier and the moment it was made, and returns the built link so the
+    /// caller learns the identifier it must use to unlink it. The URL is checked
+    /// against the tracker it claims to belong to, and a defect the result
+    /// already links is a conflict.
+    pub fn link_defect_to_result(
+        &self,
+        run_id: &str,
+        case_id: &str,
+        body: &Value,
+    ) -> Result<DefectLink, DomainError> {
+        let request = defect::parse_request(body)?;
+        let link = defect::new_link(
+            request,
+            format!("link-{}", unique_suffix()),
+            current_timestamp_string(),
+        );
+
+        let mut run = self.load::<TestRun>(Resource::Runs, run_id, "Test run not found")?;
+        composition::attach_defect_to_result(&mut run, case_id, link.clone())?;
+        self.save(Resource::Runs, run_id, &run)?;
+        Ok(link)
+    }
+
+    /// Removes the defect link `link_id` from the result a run records for
+    /// `case_id`; a link the result does not carry is a 404.
+    pub fn unlink_defect_from_result(
+        &self,
+        run_id: &str,
+        case_id: &str,
+        link_id: &str,
+    ) -> Result<(), DomainError> {
+        let mut run = self.load::<TestRun>(Resource::Runs, run_id, "Test run not found")?;
+        composition::detach_defect_from_result(&mut run, case_id, link_id)?;
         self.save(Resource::Runs, run_id, &run)
     }
 
