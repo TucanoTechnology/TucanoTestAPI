@@ -1,9 +1,13 @@
 mod common;
 
 use axum::http::StatusCode;
-use common::{app_at, get, json_request, raw_json_request, send, send_json, test_app};
+use common::{
+    app_at, assert_error_envelope, get, json_request, raw_json_request, send, send_json, test_app,
+};
 use serde_json::json;
+use std::collections::BTreeSet;
 use tempfile::TempDir;
+use tucano_test::api;
 
 #[tokio::test]
 async fn health_reports_filesystem_storage() {
@@ -16,33 +20,89 @@ async fn health_reports_filesystem_storage() {
 }
 
 #[tokio::test]
-async fn openapi_document_describes_every_route() {
+async fn openapi_document_matches_the_registered_routes() {
     let (_directory, app) = test_app();
     let (status, body) = send_json(&app, get("/openapi.json")).await;
 
     assert_eq!(status, StatusCode::OK);
-    let paths = body["paths"].as_object().expect("paths object");
-    for route in [
-        "/projects",
-        "/projects/{id}",
-        "/test_suites",
-        "/test_suites/{id}",
-        "/test_runs",
-        "/test_runs/{id}",
-        "/test_cases",
-        "/test_cases/{id}",
-        "/test_cases/{id}/attachments",
-        "/test_cases/{id}/attachments/{filename}",
-        "/milestones",
-        "/milestones/{id}",
-        "/milestones/{id}/progress",
-        "/health",
-    ] {
+    let documented: BTreeSet<String> = body["paths"]
+        .as_object()
+        .expect("paths object")
+        .keys()
+        .cloned()
+        .collect();
+
+    for route in api::UNDOCUMENTED_ROUTES {
         assert!(
-            paths.contains_key(route),
-            "missing documented route: {route}"
+            api::ROUTES.contains(route),
+            "exempt route is not registered: {route}"
         );
     }
+
+    let expected: BTreeSet<String> = api::ROUTES
+        .iter()
+        .copied()
+        .filter(|route| !api::UNDOCUMENTED_ROUTES.contains(route))
+        .map(str::to_owned)
+        .collect();
+
+    assert_eq!(
+        documented, expected,
+        "openapi.json no longer matches the registered routes"
+    );
+}
+
+#[tokio::test]
+async fn router_serves_every_declared_route() {
+    let (_directory, app) = test_app();
+
+    // No route accepts PATCH, so a registered path answers 405 and an
+    // unregistered one answers 404 — which is exactly the distinction to test.
+    for route in api::ROUTES {
+        let (status, _) = send(&app, raw_json_request("PATCH", route, "")).await;
+        assert_eq!(
+            status,
+            StatusCode::METHOD_NOT_ALLOWED,
+            "{route} is declared in api::ROUTES but the router does not serve it"
+        );
+    }
+
+    let (status, _) = send(&app, raw_json_request("PATCH", "/not-a-route", "")).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn create_and_update_reject_unknown_fields() {
+    let (_directory, app) = test_app();
+
+    let (status, body) = send_json(
+        &app,
+        json_request(
+            "POST",
+            "/projects",
+            &json!({"name": "checkout", "unknownField": true}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_error_envelope(&body, "invalid_request");
+
+    let (status, listed) = send_json(&app, get("/projects")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(listed, json!([]), "a rejected body must not be stored");
+
+    let id = common::create_named(&app, "/projects", "checkout").await;
+    let (status, body) = send_json(
+        &app,
+        json_request(
+            "PUT",
+            &format!("/projects/{id}"),
+            &json!({"name": "renamed", "unknownField": true}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_error_envelope(&body, "invalid_request");
 }
 
 #[tokio::test]
