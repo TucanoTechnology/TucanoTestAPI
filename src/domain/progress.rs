@@ -112,6 +112,7 @@ mod tests {
                         status: (*status).to_owned(),
                         timestamp: "1".to_owned(),
                         notes: None,
+                        duration_ms: None,
                         attachments: None,
                         defect_links: None,
                     })

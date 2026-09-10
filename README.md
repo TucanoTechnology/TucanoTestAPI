@@ -265,7 +265,7 @@ Tests are split into two layers and both run in CI on every push and pull reques
 | `tests/cases.rs` | Test case CRUD, required fields, parent-scoped creation, copy/move composition, conflicts, missing resources, and versioning — the `version`/`lastModified` stamp, the `revisions/` snapshots a qualifying update writes, and the history endpoints that list and read them back |
 | `tests/milestones.rs` | Milestone CRUD, validation, conflicts, duplication, and progress derived from the referenced runs |
 | `tests/configurations.rs` | Configuration CRUD, validation, conflicts, missing resources, restart persistence, and use by a run |
-| `tests/reports.rs` | The coverage report: per-suite and total case counts, the project scope filter, the global scope, and the error answers for an unknown and an unusable project |
+| `tests/reports.rs` | The reports: the coverage report (per-suite and total case counts, the project scope filter, the global scope) and the run summary (the status buckets, the pass rate, the summed durations, the intersecting project/milestone/configuration and date filters), with the error answers for an unknown and an unusable identifier |
 | `tests/attachments.rs` | Upload, download, delete, content types, removal with the parent test case |
 | `tests/tags.rs` | The `tags` array on projects, suites, cases and runs, the shared `?tags=` OR filter, and the OpenAPI parameter it is published through |
 | `tests/validation.rs` | Scalar type validation: wrong-typed fields rejected on create and update with the field named, valid and omitted fields accepted, and documents persisted before the change still readable |
