@@ -663,21 +663,41 @@ impl<R: Repository> TestService<R> {
     }
 }
 
-/// Normalises a stored marker: the child collections stay empty, because
-/// membership lives in the folders, and the identity field the folder name
-/// stands for is filled in when the body did not carry one, so a document the
-/// API wrote always reads back as its typed model.
+/// Normalises a document on its way to storage: a parent marker keeps its child
+/// collections empty, because membership lives in the folders, and the identity
+/// field the stored name stands for is filled in when the body did not carry
+/// one, so a document the API wrote always reads back as its typed model. A run
+/// also records the moment it was stored, because its model requires a
+/// timestamp. A value the client supplied is never overwritten.
 fn normalise_marker(resource: Resource, id: &str, document: &mut Value) {
-    let (collection, identity) = match resource {
-        Resource::Projects => ("testSuites", "projectId"),
-        Resource::Suites => ("testCases", "suiteId"),
-        _ => return,
+    let (collection, identity): (Option<&str>, &str) = match resource {
+        Resource::Projects => (Some("testSuites"), "projectId"),
+        Resource::Suites => (Some("testCases"), "suiteId"),
+        Resource::Runs => (None, "testRunId"),
+        Resource::Milestones => (None, "milestoneId"),
+        Resource::Configurations => (None, "configId"),
+        // A test case cannot arrive without its identity: the id is derived from
+        // it, so a body that omits `testCaseId` is refused before storage.
+        Resource::Cases => return,
     };
-    if let Some(object) = document.as_object_mut() {
+    let Some(object) = document.as_object_mut() else {
+        return;
+    };
+    if let Some(collection) = collection {
         object.insert(collection.to_owned(), Value::Array(Vec::new()));
-        if !object.get(identity).is_some_and(|value| value.is_string()) {
-            object.insert(identity.to_owned(), Value::String(id.to_owned()));
-        }
+    }
+    if !object.get(identity).is_some_and(|value| value.is_string()) {
+        object.insert(identity.to_owned(), Value::String(id.to_owned()));
+    }
+    if resource == Resource::Runs
+        && !object
+            .get("timestamp")
+            .is_some_and(|value| value.is_string())
+    {
+        object.insert(
+            "timestamp".to_owned(),
+            Value::String(current_timestamp_string()),
+        );
     }
 }
 

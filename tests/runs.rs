@@ -57,6 +57,87 @@ async fn test_runs_support_the_full_crud_lifecycle() {
 }
 
 #[tokio::test]
+async fn a_run_created_from_a_name_alone_reads_back_and_records_results() {
+    let (directory, app) = test_app();
+
+    // The body names the run and nothing else: no `testRunId`, no `timestamp`.
+    let (status, created) = send_json(
+        &app,
+        json_request("POST", "/test_runs", &json!({"name": "nightly"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "creating: {created}");
+    assert_eq!(created["id"], "nightly.json");
+
+    let (status, stored) = send_json(&app, get("/test_runs/nightly.json")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(stored["testRunId"], "nightly.json");
+    assert_eq!(stored["name"], "nightly");
+    let recorded_at = stored["timestamp"]
+        .as_str()
+        .expect("a stored run records when it was created");
+    assert!(
+        recorded_at.parse::<u64>().is_ok(),
+        "the recorded timestamp is Unix seconds as a string, got {recorded_at}"
+    );
+
+    // The stored document itself satisfies the model, not just the response.
+    let marker = directory.path().join("test_runs/nightly.json");
+    let on_disk: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&marker).expect("run readable"))
+            .expect("run is valid JSON");
+    assert_eq!(on_disk["testRunId"], "nightly.json");
+    assert_eq!(on_disk["timestamp"], stored["timestamp"]);
+
+    // A value the body supplied is kept rather than replaced.
+    let (status, _) = send_json(
+        &app,
+        json_request(
+            "POST",
+            "/test_runs",
+            &json!({"name": "morning", "timestamp": "2026-09-02T00:00:00Z"}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let (_, morning) = send_json(&app, get("/test_runs/morning.json")).await;
+    assert_eq!(morning["testRunId"], "morning.json");
+    assert_eq!(morning["timestamp"], "2026-09-02T00:00:00Z");
+
+    // Every route that deserialises the run answers instead of failing.
+    let project = create_project(&app, "checkout").await;
+    create_suite(&app, &project, "smoke").await;
+    create_case_in(
+        &app,
+        &format!("/projects/{project}/test_cases"),
+        "TC-001.json",
+    )
+    .await;
+
+    for (route, payload) in [
+        (
+            "/test_runs/nightly.json/test_suites",
+            json!({"suiteId": "smoke.json"}),
+        ),
+        (
+            "/test_runs/nightly.json/test_cases",
+            json!({"testCaseId": "TC-001.json"}),
+        ),
+        (
+            "/test_runs/nightly.json/results",
+            json!({"testCaseId": "TC-001.json", "status": "Passed", "timestamp": "1"}),
+        ),
+    ] {
+        let (status, body) = send_json(&app, json_request("POST", route, &payload)).await;
+        assert_eq!(status, StatusCode::OK, "POST {route}: {body}");
+    }
+
+    let (_, recorded) = send_json(&app, get("/test_runs/nightly.json")).await;
+    assert_eq!(recorded["results"][0]["status"], "Passed");
+    assert_eq!(recorded["testSuites"][0]["suiteId"], "smoke.json");
+}
+
+#[tokio::test]
 async fn creating_a_test_run_requires_a_non_empty_name() {
     let (_directory, app) = test_app();
 

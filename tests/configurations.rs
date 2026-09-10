@@ -89,6 +89,25 @@ async fn list_supports_case_insensitive_substring_filtering() {
 }
 
 #[tokio::test]
+async fn a_configuration_created_from_a_name_alone_reads_back_as_its_model() {
+    let (_directory, app) = test_app();
+
+    // The body names the configuration and nothing else: no `configId`.
+    let (status, created) = send_json(
+        &app,
+        json_request("POST", "/configurations", &json!({"name": "C1"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "creating: {created}");
+    assert_eq!(created["id"], "C1.json");
+
+    let (status, stored) = send_json(&app, get("/configurations/C1.json")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(stored["configId"], "C1.json");
+    assert_eq!(stored["name"], "C1");
+}
+
+#[tokio::test]
 async fn creating_a_configuration_requires_a_non_empty_name() {
     let (_directory, app) = test_app();
 
