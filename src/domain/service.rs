@@ -20,7 +20,8 @@ use serde_json::{Value, json};
 
 use crate::models::{
     CaseHistoryEntry, CoverageReport, DefectLink, ImportCounts, ImportSummary, Milestone,
-    MilestoneProgress, TestCase, TestCaseResult, TestConfiguration, TestRun, TestSuite,
+    MilestoneProgress, SummaryReport, TestCase, TestCaseResult, TestConfiguration, TestRun,
+    TestSuite,
 };
 use crate::storage::{Parent, Placement, Repository, Resource, unique_suffix};
 
@@ -315,6 +316,7 @@ impl<R: Repository> TestService<R> {
             status,
             timestamp: required_string(body, "timestamp").unwrap_or_else(current_timestamp_string),
             notes: required_string(body, "notes"),
+            duration_ms: body.get("durationMs").and_then(Value::as_u64),
             attachments: None,
             defect_links: None,
         };
@@ -424,6 +426,7 @@ impl<R: Repository> TestService<R> {
                     status: case.status.as_str().to_owned(),
                     timestamp: case.timestamp.unwrap_or_else(current_timestamp_string),
                     notes: case.notes,
+                    duration_ms: None,
                     attachments: None,
                     defect_links: None,
                 },
@@ -625,6 +628,79 @@ impl<R: Repository> TestService<R> {
         }
 
         Ok(reports::coverage(project_id, scope))
+    }
+
+    /// Reports how the results recorded across the runs in scope split by
+    /// status, together with their pass rate and total duration.
+    ///
+    /// Every filter is optional and the ones supplied combine: a run is only
+    /// counted when it satisfies all of them. Runs that cannot be read or
+    /// decoded are skipped rather than failing the whole report, matching how
+    /// [`Self::milestone_progress`] treats its references.
+    pub fn summary_report(
+        &self,
+        filters: &reports::SummaryFilters,
+    ) -> Result<SummaryReport, DomainError> {
+        let mut filters = filters.clone();
+        if let Some(project_id) = filters.project_id.as_deref() {
+            self.require_parent(&Parent::Project(project_id.to_owned()))?;
+        }
+
+        let milestone_runs = match filters.milestone_id.as_deref() {
+            Some(id) => {
+                let value = self
+                    .repository
+                    .read_at(Resource::Milestones, None, id)
+                    .map_err(error::milestone_error)?;
+                let milestone: Milestone = serde_json::from_value(value).map_err(|_| {
+                    DomainError::Internal("Stored milestone JSON is invalid".to_owned())
+                })?;
+                Some(milestone.test_run_ids.unwrap_or_default())
+            }
+            None => None,
+        };
+
+        if let Some(config_id) = filters.configuration_id.as_deref() {
+            match self
+                .repository
+                .exists_at(Resource::Configurations, None, config_id)
+            {
+                Ok(true) => {}
+                Ok(false) => {
+                    return Err(DomainError::NotFound(
+                        entity_missing_message(Resource::Configurations).to_owned(),
+                    ));
+                }
+                Err(error) => return Err(error::delete_error(error)),
+            }
+        }
+
+        if let Some(raw) = std::mem::take(&mut filters.from) {
+            filters.from = Some(reports::parse_date_filter(&raw)?);
+        }
+        if let Some(raw) = std::mem::take(&mut filters.to) {
+            filters.to = Some(reports::parse_date_filter(&raw)?);
+        }
+
+        let mut results = Vec::new();
+        for run_id in self
+            .repository
+            .list(Resource::Runs)
+            .map_err(error::read_error)?
+        {
+            let Ok(value) = self.repository.read_at(Resource::Runs, None, &run_id) else {
+                continue;
+            };
+            let Ok(run) = serde_json::from_value::<TestRun>(value) else {
+                continue;
+            };
+            if !reports::run_is_in_scope(&run, &run_id, &filters, milestone_runs.as_deref()) {
+                continue;
+            }
+            results.extend(run.results.unwrap_or_default());
+        }
+
+        Ok(reports::summary(&results))
     }
 
     // --- attachments ---------------------------------------------------
