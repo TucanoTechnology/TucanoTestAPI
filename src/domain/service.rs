@@ -282,6 +282,7 @@ impl<R: Repository> TestService<R> {
         let mut run = self.load::<TestRun>(Resource::Runs, run_id, "Test run not found")?;
         let test_case = self.load_entity::<TestCase>(Resource::Cases, &test_case_id)?;
         composition::attach_case_to_run(&mut run, &test_case, &test_case_id)?;
+        composition::capture_case_version(&mut run, &test_case.test_case_id, test_case.version);
         self.save(Resource::Runs, run_id, &run)
     }
 
@@ -296,6 +297,19 @@ impl<R: Repository> TestService<R> {
         }
 
         let mut run = self.load::<TestRun>(Resource::Runs, run_id, "Test run not found")?;
+        // The result may name a case the store does not hold — the API has
+        // always accepted that — so the case is looked up best-effort: its
+        // version is pinned when it can be read and the run falls back to
+        // version 1 when it cannot.
+        let held = self
+            .load_entity::<TestCase>(Resource::Cases, &test_case_id)
+            .ok();
+        composition::capture_case_version(
+            &mut run,
+            held.as_ref()
+                .map_or(&test_case_id, |case| &case.test_case_id),
+            held.as_ref().and_then(|case| case.version),
+        );
         let result = TestCaseResult {
             test_case_id,
             status,
