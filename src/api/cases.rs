@@ -113,6 +113,62 @@ async fn delete_attachment<R: Repository>(
     Ok(Json(json!({ "message": "File deleted successfully" })))
 }
 
+async fn list_step_attachments<R: Repository>(
+    State(service): State<AppState<R>>,
+    Path((id, step_index)): Path<(String, String)>,
+) -> Result<Json<Value>, DomainError> {
+    let parent = service.require_test_case(&id)?;
+    let step_index = parse_step_index(&step_index)?;
+    let attachments = service.list_step_attachments(&parent, &id, step_index)?;
+    Ok(Json(json!(attachments)))
+}
+
+async fn upload_step_attachment<R: Repository>(
+    State(service): State<AppState<R>>,
+    Path((id, step_index)): Path<(String, String)>,
+    mut multipart: Multipart,
+) -> Result<(StatusCode, Json<Value>), DomainError> {
+    let parent = service.require_test_case(&id)?;
+    let step_index = parse_step_index(&step_index)?;
+
+    let field = match multipart.next_field().await {
+        Ok(Some(field)) => field,
+        Ok(None) => return Err(missing_file()),
+        Err(_) => return Err(invalid_multipart("Invalid multipart request")),
+    };
+    let Some(original_name) = field.file_name().map(str::to_owned) else {
+        return Err(missing_file());
+    };
+    let Ok(contents) = field.bytes().await else {
+        return Err(invalid_multipart("Unable to read uploaded file"));
+    };
+    if contents.len() > MAX_ATTACHMENT_BYTES {
+        return Err(DomainError::PayloadTooLarge);
+    }
+
+    let stored =
+        service.store_step_attachment(&parent, &id, step_index, &original_name, &contents)?;
+    Ok((
+        StatusCode::CREATED,
+        Json(json!({
+            "message": "File uploaded successfully",
+            "filename": stored.filename,
+            "originalName": stored.original_name,
+            "size": stored.size,
+        })),
+    ))
+}
+
+async fn delete_step_attachment<R: Repository>(
+    State(service): State<AppState<R>>,
+    Path((id, step_index, filename)): Path<(String, String, String)>,
+) -> Result<Json<Value>, DomainError> {
+    let parent = service.require_test_case(&id)?;
+    let step_index = parse_step_index(&step_index)?;
+    service.delete_step_attachment(&parent, &id, step_index, &filename)?;
+    Ok(Json(json!({ "message": "File deleted successfully" })))
+}
+
 pub(crate) fn routes<R: Repository + 'static>() -> Router<AppState<R>> {
     Router::new()
         // Retired: a case is created inside a project or a suite. The handler
@@ -132,6 +188,14 @@ pub(crate) fn routes<R: Repository + 'static>() -> Router<AppState<R>> {
         .route(
             "/test_cases/{id}/attachments/{filename}",
             get(download_attachment::<R>).delete(delete_attachment::<R>),
+        )
+        .route(
+            "/test_cases/{id}/steps/{step_index}/attachments",
+            get(list_step_attachments::<R>).post(upload_step_attachment::<R>),
+        )
+        .route(
+            "/test_cases/{id}/steps/{step_index}/attachments/{filename}",
+            delete(delete_step_attachment::<R>),
         )
         .route(
             "/projects/{id}/test_cases",
@@ -155,4 +219,12 @@ fn missing_file() -> DomainError {
         code: "missing_file",
         message: "No file uploaded".to_owned(),
     }
+}
+
+fn parse_step_index(value: &str) -> Result<usize, DomainError> {
+    value.parse::<usize>().map_err(|_| {
+        DomainError::invalid_request(format!(
+            "Step index `{value}` is not a non-negative integer"
+        ))
+    })
 }

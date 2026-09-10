@@ -136,7 +136,7 @@ pub fn milestone_error(error: io::Error) -> DomainError {
 /// Translation for attachment access: a missing or unusable file is a 404.
 pub fn attachment_error(error: io::Error) -> DomainError {
     match error.kind() {
-        io::ErrorKind::NotFound | io::ErrorKind::InvalidInput => {
+        io::ErrorKind::NotFound | io::ErrorKind::InvalidInput | io::ErrorKind::IsADirectory => {
             DomainError::NotFound("File not found".to_owned())
         }
         _ => DomainError::from(error),

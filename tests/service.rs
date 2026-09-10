@@ -329,6 +329,8 @@ async fn a_test_case_identifier_is_addressed_verbatim() {
         ("POST", "/test_cases/nope/duplicate"),
         ("GET", "/test_cases/nope/attachments/missing.txt"),
         ("DELETE", "/test_cases/nope/attachments/missing.txt"),
+        ("GET", "/test_cases/nope/steps/0/attachments"),
+        ("DELETE", "/test_cases/nope/steps/0/attachments/missing.txt"),
     ] {
         let (status, body) = send_json(&app, json_request(method, uri, &json!({}))).await;
         assert_eq!(status, StatusCode::NOT_FOUND, "{method} {uri}");
@@ -338,6 +340,14 @@ async fn a_test_case_identifier_is_addressed_verbatim() {
     let (status, body) = send_json(
         &app,
         common::multipart_request("/test_cases/nope/attachments", "note.txt", b"hello"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_error_envelope(&body, "not_found");
+
+    let (status, body) = send_json(
+        &app,
+        common::multipart_request("/test_cases/nope/steps/0/attachments", "note.txt", b"hello"),
     )
     .await;
     assert_eq!(status, StatusCode::NOT_FOUND);
@@ -534,6 +544,7 @@ async fn openapi_schemas_are_strict_only_where_the_api_rejects_unknown_fields() 
         "TestSuite",
         "TestCase",
         "TestStep",
+        "StepAttachment",
         "TestCaseResult",
         "Milestone",
         "TestConfiguration",
@@ -571,6 +582,17 @@ async fn openapi_schemas_are_strict_only_where_the_api_rejects_unknown_fields() 
         "#/components/schemas/Attachment"
     );
     assert!(schemas["TestCase"]["properties"]["tags"].is_object());
+
+    // A structured step carries the attachments the step-upload route stores;
+    // a plain string step is the other arm of the same `oneOf`.
+    assert_eq!(
+        schemas["TestCase"]["properties"]["steps"]["items"]["oneOf"][1]["$ref"],
+        "#/components/schemas/TestStep"
+    );
+    assert_eq!(
+        schemas["TestStep"]["properties"]["attachments"]["items"]["$ref"],
+        "#/components/schemas/StepAttachment"
+    );
 
     // The recorded timestamp is Unix seconds rendered as a string, as this API
     // writes it — not an ISO-8601 date, so no format may be claimed.

@@ -1,5 +1,5 @@
 use fs2::FileExt;
-use serde_json::Value;
+use serde_json::{Map, Value};
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use super::layout::{
     Parent, Placement, attachment_path, case_dir, case_marker, document_path, folder_wire_id,
     node_folder, parent_dir, project_dir, project_marker, root_dir, set_private_permissions,
-    suite_dir, suite_marker, unique_suffix,
+    step_attachment_path, suite_dir, suite_marker, unique_suffix,
 };
 use super::{Repository, Resource};
 
@@ -221,6 +221,61 @@ impl FileRepository {
             if attachments.is_empty() {
                 object.remove("attachments");
             }
+        }
+        self.write_json(marker, &document)
+    }
+
+    /// Append an attachment record to one structured step of the stored case
+    /// document.
+    fn record_step_attachment(
+        &self,
+        marker: &Path,
+        step_index: usize,
+        entry: &Value,
+    ) -> io::Result<()> {
+        let mut document = self.read_json(marker)?;
+        {
+            let step = step_object_mut(&mut document, step_index)?;
+            let attachments = step
+                .entry("attachments")
+                .or_insert_with(|| Value::Array(Vec::new()));
+            let array = attachments.as_array_mut().ok_or_else(|| {
+                io::Error::new(io::ErrorKind::InvalidData, "attachments is not an array")
+            })?;
+            array.push(entry.clone());
+        }
+        self.write_json(marker, &document)
+    }
+
+    /// Drop an attachment record from one structured step of the stored case
+    /// document.
+    ///
+    /// A step that is absent, out of range, or a plain string is left untouched
+    /// and reported as success: callers only forget attachments for a step that
+    /// resolved earlier, so an unreachable step needs no write.
+    fn forget_step_attachment(
+        &self,
+        marker: &Path,
+        step_index: usize,
+        filename: &str,
+    ) -> io::Result<()> {
+        let mut document = self.read_json(marker)?;
+        let Some(step) = document
+            .get_mut("steps")
+            .and_then(Value::as_array_mut)
+            .and_then(|steps| steps.get_mut(step_index))
+            .and_then(Value::as_object_mut)
+        else {
+            return Ok(());
+        };
+        let mut emptied = false;
+        if let Some(attachments) = step.get_mut("attachments").and_then(Value::as_array_mut) {
+            attachments
+                .retain(|entry| entry.get("filename").and_then(Value::as_str) != Some(filename));
+            emptied = attachments.is_empty();
+        }
+        if emptied {
+            step.remove("attachments");
         }
         self.write_json(marker, &document)
     }
@@ -501,6 +556,86 @@ impl Repository for FileRepository {
         lock.unlock()?;
         result
     }
+
+    fn save_step_attachment(
+        &self,
+        parent: &Parent,
+        case: &str,
+        step_index: usize,
+        filename: &str,
+        entry: &Value,
+        contents: &[u8],
+    ) -> io::Result<()> {
+        let lock = self.acquire_lock()?;
+        let result = (|| {
+            let marker = case_marker(&self.root, parent, case)?;
+            if !marker.is_file() {
+                return Err(io::Error::new(
+                    io::ErrorKind::NotFound,
+                    "test case does not exist",
+                ));
+            }
+            let path = step_attachment_path(&self.root, parent, case, step_index, filename)?;
+            if let Some(directory) = path.parent() {
+                fs::create_dir_all(directory)?;
+            }
+            let mut file = OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&path)?;
+            set_private_permissions(&file)?;
+            file.write_all(contents)?;
+            file.sync_all()?;
+            if let Err(error) = self.record_step_attachment(&marker, step_index, entry) {
+                let _ = fs::remove_file(&path);
+                return Err(error);
+            }
+            Ok(())
+        })();
+        lock.unlock()?;
+        result
+    }
+
+    fn delete_step_attachment(
+        &self,
+        parent: &Parent,
+        case: &str,
+        step_index: usize,
+        filename: &str,
+    ) -> io::Result<()> {
+        let lock = self.acquire_lock()?;
+        let result = (|| {
+            fs::remove_file(step_attachment_path(
+                &self.root, parent, case, step_index, filename,
+            )?)?;
+            self.forget_step_attachment(
+                &case_marker(&self.root, parent, case)?,
+                step_index,
+                filename,
+            )
+        })();
+        lock.unlock()?;
+        result
+    }
+}
+
+/// Reach the object of one structured step inside a stored case document.
+///
+/// A missing `steps` array, an out-of-range index, or a plain string step are
+/// all reported as invalid data: a step attachment is only recorded after the
+/// step was resolved and confirmed structured.
+fn step_object_mut(document: &mut Value, step_index: usize) -> io::Result<&mut Map<String, Value>> {
+    document
+        .get_mut("steps")
+        .and_then(Value::as_array_mut)
+        .and_then(|steps| steps.get_mut(step_index))
+        .and_then(Value::as_object_mut)
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                "stored test case has no structured step at this index",
+            )
+        })
 }
 
 /// Recursively duplicate a folder, contents and all.
