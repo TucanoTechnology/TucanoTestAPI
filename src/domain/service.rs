@@ -19,8 +19,8 @@ use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 
 use crate::models::{
-    CaseHistoryEntry, DefectLink, ImportCounts, ImportSummary, Milestone, MilestoneProgress,
-    TestCase, TestCaseResult, TestConfiguration, TestRun, TestSuite,
+    CaseHistoryEntry, CoverageReport, DefectLink, ImportCounts, ImportSummary, Milestone,
+    MilestoneProgress, TestCase, TestCaseResult, TestConfiguration, TestRun, TestSuite,
 };
 use crate::storage::{Parent, Placement, Repository, Resource, unique_suffix};
 
@@ -29,7 +29,7 @@ use super::error::{self, DomainError};
 use super::import::{self, ImportStatus, ParsedCase};
 use super::{
     Created, ListQuery, MAX_ATTACHMENT_BYTES, StoredAttachment, composition,
-    current_iso8601_timestamp, current_timestamp_string, defect, mime_type, progress,
+    current_iso8601_timestamp, current_timestamp_string, defect, mime_type, progress, reports,
     required_string, resources, validation,
 };
 
@@ -565,6 +565,66 @@ impl<R: Repository> TestService<R> {
         }
 
         Ok(progress::compute(&milestone, &runs))
+    }
+
+    /// Reports how many cases the tree holds, per suite and in total, for one
+    /// project or for every project when `project_id` is `None`.
+    pub fn coverage_report(&self, project_id: Option<&str>) -> Result<CoverageReport, DomainError> {
+        let projects: Vec<String> = match project_id {
+            Some(id) => {
+                self.require_parent(&Parent::Project(id.to_owned()))?;
+                vec![id.to_owned()]
+            }
+            None => self
+                .repository
+                .list(Resource::Projects)
+                .map_err(error::read_error)?,
+        };
+
+        let mut scope = Vec::with_capacity(projects.len());
+        for project in projects {
+            let parent = Parent::Project(project);
+            let direct = self
+                .repository
+                .list_children(&parent, Resource::Cases)
+                .map_err(error::read_error)?
+                .len();
+            let suite_ids = self
+                .repository
+                .list_children(&parent, Resource::Suites)
+                .map_err(error::read_error)?;
+            let mut suites = Vec::with_capacity(suite_ids.len());
+            for suite_id in suite_ids {
+                let document = self
+                    .repository
+                    .read_at(Resource::Suites, Some(&parent), &suite_id)
+                    .map_err(error::read_error)?;
+                // A suite's marker records its own name; fall back to the
+                // identifier when a legacy document omits it.
+                let name = document
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .unwrap_or(&suite_id)
+                    .to_owned();
+                let suite = Parent::Suite {
+                    project: parent.project().to_owned(),
+                    suite: suite_id.clone(),
+                };
+                let case_count = self
+                    .repository
+                    .list_children(&suite, Resource::Cases)
+                    .map_err(error::read_error)?
+                    .len();
+                suites.push(reports::SuiteCases {
+                    suite_id,
+                    name,
+                    case_count,
+                });
+            }
+            scope.push(reports::ProjectCases { direct, suites });
+        }
+
+        Ok(reports::coverage(project_id, scope))
     }
 
     // --- attachments ---------------------------------------------------
