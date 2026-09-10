@@ -245,6 +245,10 @@ Issue: [#69](https://github.com/TucanoTechnology/TucanoTestAPI/issues/69)
 - `/configurations` and `/configurations/{id}` are documented in `openapi.json` with the same CRUD semantics as
   the other flat resources; `tests/service.rs` route coverage is extended accordingly. Full environment-matrix
   semantics remain out of scope here and stay tracked by Issues #34 and #51.
+- Implementation note: the resource-set change and the two documented paths landed with the layered
+  architecture refactor (Issue #71); `TestConfiguration` is published in `openapi.json` and
+  `tests/configurations.rs` covers the CRUD lifecycle, the error matrix, restart persistence, and a run
+  referencing a configuration.
 
 ## Layered Architecture Plan (Issue #71)
 

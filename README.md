@@ -197,6 +197,7 @@ Tests are split into two layers and both run in CI on every push and pull reques
 | `tests/runs.rs` | Test run CRUD, validation, conflicts, missing resources |
 | `tests/cases.rs` | Test case CRUD, required fields, conflicts, missing resources |
 | `tests/milestones.rs` | Milestone CRUD, validation, conflicts, and progress derived from the referenced runs |
+| `tests/configurations.rs` | Configuration CRUD, validation, conflicts, missing resources, restart persistence, and use by a run |
 | `tests/attachments.rs` | Upload, download, delete, content types, removal with the parent test case |
 | `tests/security_tests.rs` | Path traversal, symlink escape, malformed JSON, repository-level leniency, and concurrent writers |
 
