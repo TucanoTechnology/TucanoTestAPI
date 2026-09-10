@@ -403,7 +403,9 @@ These were found while reconciling the document and are left as they are:
 - Creating a run, milestone, or configuration from a body that names only `name` stores a document without
   the identity field its model requires, so reading it back — `POST /test_runs/{id}/results`,
   `GET /milestones/{id}/progress` — answers `500 storage_error`. The cause is the identity normalisation that
-  covers only projects and suites. It is tracked separately from this issue and is not a documentation bug.
+  covers only projects and suites. It is tracked as
+  [#78](https://github.com/TucanoTechnology/TucanoTestAPI/issues/78), separately from this issue, and is not a
+  documentation bug.
 
 ## Breaking change accounting
 
