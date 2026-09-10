@@ -4,7 +4,8 @@
 //! Both storage and domain depend on this module, so identifier and filename
 //! rules live here exactly once.
 
-use std::fs::File;
+use std::ffi::OsString;
+use std::fs::{self, File};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -116,6 +117,13 @@ pub fn validate_component(component: &str) -> io::Result<()> {
 }
 
 /// Reject a path that would resolve outside the data root.
+///
+/// The lexical `starts_with` check is only a fast path: it stops `..` and
+/// absolute escapes without touching the filesystem. A symlink planted inside
+/// the data tree is invisible to that check, so the already-existing prefix of
+/// `candidate` is also canonicalised and re-checked against the canonical root.
+/// Symlinks are therefore followed here — and caught — rather than silently
+/// followed later by an open, read, or rename.
 pub fn ensure_within(root: &Path, candidate: &Path) -> io::Result<()> {
     if candidate.parent().and_then(Path::parent).is_none() || !candidate.starts_with(root) {
         return Err(io::Error::new(
@@ -123,7 +131,48 @@ pub fn ensure_within(root: &Path, candidate: &Path) -> io::Result<()> {
             "path escapes data root",
         ));
     }
+
+    let canonical_root = root
+        .canonicalize()
+        .map_err(|_| io::Error::new(io::ErrorKind::NotFound, "data root does not exist"))?;
+
+    if !resolve_existing_prefix(candidate)?.starts_with(&canonical_root) {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "path escapes data root",
+        ));
+    }
     Ok(())
+}
+
+/// Canonicalises the deepest ancestor of `candidate` that already exists and
+/// re-appends the not-yet-created tail. The final component(s) may legitimately
+/// be absent (a new document or attachment), so they cannot be canonicalised.
+fn resolve_existing_prefix(candidate: &Path) -> io::Result<PathBuf> {
+    let mut existing = candidate;
+    let mut missing: Vec<OsString> = Vec::new();
+
+    loop {
+        match fs::symlink_metadata(existing) {
+            Ok(_) => break,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                let name = existing.file_name().ok_or_else(|| {
+                    io::Error::new(io::ErrorKind::InvalidInput, "path has no file name")
+                })?;
+                missing.push(name.to_os_string());
+                existing = existing.parent().ok_or_else(|| {
+                    io::Error::new(io::ErrorKind::InvalidInput, "path has no parent")
+                })?;
+            }
+            Err(error) => return Err(error),
+        }
+    }
+
+    let mut resolved = existing.canonicalize()?;
+    for component in missing.iter().rev() {
+        resolved.push(component);
+    }
+    Ok(resolved)
 }
 
 /// Collision-free suffix used for temporary files and derived identifiers.
@@ -147,6 +196,7 @@ pub fn set_private_permissions(file: &File) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::TempDir;
 
     #[test]
     fn every_resource_has_a_unique_directory_name() {
@@ -176,25 +226,27 @@ mod tests {
 
     #[test]
     fn document_paths_are_built_from_the_layout() {
-        let root = Path::new("/data");
+        let directory = TempDir::new().expect("temp dir");
+        let root = directory.path();
         assert_eq!(
             document_path(root, Resource::Projects, "checkout.json").expect("path"),
-            Path::new("/data/projects/checkout.json")
+            root.join("projects/checkout.json")
         );
         assert_eq!(
             document_path(root, Resource::Cases, "TC-001").expect("path"),
-            Path::new("/data/test_cases/TC-001/test-case.json")
+            root.join("test_cases/TC-001/test-case.json")
         );
         assert_eq!(
             attachment_path(root, "TC-001", "notes.txt").expect("path"),
-            Path::new("/data/test_cases/TC-001/notes.txt")
+            root.join("test_cases/TC-001/notes.txt")
         );
     }
 
     #[test]
     fn flat_documents_require_a_json_suffix() {
+        let directory = TempDir::new().expect("temp dir");
         let error =
-            document_path(Path::new("/data"), Resource::Milestones, "v1").expect_err("rejected");
+            document_path(directory.path(), Resource::Milestones, "v1").expect_err("rejected");
         assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
     }
 
@@ -216,7 +268,25 @@ mod tests {
 
     #[test]
     fn paths_outside_the_root_are_rejected() {
-        assert!(ensure_within(Path::new("/data"), Path::new("/data/projects/a.json")).is_ok());
-        assert!(ensure_within(Path::new("/data"), Path::new("/elsewhere/secret")).is_err());
+        let directory = TempDir::new().expect("temp dir");
+        let root = directory.path();
+        assert!(ensure_within(root, &root.join("projects/a.json")).is_ok());
+        assert!(ensure_within(root, Path::new("/elsewhere/secret")).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_symlink_that_escapes_the_root_is_rejected() {
+        use std::os::unix::fs::symlink;
+
+        let directory = TempDir::new().expect("temp dir");
+        let root = directory.path();
+        let projects = root.join("projects");
+        fs::create_dir_all(&projects).expect("projects dir");
+
+        symlink("/etc/passwd", projects.join("evil.json")).expect("symlink");
+
+        let error = document_path(root, Resource::Projects, "evil.json").expect_err("escape");
+        assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
     }
 }
