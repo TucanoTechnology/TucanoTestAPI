@@ -1,0 +1,107 @@
+name: Auto Merge
+
+on:
+  workflow_run:
+    workflows:
+      - CI
+      - Security
+    types:
+      - completed
+
+permissions:
+  contents: read
+
+jobs:
+  merge-own-pull-request:
+    name: Merge owner pull requests
+    if: github.event.workflow_run.event == 'pull_request'
+    runs-on: [self-hosted, Linux, X64]
+    concurrency:
+      group: auto-merge-${{ github.event.workflow_run.head_sha }}
+      cancel-in-progress: false
+    steps:
+      - name: Merge when every required check has passed
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.AUTO_MERGE_TOKEN }}
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const sha = context.payload.workflow_run.head_sha;
+
+            const { data: info } = await github.rest.repos.get({ owner, repo });
+
+            const { data: candidates } =
+              await github.rest.repos.listPullRequestsAssociatedWithCommit({
+                owner,
+                repo,
+                commit_sha: sha,
+              });
+            const pr = candidates.find(
+              (candidate) =>
+                candidate.state === 'open' &&
+                candidate.head.repo.full_name === `${owner}/${repo}` &&
+                candidate.base.ref === info.default_branch,
+            );
+            if (!pr) {
+              core.info(`No open ${info.default_branch} pull request at ${sha}.`);
+              return;
+            }
+            const { data: author } = await github.rest.repos.getCollaboratorPermissionLevel({
+              owner,
+              repo,
+              username: pr.user.login,
+            });
+            if (author.permission !== 'admin') {
+              core.info(
+                `#${pr.number} was opened by ${pr.user.login} (${author.permission}), so it stays blocked until an admin approves it.`,
+              );
+              return;
+            }
+            if (pr.draft) {
+              core.info(`#${pr.number} is a draft.`);
+              return;
+            }
+
+            const { data: protection } = await github.rest.repos.getBranchProtection({
+              owner,
+              repo,
+              branch: info.default_branch,
+            });
+            const required = protection.required_status_checks?.contexts ?? [];
+
+            const { data: checks } = await github.rest.checks.listForRef({
+              owner,
+              repo,
+              ref: sha,
+              filter: 'latest',
+              per_page: 100,
+            });
+            const latest = new Map(checks.check_runs.map((run) => [run.name, run]));
+            const blocking = required.filter((name) => {
+              const run = latest.get(name);
+              if (!run || run.status !== 'completed') return true;
+              return !['success', 'skipped', 'neutral'].includes(run.conclusion);
+            });
+            if (blocking.length > 0) {
+              core.info(`#${pr.number} is still waiting on ${blocking.join(', ')}.`);
+              return;
+            }
+
+            const { data: state } = await github.rest.pulls.get({
+              owner,
+              repo,
+              pull_number: pr.number,
+            });
+            if (state.mergeable !== true || state.mergeable_state === 'behind') {
+              core.info(`#${pr.number} is not mergeable (${state.mergeable_state}).`);
+              return;
+            }
+
+            const { data: merged } = await github.rest.pulls.merge({
+              owner,
+              repo,
+              pull_number: pr.number,
+              merge_method: 'merge',
+            });
+            core.info(`#${pr.number}: ${merged.message}`);
