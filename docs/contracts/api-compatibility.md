@@ -310,9 +310,9 @@ for this issue was to **document where each code occurs**, not to re-order the c
    cannot frame is rejected there, and that rejection is plain text rather than the envelope (see
    *Extractor responses*).
 2. **Payload validation.** `create` and `update` validate the body against the resource's typed model first:
-   a non-object body, an unknown top-level key, or a malformed nested collection answers
-   `400 invalid_request` and nothing is written. An empty object is a valid partial payload, so
-   `PUT /test_cases/{id}` with `{}` proceeds to the identifier lookup rather than failing validation.
+   a non-object body, an unknown top-level key, or a field whose JSON type contradicts the model (a nested
+   collection included) answers `400 invalid_request` and nothing is written. An empty object is a valid partial
+   payload, so `PUT /test_cases/{id}` with `{}` proceeds to the identifier lookup rather than failing validation.
 3. **Identifier resolution.** A path identifier that is not a single usable component answers
    `400 invalid_id`. Test cases are addressed verbatim, so an unusable case identifier is simply a case that
    does not exist (`404 not_found`) — never `invalid_id`.
@@ -444,7 +444,7 @@ the recorded merge decision.
   (`testSuites`, `results`, `steps`) is replaced rather than concatenated, and nested objects are not
   deep-merged.
 - **A field carrying `null` counts as not supplied** and keeps the stored value — the same reading of `null`
-  `validate_payload` already records for nested collections. A `PUT` therefore cannot remove an optional field:
+  `validate_payload` applies to every field. A `PUT` therefore cannot remove an optional field:
   removing one means deleting and recreating the document. This is what keeps a partial body from ever nulling a
   required field, so a `200` can no longer be followed by a `500` on a later read.
 - **The rules that already applied to a write still apply after the merge.** The merged document is written
@@ -531,6 +531,10 @@ suite pins is written down rather than inferred from it.
   partial update that names `tags` replaces the whole array while leaving the other keys alone, an explicit `[]`
   clearing it. The field is not normalised on write; only the comparison the filter performs is
   case-insensitive.
+- **The array must be well-typed.** A `tags` value that is not an array of strings — a bare string, an object,
+  or an array of numbers — is rejected with `400 invalid_request` naming `tags` (Issue #121). The model is the
+  schema, so the verbatim storage above covers the strings a client supplies, not an arbitrary JSON value; the
+  check is the general scalar type validation, not a rule specific to `tags`.
 - **The filter is a shared comma-separated OR over the listed resource.** `?tags=a,b` keeps a resource when it
   carries *at least one* of the requested tags, compared case-insensitively with surrounding whitespace
   trimmed, and a resource without a `tags` array never matches. It composes with `?filter=` (substring over
@@ -622,6 +626,18 @@ suite pins is written down rather than inferred from it.
   `tests/milestones.rs::a_milestone_created_from_a_name_alone_reads_back_and_reports_progress`,
   `tests/configurations.rs::a_configuration_created_from_a_name_alone_reads_back_as_its_model`, and
   `tests/service.rs::an_unusable_path_identifier_is_answered_with_invalid_id`.
+- **Scalar fields are type-checked against the model** (Issue #121). `validate_payload` now type-checks every
+  supplied top-level field, not only the nested collections it checked before: a body whose field carries the
+  wrong JSON type is rejected with `400 Bad Request` and the stable envelope naming it
+  (`{"error":{"code":"invalid_request","message":"Field `tags` is invalid"}}`), and nothing is written. The gap
+  mattered most for `tags`, declared `Option<Vec<String>>` and published as
+  `{"type":"array","items":{"type":"string"}}`: a document stored with `"tags": "smoke"` was served back as
+  valid while the documented `GET /projects?tags=smoke` silently never matched it. The partial payloads the API
+  has always accepted, a `null` field, and the unknown-key rejection are all unchanged, and stored documents are
+  still never re-validated or rewritten, so a document persisted with an old wrong-typed field keeps answering
+  `GET`. The check is driven by the models — a `Default` instance is serialised and each present field is probed
+  against it — so a field renamed in `src/models.rs` cannot drift out of the check. Deviation recorded with
+  tests in `tests/validation.rs` and `tests/tags.rs::a_wrong_typed_scalar_is_rejected_with_the_field_named`.
 
 ## Required case matrix
 

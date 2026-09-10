@@ -37,7 +37,7 @@ pub enum TestCaseStep {
     Structured(TestStep),
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct TestCase {
     pub test_case_id: String,
@@ -63,7 +63,7 @@ pub struct TestCase {
     pub tags: Option<Vec<String>>,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct TestSuite {
     pub suite_id: String,
@@ -75,7 +75,7 @@ pub struct TestSuite {
     pub tags: Option<Vec<String>>,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Project {
     pub project_id: String,
@@ -99,7 +99,7 @@ pub struct TestCaseResult {
     pub attachments: Option<Vec<Attachment>>,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct TestRun {
     pub test_run_id: String,
@@ -120,7 +120,7 @@ pub struct TestRun {
     pub configurations: Option<Vec<TestConfiguration>>,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct TestConfiguration {
     pub config_id: String,
@@ -135,7 +135,7 @@ pub struct TestConfiguration {
     pub resolution: Option<String>,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Milestone {
     pub milestone_id: String,
