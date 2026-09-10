@@ -87,6 +87,13 @@ pub trait Repository: Send + Sync {
         value: &Value,
     ) -> io::Result<()>;
 
+    /// List the revision numbers a case has snapshots for, ascending. A case
+    /// with no `revisions/` folder has no history, which is not an error.
+    fn list_revisions(&self, parent: &Parent, case: &str) -> io::Result<Vec<u64>>;
+
+    /// Read the immutable revision snapshot of a case at `version`.
+    fn read_revision(&self, parent: &Parent, case: &str, version: u64) -> io::Result<Value>;
+
     /// Read a supplementary file of a case.
     fn read_attachment(&self, parent: &Parent, case: &str, filename: &str) -> io::Result<Vec<u8>>;
 

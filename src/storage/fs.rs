@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 use super::layout::{
     Parent, Placement, attachment_path, case_dir, case_marker, document_path, folder_wire_id,
-    node_folder, parent_dir, project_dir, project_marker, revision_marker, root_dir,
+    node_folder, parent_dir, project_dir, project_marker, revision_dir, revision_marker, root_dir,
     set_private_permissions, step_attachment_path, suite_dir, suite_marker, unique_suffix,
 };
 use super::{Repository, Resource};
@@ -570,6 +570,31 @@ impl Repository for FileRepository {
         result
     }
 
+    fn list_revisions(&self, parent: &Parent, case: &str) -> io::Result<Vec<u64>> {
+        let directory = revision_dir(&self.root, parent, case)?;
+        let entries = match fs::read_dir(&directory) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(error) => return Err(error),
+        };
+        let mut versions = entries
+            .filter_map(Result::ok)
+            .filter(|entry| {
+                entry
+                    .file_type()
+                    .map(|kind| kind.is_file())
+                    .unwrap_or(false)
+            })
+            .filter_map(|entry| entry.file_name().to_str().and_then(revision_number))
+            .collect::<Vec<_>>();
+        versions.sort_unstable();
+        Ok(versions)
+    }
+
+    fn read_revision(&self, parent: &Parent, case: &str, version: u64) -> io::Result<Value> {
+        self.read_json(&revision_marker(&self.root, parent, case, version)?)
+    }
+
     fn read_attachment(&self, parent: &Parent, case: &str, filename: &str) -> io::Result<Vec<u8>> {
         fs::read(attachment_path(&self.root, parent, case, filename)?)
     }
@@ -705,6 +730,12 @@ fn project_parent(parent: Option<&Parent>) -> io::Result<&str> {
 /// A case is always owned by a parent.
 fn required_parent(parent: Option<&Parent>) -> io::Result<&Parent> {
     parent.ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "resource requires a parent"))
+}
+
+/// The revision number a snapshot file name (`v1.json`) stands for.
+fn revision_number(name: &str) -> Option<u64> {
+    let digits = name.strip_prefix('v')?.strip_suffix(".json")?;
+    digits.parse::<u64>().ok()
 }
 
 #[cfg(test)]
@@ -1284,6 +1315,96 @@ mod tests {
             )
             .expect_err("missing case");
         assert_eq!(error.kind(), io::ErrorKind::NotFound);
+    }
+
+    #[test]
+    fn revision_snapshots_are_listed_ascending_and_read_back_by_version() {
+        let (directory, repository) = repository();
+        create_project(&repository, "checkout.json");
+        repository
+            .write_at(
+                Resource::Cases,
+                Some(&project("checkout.json")),
+                "TC-001",
+                &json!({"testCaseId": "TC-001"}),
+            )
+            .expect("case");
+
+        // A case that has never been revised has no `revisions/` folder, and
+        // that is an empty history rather than an error.
+        assert!(
+            repository
+                .list_revisions(&project("checkout.json"), "TC-001")
+                .expect("history")
+                .is_empty()
+        );
+
+        // Written out of order, so the listing has to sort rather than trust
+        // the directory's order.
+        for version in [3, 1, 2] {
+            repository
+                .save_revision(
+                    &project("checkout.json"),
+                    "TC-001",
+                    version,
+                    &json!({"testCaseId": "TC-001", "version": version}),
+                )
+                .expect("snapshot");
+        }
+
+        // Only `v{number}.json` files are snapshots: a stray file this API did
+        // not write and a directory that happens to share the name are not.
+        let revisions = directory.path().join("projects/checkout/TC-001/revisions");
+        std::fs::write(revisions.join("notes.txt"), b"not a snapshot").expect("stray file");
+        std::fs::create_dir(revisions.join("v4.json")).expect("a directory is not a snapshot");
+
+        assert_eq!(
+            repository
+                .list_revisions(&project("checkout.json"), "TC-001")
+                .expect("history"),
+            vec![1, 2, 3]
+        );
+        assert_eq!(
+            repository
+                .read_revision(&project("checkout.json"), "TC-001", 2)
+                .expect("snapshot")["version"],
+            json!(2)
+        );
+
+        // A snapshot is immutable, so re-saving a version leaves the first one.
+        repository
+            .save_revision(
+                &project("checkout.json"),
+                "TC-001",
+                1,
+                &json!({"testCaseId": "TC-001", "version": 99}),
+            )
+            .expect("re-save");
+        assert_eq!(
+            repository
+                .read_revision(&project("checkout.json"), "TC-001", 1)
+                .expect("snapshot")["version"],
+            json!(1)
+        );
+
+        // A version the case never recorded is a missing document.
+        assert!(
+            repository
+                .read_revision(&project("checkout.json"), "TC-001", 4)
+                .is_err()
+        );
+
+        // A snapshot needs its case, so an unknown one cannot record a revision.
+        assert!(
+            repository
+                .save_revision(
+                    &project("checkout.json"),
+                    "TC-404",
+                    1,
+                    &json!({"testCaseId": "TC-404"}),
+                )
+                .is_err()
+        );
     }
 
     #[test]

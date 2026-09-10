@@ -80,6 +80,8 @@ pub const ROUTES: &[&str] = &[
     "/test_cases/{id}/attachments/{filename}",
     "/test_cases/{id}/steps/{step_index}/attachments",
     "/test_cases/{id}/steps/{step_index}/attachments/{filename}",
+    "/test_cases/{id}/history",
+    "/test_cases/{id}/history/{version}",
     "/milestones",
     "/milestones/{id}",
     "/milestones/{id}/duplicate",
