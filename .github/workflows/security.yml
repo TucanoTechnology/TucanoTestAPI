@@ -18,6 +18,12 @@ jobs:
     runs-on: [self-hosted, Linux, X64]
     container:
       image: rust:1.98.0-bookworm
+    env:
+      # rust-toolchain.toml asks for the rustfmt and clippy components, which this
+      # image does not ship, so rustup re-syncs the channel manifest from
+      # static.rust-lang.org before the first cargo call. Naming the installed
+      # toolchain keeps that call local; this job uses neither component.
+      RUSTUP_TOOLCHAIN: "1.98.0"
     steps:
       - uses: actions/checkout@v5
       - name: Install cargo-audit
@@ -52,6 +58,12 @@ jobs:
     runs-on: [self-hosted, Linux, X64]
     container:
       image: rust:1.98.0-bookworm
+    env:
+      # rust-toolchain.toml asks for the rustfmt and clippy components, which this
+      # image does not ship, so rustup re-syncs the channel manifest from
+      # static.rust-lang.org before the first cargo call. Naming the installed
+      # toolchain keeps that call local; this job uses neither component.
+      RUSTUP_TOOLCHAIN: "1.98.0"
     steps:
       - uses: actions/checkout@v5
       - name: Install cargo-cyclonedx
