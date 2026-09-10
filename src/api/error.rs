@@ -2,23 +2,44 @@
 //!
 //! Every failure leaves the API as `{"error":{"code":…,"message":…}}` with the
 //! status and code the legacy handlers produced, so clients see no change.
+//! When the failure happens inside a request scope the envelope also carries
+//! `requestId`, matching the `X-Request-Id` response header.
 
 use axum::{
     Json,
     http::StatusCode,
     response::{IntoResponse, Response},
 };
-use serde_json::json;
+use serde::Serialize;
 
-use crate::domain::DomainError;
+use crate::{api::request_id, domain::DomainError};
+
+/// The envelope as serde sees it: `{"error":{"code":…,"message":…}}`.
+#[derive(Serialize)]
+struct ErrorEnvelope<'a> {
+    error: ErrorBody<'a>,
+}
+
+#[derive(Serialize)]
+struct ErrorBody<'a> {
+    code: &'a str,
+    message: &'a str,
+    /// Present only when the failure happened inside a request scope, so the
+    /// unit test below and any out-of-band caller keep the historical shape.
+    #[serde(rename = "requestId", skip_serializing_if = "Option::is_none")]
+    request_id: Option<String>,
+}
 
 /// Renders the stable error envelope.
 pub(crate) fn envelope(status: StatusCode, code: &str, message: &str) -> Response {
-    (
-        status,
-        Json(json!({"error":{"code":code,"message":message}})),
-    )
-        .into_response()
+    let body = ErrorEnvelope {
+        error: ErrorBody {
+            code,
+            message,
+            request_id: request_id::current(),
+        },
+    };
+    (status, Json(body)).into_response()
 }
 
 impl IntoResponse for DomainError {
