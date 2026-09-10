@@ -5,8 +5,8 @@
 //! behave identically, and every rule it applies lives in a sibling module that
 //! can be unit tested on its own.
 
-use std::io;
-
+use serde::Serialize;
+use serde::de::DeserializeOwned;
 use serde_json::Value;
 
 use crate::models::{Milestone, MilestoneProgress, TestCase, TestCaseResult, TestRun, TestSuite};
@@ -120,13 +120,14 @@ impl<R: Repository> TestService<R> {
             .map_err(|error| error::load_error(error, spec.not_found_message))?;
         let new_id = duplicate::apply_overrides(spec, id, body, &mut document);
 
-        match self.repository.write(spec.resource, &new_id, &document) {
-            Ok(()) => Ok(new_id),
-            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => Err(
-                DomainError::Conflict(spec.already_exists_message.to_owned()),
-            ),
-            Err(error) => Err(error.into()),
+        if self.repository.exists(spec.resource, &new_id)? {
+            return Err(DomainError::Conflict(
+                spec.already_exists_message.to_owned(),
+            ));
         }
+
+        self.repository.write(spec.resource, &new_id, &document)?;
+        Ok(new_id)
     }
 
     // --- composition ---------------------------------------------------
@@ -136,17 +137,20 @@ impl<R: Repository> TestService<R> {
         let test_case_id = required_string(body, "testCaseId")
             .ok_or_else(|| DomainError::invalid_request("Required field testCaseId is missing"))?;
 
-        let mut suite = self.load_suite(suite_id)?;
-        let test_case = self.load_case(&test_case_id)?;
+        let mut suite =
+            self.load::<TestSuite>(Resource::Suites, suite_id, "Test suite not found")?;
+        let test_case =
+            self.load::<TestCase>(Resource::Cases, &test_case_id, "Test case not found")?;
         composition::attach_case_to_suite(&mut suite, &test_case, &test_case_id)?;
-        self.save_suite(suite_id, &suite)
+        self.save(Resource::Suites, suite_id, &suite)
     }
 
     /// Removes a case from a suite.
     pub fn remove_case_from_suite(&self, suite_id: &str, case_id: &str) -> Result<(), DomainError> {
-        let mut suite = self.load_suite(suite_id)?;
+        let mut suite =
+            self.load::<TestSuite>(Resource::Suites, suite_id, "Test suite not found")?;
         composition::detach_case_from_suite(&mut suite, case_id)?;
-        self.save_suite(suite_id, &suite)
+        self.save(Resource::Suites, suite_id, &suite)
     }
 
     /// Adds the suite named in `body` to a run.
@@ -154,10 +158,10 @@ impl<R: Repository> TestService<R> {
         let suite_id = required_string(body, "suiteId")
             .ok_or_else(|| DomainError::invalid_request("Required field suiteId is missing"))?;
 
-        let mut run = self.load_run(run_id)?;
-        let suite = self.load_suite(&suite_id)?;
+        let mut run = self.load::<TestRun>(Resource::Runs, run_id, "Test run not found")?;
+        let suite = self.load::<TestSuite>(Resource::Suites, &suite_id, "Test suite not found")?;
         composition::attach_suite_to_run(&mut run, &suite, &suite_id)?;
-        self.save_run(run_id, &run)
+        self.save(Resource::Runs, run_id, &run)
     }
 
     /// Adds the case named in `body` to a run.
@@ -165,10 +169,11 @@ impl<R: Repository> TestService<R> {
         let test_case_id = required_string(body, "testCaseId")
             .ok_or_else(|| DomainError::invalid_request("Required field testCaseId is missing"))?;
 
-        let mut run = self.load_run(run_id)?;
-        let test_case = self.load_case(&test_case_id)?;
+        let mut run = self.load::<TestRun>(Resource::Runs, run_id, "Test run not found")?;
+        let test_case =
+            self.load::<TestCase>(Resource::Cases, &test_case_id, "Test case not found")?;
         composition::attach_case_to_run(&mut run, &test_case, &test_case_id)?;
-        self.save_run(run_id, &run)
+        self.save(Resource::Runs, run_id, &run)
     }
 
     /// Records, or replaces, the result of a case within a run.
@@ -181,7 +186,7 @@ impl<R: Repository> TestService<R> {
             return Err(DomainError::invalid_status());
         }
 
-        let mut run = self.load_run(run_id)?;
+        let mut run = self.load::<TestRun>(Resource::Runs, run_id, "Test run not found")?;
         let result = TestCaseResult {
             test_case_id,
             status,
@@ -190,7 +195,7 @@ impl<R: Repository> TestService<R> {
             attachments: None,
         };
         composition::upsert_result(&mut run, result);
-        self.save_run(run_id, &run)
+        self.save(Resource::Runs, run_id, &run)
     }
 
     // --- reporting -----------------------------------------------------
@@ -265,47 +270,31 @@ impl<R: Repository> TestService<R> {
 
     // --- internals -----------------------------------------------------
 
-    fn load_suite(&self, id: &str) -> Result<TestSuite, DomainError> {
+    fn load<T: DeserializeOwned>(
+        &self,
+        resource: Resource,
+        id: &str,
+        missing_message: &str,
+    ) -> Result<T, DomainError> {
         let value = self
             .repository
-            .read(Resource::Suites, id)
-            .map_err(|error| error::load_error(error, "Test suite not found"))?;
+            .read(resource, id)
+            .map_err(|error| error::load_error(error, missing_message))?;
         serde_json::from_value(value)
-            .map_err(|_| DomainError::Internal("Stored suite JSON is invalid".to_owned()))
+            .map_err(|_| DomainError::Internal("Stored JSON is invalid".to_owned()))
     }
 
-    fn save_suite(&self, id: &str, suite: &TestSuite) -> Result<(), DomainError> {
-        let value = serde_json::to_value(suite)
-            .map_err(|_| DomainError::Internal("Failed to serialize suite".to_owned()))?;
+    fn save<T: Serialize>(
+        &self,
+        resource: Resource,
+        id: &str,
+        value: &T,
+    ) -> Result<(), DomainError> {
+        let document = serde_json::to_value(value)
+            .map_err(|_| DomainError::Internal("Failed to serialize document".to_owned()))?;
         self.repository
-            .write(Resource::Suites, id, &value)
+            .write(resource, id, &document)
             .map_err(DomainError::from)
-    }
-
-    fn load_run(&self, id: &str) -> Result<TestRun, DomainError> {
-        let value = self
-            .repository
-            .read(Resource::Runs, id)
-            .map_err(|error| error::load_error(error, "Test run not found"))?;
-        serde_json::from_value(value)
-            .map_err(|_| DomainError::Internal("Stored run JSON is invalid".to_owned()))
-    }
-
-    fn save_run(&self, id: &str, run: &TestRun) -> Result<(), DomainError> {
-        let value = serde_json::to_value(run)
-            .map_err(|_| DomainError::Internal("Failed to serialize test run".to_owned()))?;
-        self.repository
-            .write(Resource::Runs, id, &value)
-            .map_err(DomainError::from)
-    }
-
-    fn load_case(&self, id: &str) -> Result<TestCase, DomainError> {
-        let value = self
-            .repository
-            .read(Resource::Cases, id)
-            .map_err(|error| error::load_error(error, "Test case not found"))?;
-        serde_json::from_value(value)
-            .map_err(|_| DomainError::Internal("Stored case JSON is invalid".to_owned()))
     }
 }
 
@@ -483,6 +472,31 @@ mod tests {
             service.get(Resource::Projects, "checkout.json").is_ok(),
             "the source must remain"
         );
+    }
+
+    #[test]
+    fn duplicating_onto_an_existing_identifier_is_a_conflict() {
+        let (service, _directory) = service();
+        service
+            .create(Resource::Projects, &json!({ "name": "checkout" }))
+            .expect("source");
+        service
+            .create(Resource::Projects, &json!({ "name": "occupied" }))
+            .expect("target");
+
+        let error = service
+            .duplicate(
+                &duplicate::PROJECT,
+                "checkout.json",
+                &json!({ "newId": "occupied.json" }),
+            )
+            .expect_err("duplicate onto an occupied id");
+        assert!(matches!(error, DomainError::Conflict(_)));
+
+        let target = service
+            .get(Resource::Projects, "occupied.json")
+            .expect("target intact");
+        assert_eq!(target["name"], "occupied");
     }
 
     #[test]
