@@ -262,6 +262,8 @@ The crate exposes a library target (`src/lib.rs`) alongside the binary so integr
 
 GitHub Actions runs workflow linting, formatting, Clippy, unit and integration tests, a release build, dependency auditing, secret scanning, and production container scanning. Main-branch builds and SemVer tags publish numbered container artifacts to GHCR.
 
+The `checks`, `audit` and `sbom` jobs run inside a `rust` container, whose filesystem is discarded after every run. They mount a persistent Docker volume for `/usr/local/cargo/registry` and `/usr/local/cargo/git`, so the crates.io downloads a run does not already hold are fetched once and then reused, instead of every run depending on `static.crates.io` resolving. Only those two subdirectories are cached: the image's own `cargo` and `rustc` binaries stay in place, so a newer image is never shadowed by a stale cache.
+
 Repository contribution and agent workflow rules are documented in [AGENTS.md](AGENTS.md).
 
 ## Documentation
