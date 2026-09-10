@@ -146,6 +146,11 @@ The API listens on port `3000`, runs as an unprivileged user, and stores inspect
 
 Interactive Swagger UI is available at `http://localhost:3000/api-docs`; the raw OpenAPI document is at `http://localhost:3000/openapi.json`.
 
+The service is unauthenticated today — it must not be exposed beyond a trusted network. The authentication
+decision (deferred implementation, project-scoped RBAC, short-lived JWT plus refresh token, no database) is
+recorded in [docs/security/authentication-decision.md](docs/security/authentication-decision.md) and tracked in
+[#130](https://github.com/TucanoTechnology/TucanoTestAPI/issues/130).
+
 ### Errors and request limits
 
 Every rejection the application raises answers the stable envelope
@@ -276,4 +281,5 @@ Repository contribution and agent workflow rules are documented in [AGENTS.md](A
 | [docs/contracts/api-compatibility.md](docs/contracts/api-compatibility.md) | File-format and endpoint compatibility rules against the legacy implementation |
 | [docs/contracts/test-case-versioning-plan.md](docs/contracts/test-case-versioning-plan.md) | Field names, snapshot shape, trigger rules, and addressing for test-case versioning and revision history |
 | [docs/security/threat-model.md](docs/security/threat-model.md) | Trust boundaries, abuse cases, and security invariants |
+| [docs/security/authentication-decision.md](docs/security/authentication-decision.md) | The authentication decision (deferred) and its tracking ticket |
 | [AgentRules/](AgentRules/) | Organisation-wide engineering and process rules |
