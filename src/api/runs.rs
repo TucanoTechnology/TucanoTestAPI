@@ -2,6 +2,7 @@
 
 use axum::{
     Json, Router,
+    body::Bytes,
     extract::{Path, State},
     routing::{delete, get, post},
 };
@@ -9,6 +10,7 @@ use serde_json::{Value, json};
 
 use crate::{
     domain::{DomainError, duplicate},
+    models::ImportSummary,
     storage::{Repository, Resource},
 };
 
@@ -56,6 +58,16 @@ async fn record_run_result<R: Repository>(
     Ok(Json(json!({ "message": "Test result recorded in run" })))
 }
 
+async fn import_junit_results<R: Repository>(
+    State(service): State<AppState<R>>,
+    Path(id): Path<String>,
+    body: Bytes,
+) -> Result<Json<ImportSummary>, DomainError> {
+    let xml = std::str::from_utf8(&body)
+        .map_err(|_| DomainError::invalid_request("JUnit XML must be valid UTF-8"))?;
+    Ok(Json(service.import_junit_results(&id, xml)?))
+}
+
 async fn link_run_configuration<R: Repository>(
     State(service): State<AppState<R>>,
     Path(id): Path<String>,
@@ -93,6 +105,10 @@ pub(crate) fn routes<R: Repository + 'static>() -> Router<AppState<R>> {
         .route("/test_runs/{id}/test_suites", post(add_suite_to_run::<R>))
         .route("/test_runs/{id}/test_cases", post(add_case_to_run::<R>))
         .route("/test_runs/{id}/results", post(record_run_result::<R>))
+        .route(
+            "/test_runs/{id}/import/junit",
+            post(import_junit_results::<R>),
+        )
         .route(
             "/test_runs/{id}/configurations",
             post(link_run_configuration::<R>),

@@ -557,6 +557,46 @@ suite pins is written down rather than inferred from it.
   rule, the filter on suites, cases and runs, the unknown-key rejection that keeps `deny_unknown_fields` intact,
   and the document assertion that `?tags=` is published only where a tag can be stored.
 
+## JUnit XML Import Plan (Issue #85)
+
+Issue: [#85](https://github.com/TucanoTechnology/TucanoTestAPI/issues/85) — a continuous-integration run produces
+a JUnit XML report, and until now every `<testcase>` in it had to be typed into `POST /test_runs/{id}/results` by
+hand. `POST /test_runs/{id}/import/junit` reads such a report and records the results it can name, reporting what
+it did rather than failing on the parts it cannot use.
+
+- **The body is the report, the content type carries no framing.** The route reads the raw request body (any
+  `application/xml` document) and requires it to be UTF-8 and well-formed XML; a body that is neither answers
+  `400 invalid_request` and writes nothing. There is no envelope around the XML and no multipart part.
+- **Every `<testcase>` at any depth is a case.** The report is walked by descendant rather than by a fixed
+  `testsuites`/`testsuite`/`testcase` path, so a nested suite or an unusual wrapper is still read. A testcase is
+  named by `{classname}.{name}` when it carries a non-empty `classname`, else by `name` alone.
+- **Status maps onto the existing run statuses.** A `failure` or `error` child is `Failed`, a `skipped` child is
+  `Blocked`, and a testcase with none of those is `Passed`. No new status is introduced, so the recorded
+  `TestCaseResult` is the same shape `POST /test_runs/{id}/results` writes. A failure's or error's `message`
+  attribute becomes the result `notes`; a testcase's `timestamp` is the enclosing `testsuite`'s `timestamp`
+  attribute when it has one, else the moment the import ran.
+- **The report is a source of new results, never an overwrite.** A testcase the run already records — whether it
+  was recorded before the import or repeated within the same report — is counted as a duplicate and left
+  untouched, so a hand-recorded outcome is never replaced by a re-import. A `<testcase>` that cannot be named (no
+  `name`) is counted as an error and skipped rather than failing the whole request, so a partly unusable report
+  still imports the part that is usable.
+- **The response is a summary, and it is the same envelope Issue #86 reuses.** `ImportSummary` carries
+  `imported`, `skipped`, `errors`, `duplicates` and a nested per-status `summary`
+  (`{passed, failed, blocked}`). `skipped` is `duplicates + errors`, and the per-status counts describe only the
+  results actually written, so `passed + failed + blocked == imported`. A duplicate is not an error: `errors`
+  counts only testcases that could not be named.
+- **The route addresses a run like the result route does.** An unknown run is `404 not_found`, an unusable run
+  identifier is `400 invalid_id`, and a body larger than the request limit is the router's plain-text `413`
+  (Issue #76) — the import never runs after the fact. The run is loaded, its results overlaid, and the document
+  written once, so a report that cannot be parsed or a run that cannot be found leaves the stored run exactly as
+  it was.
+- Deviation recorded with tests in `tests/runs.rs` — the three status mappings and the notes/timestamp they
+  carry, duplicate and repeated cases left untouched, an absent suite timestamp filled from the clock, an
+  unnamed testcase counted as an error, malformed and non-UTF-8 bodies rejected with nothing written, and an
+  unknown run answered `404` — plus `src/domain/import.rs` unit tests over the parser itself, `tests/service.rs`
+  covering the documented route and resolving its `ImportSummary` schema references, and the `roxmltree`
+  dependency recorded in `docs/architecture/rust-service-core.md`.
+
 ## Breaking change accounting
 
 - **Tags added, and their query parameter withdrawn where it could not match** (Issue #49, plan above).
@@ -638,6 +678,12 @@ suite pins is written down rather than inferred from it.
   `GET`. The check is driven by the models — a `Default` instance is serialised and each present field is probed
   against it — so a field renamed in `src/models.rs` cannot drift out of the check. Deviation recorded with
   tests in `tests/validation.rs` and `tests/tags.rs::a_wrong_typed_scalar_is_rejected_with_the_field_named`.
+- **JUnit XML result import added** (Issue #85, plan above). `POST /test_runs/{id}/import/junit` and its
+  `ImportSummary` / `ImportCounts` schemas are new; the route writes the same `TestCaseResult` the results route
+  already does, so no stored document shape changed and no response that existed before was altered. Additive
+  only: no request that used to succeed is refused, and a report can only add results a run did not already
+  record. Deviation recorded with tests in `tests/runs.rs`, `src/domain/import.rs` and `tests/service.rs` as
+  listed in the plan.
 
 ## Required case matrix
 
