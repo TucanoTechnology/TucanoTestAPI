@@ -1277,3 +1277,350 @@ async fn listing_defects_needs_a_run_and_a_result_to_read() {
         }
     }
 }
+
+/// Records a failed result for `case_id` so a defect link has a home.
+async fn record_failure(app: &Router, case_id: &str) {
+    let (status, body) = send_json(
+        app,
+        json_request(
+            "POST",
+            "/test_runs/nightly.json/results",
+            &json!({"testCaseId": case_id, "status": "Failed", "timestamp": "1"}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "recording {case_id}: {body}");
+}
+
+#[tokio::test]
+async fn a_result_links_a_defect_of_every_tracker_type() {
+    let (_directory, app) = test_app();
+    create_run(&app, "nightly").await;
+    record_failure(&app, "TC-1").await;
+
+    // One link per tracker the API knows. The URL shape each tracker accepts is
+    // the shape the tracker itself uses, so what a client can paste into a
+    // browser is what the API stores.
+    let defects = [
+        (
+            "BUG-1",
+            "https://acme.atlassian.net/browse/BUG-1",
+            "jira",
+            None,
+        ),
+        ("7", "https://github.com/acme/app/issues/7", "github", None),
+        (
+            "BUG-2",
+            "https://gitlab.com/acme/app/-/issues/9",
+            "gitlab",
+            None,
+        ),
+        (
+            "BUG-3",
+            "https://tracker.example/BUG-3",
+            "custom",
+            Some(("Flickering checkout", "Open")),
+        ),
+    ];
+
+    for (defect_id, defect_url, tracker_type, extra) in defects {
+        let mut body = json!({
+            "defectId": defect_id,
+            "defectUrl": defect_url,
+            "trackerType": tracker_type,
+        });
+        if let Some((title, status)) = extra {
+            body["title"] = json!(title);
+            body["status"] = json!(status);
+        }
+
+        let (status, created) = send_json(
+            &app,
+            json_request(
+                "POST",
+                "/test_runs/nightly.json/results/TC-1/defects",
+                &body,
+            ),
+        )
+        .await;
+        assert_eq!(
+            status,
+            StatusCode::CREATED,
+            "linking {defect_id}: {created}"
+        );
+        assert_eq!(created["message"], "Defect linked to test result");
+        let link_id = created["id"].as_str().expect("the API derives the link id");
+        assert!(
+            link_id.starts_with("link-"),
+            "the derived id is the API's own: {link_id}"
+        );
+
+        // The identifier the API returned is the one the read route publishes,
+        // so a client never has to guess how to address the link it just made.
+        let (status, listed) =
+            send_json(&app, get("/test_runs/nightly.json/results/TC-1/defects")).await;
+        assert_eq!(status, StatusCode::OK, "listing: {listed}");
+        let listed = listed["defects"].as_array().expect("defects array");
+        let newest = listed.last().expect("the link just created");
+        assert_eq!(newest["linkId"], link_id);
+        assert_eq!(newest["defectId"], defect_id);
+        assert_eq!(newest["defectUrl"], defect_url);
+        assert_eq!(newest["trackerType"], tracker_type);
+        assert!(
+            newest["linkedAt"].is_string(),
+            "the API dates the link: {newest}"
+        );
+        match extra {
+            Some((title, status)) => {
+                assert_eq!(newest["title"], title);
+                assert_eq!(newest["status"], status);
+            }
+            None => {
+                assert!(
+                    newest.get("title").is_none() && newest.get("status").is_none(),
+                    "an omitted optional field is absent, not null: {newest}"
+                );
+            }
+        }
+    }
+
+    let (_, listed) = send_json(&app, get("/test_runs/nightly.json/results/TC-1/defects")).await;
+    assert_eq!(
+        listed["defects"].as_array().expect("defects array").len(),
+        4
+    );
+}
+
+#[tokio::test]
+async fn a_defect_link_rejects_a_body_or_tracker_the_api_cannot_use() {
+    let (_directory, app) = test_app();
+    create_run(&app, "nightly").await;
+    record_failure(&app, "TC-1").await;
+
+    // Every field the client must supply, an unknown field, and the two
+    // identifiers the API derives rather than reads. A body naming `linkId` or
+    // `linkedAt` is rejected instead of having it silently thrown away.
+    let bad_bodies = [
+        json!({"defectUrl": "https://tracker.example/BUG", "trackerType": "custom"}),
+        json!({"defectId": "BUG-1", "defectUrl": "https://tracker.example/BUG"}),
+        json!({"defectId": "BUG-1", "trackerType": "custom"}),
+        json!({"defectId": "", "defectUrl": "https://tracker.example/BUG", "trackerType": "custom"}),
+        json!({"defectId": "BUG-1", "defectUrl": "https://tracker.example/BUG", "trackerType": "custom", "sneaky": true}),
+        json!({"defectId": "BUG-1", "defectUrl": "https://tracker.example/BUG", "trackerType": "custom", "linkId": "L-1"}),
+        json!({"defectId": "BUG-1", "defectUrl": "https://tracker.example/BUG", "trackerType": "custom", "linkedAt": "1"}),
+        json!({"defectId": "BUG-1", "defectUrl": "https://tracker.example/BUG", "trackerType": "trello"}),
+        json!({"defectId": "BUG-1", "defectUrl": "https://tracker.example/BUG", "trackerType": 7}),
+        // A URL the named tracker would not use, and one that is not HTTPS.
+        json!({"defectId": "BUG-1", "defectUrl": "https://tracker.example/BUG-1", "trackerType": "jira"}),
+        json!({"defectId": "BUG-1", "defectUrl": "http://tracker.example/BUG-1", "trackerType": "custom"}),
+        json!({"defectId": "BUG-1", "defectUrl": "https://github.com/acme/app/pull/7", "trackerType": "github"}),
+    ];
+    for body in bad_bodies {
+        let (status, response) = send_json(
+            &app,
+            json_request(
+                "POST",
+                "/test_runs/nightly.json/results/TC-1/defects",
+                &body,
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "body {body}: {response}");
+        assert_error_envelope(&response, "invalid_request");
+    }
+
+    // A rejected body writes nothing, so the result still links no defect.
+    let (_, listed) = send_json(&app, get("/test_runs/nightly.json/results/TC-1/defects")).await;
+    assert_eq!(listed, json!({"defects": []}));
+
+    let good = json!({"defectId": "BUG-1", "defectUrl": "https://tracker.example/BUG-1", "trackerType": "custom"});
+
+    // An unusable run identifier is a 400 before the storage is consulted; an
+    // unknown run and a case the run never recorded are both 404.
+    for (route, expected) in [
+        (
+            "/test_runs/not-a-document/results/TC-1/defects",
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            "/test_runs/missing.json/results/TC-1/defects",
+            StatusCode::NOT_FOUND,
+        ),
+        (
+            "/test_runs/nightly.json/results/TC-2/defects",
+            StatusCode::NOT_FOUND,
+        ),
+    ] {
+        let (status, response) = send_json(&app, json_request("POST", route, &good)).await;
+        assert_eq!(status, expected, "POST {route}: {response}");
+        if expected == StatusCode::BAD_REQUEST {
+            assert_error_envelope(&response, "invalid_id");
+        } else {
+            assert_error_envelope(&response, "not_found");
+        }
+    }
+}
+
+#[tokio::test]
+async fn the_same_defect_cannot_be_linked_to_one_result_twice() {
+    let (_directory, app) = test_app();
+    create_run(&app, "nightly").await;
+    record_failure(&app, "TC-1").await;
+
+    let body = json!({"defectId": "BUG-1", "defectUrl": "https://tracker.example/BUG-1", "trackerType": "custom"});
+    let (status, first) = send_json(
+        &app,
+        json_request(
+            "POST",
+            "/test_runs/nightly.json/results/TC-1/defects",
+            &body,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "first link: {first}");
+
+    // The duplicate is a conflict, and the link that landed first survives.
+    let (status, response) = send_json(
+        &app,
+        json_request(
+            "POST",
+            "/test_runs/nightly.json/results/TC-1/defects",
+            &body,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_error_envelope(&response, "conflict");
+
+    let (_, listed) = send_json(&app, get("/test_runs/nightly.json/results/TC-1/defects")).await;
+    let listed = listed["defects"].as_array().expect("defects array");
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0]["linkId"], first["id"]);
+
+    // A different defect on the same result is not a duplicate.
+    let (status, second) = send_json(
+        &app,
+        json_request(
+            "POST",
+            "/test_runs/nightly.json/results/TC-1/defects",
+            &json!({"defectId": "BUG-2", "defectUrl": "https://tracker.example/BUG-2", "trackerType": "custom"}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "second defect: {second}");
+
+    // The identity is per result: the same defect may be linked to another case.
+    let (status, _) = send_json(
+        &app,
+        json_request(
+            "POST",
+            "/test_runs/nightly.json/results",
+            &json!({"testCaseId": "TC-2", "status": "Failed", "timestamp": "1"}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, other) = send_json(
+        &app,
+        json_request(
+            "POST",
+            "/test_runs/nightly.json/results/TC-2/defects",
+            &body,
+        ),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::CREATED,
+        "same defect, other case: {other}"
+    );
+}
+
+#[tokio::test]
+async fn a_defect_link_can_be_removed_and_is_then_gone() {
+    let (_directory, app) = test_app();
+    create_run(&app, "nightly").await;
+    record_failure(&app, "TC-1").await;
+
+    let mut ids = Vec::new();
+    for defect_id in ["BUG-1", "BUG-2"] {
+        let (status, created) = send_json(
+            &app,
+            json_request(
+                "POST",
+                "/test_runs/nightly.json/results/TC-1/defects",
+                &json!({
+                    "defectId": defect_id,
+                    "defectUrl": format!("https://tracker.example/{defect_id}"),
+                    "trackerType": "custom",
+                }),
+            ),
+        )
+        .await;
+        assert_eq!(
+            status,
+            StatusCode::CREATED,
+            "linking {defect_id}: {created}"
+        );
+        ids.push(created["id"].as_str().expect("link id").to_owned());
+    }
+
+    // Removing one link leaves the other in place.
+    let (status, removed) = send_json(
+        &app,
+        delete(&format!(
+            "/test_runs/nightly.json/results/TC-1/defects/{}",
+            ids[0]
+        )),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "unlinking: {removed}");
+
+    let (_, listed) = send_json(&app, get("/test_runs/nightly.json/results/TC-1/defects")).await;
+    let listed = listed["defects"].as_array().expect("defects array");
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0]["linkId"], ids[1]);
+
+    // The same link cannot be removed twice, and an identifier the result never
+    // carried is not found either.
+    for link_id in [ids[0].as_str(), "link-0"] {
+        let (status, response) = send_json(
+            &app,
+            delete(&format!(
+                "/test_runs/nightly.json/results/TC-1/defects/{link_id}"
+            )),
+        )
+        .await;
+        assert_eq!(
+            status,
+            StatusCode::NOT_FOUND,
+            "unlinking {link_id}: {response}"
+        );
+        assert_error_envelope(&response, "not_found");
+    }
+
+    // The link identifier is opaque, so it is never validated as a document
+    // name; the run and result are what the route validates.
+    for (route, expected) in [
+        (
+            "/test_runs/not-a-document/results/TC-1/defects/link-0",
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            "/test_runs/missing.json/results/TC-1/defects/link-0",
+            StatusCode::NOT_FOUND,
+        ),
+        (
+            "/test_runs/nightly.json/results/TC-2/defects/link-0",
+            StatusCode::NOT_FOUND,
+        ),
+    ] {
+        let (status, response) = send_json(&app, delete(route)).await;
+        assert_eq!(status, expected, "DELETE {route}: {response}");
+        if expected == StatusCode::BAD_REQUEST {
+            assert_error_envelope(&response, "invalid_id");
+        } else {
+            assert_error_envelope(&response, "not_found");
+        }
+    }
+}
