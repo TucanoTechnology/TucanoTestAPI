@@ -1,7 +1,10 @@
 mod common;
 
 use axum::http::StatusCode;
-use common::{assert_error_envelope, create_named, delete, get, json_request, send_json, test_app};
+use common::{
+    assert_error_envelope, create_case_in, create_named, create_project, create_suite, delete, get,
+    json_request, send_json, test_app,
+};
 use serde_json::json;
 
 #[tokio::test]
@@ -125,23 +128,12 @@ async fn test_runs_support_composition_execution_and_isolation() {
     )
     .await;
 
-    send_json(
+    let project = create_project(&app, "checkout").await;
+    create_suite(&app, &project, "smoke").await;
+    create_case_in(
         &app,
-        json_request(
-            "POST",
-            "/test_suites",
-            &json!({"suiteId": "S-001.json", "name": "smoke", "testCases": []}),
-        ),
-    )
-    .await;
-
-    send_json(
-        &app,
-        json_request(
-            "POST",
-            "/test_cases",
-            &json!({"testCaseId": "TC-001.json", "title": "Login", "expectedResult": "Success"}),
-        ),
+        &format!("/projects/{project}/test_cases"),
+        "TC-001.json",
     )
     .await;
 

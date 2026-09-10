@@ -69,10 +69,16 @@ impl Error for DomainError {}
 
 impl From<io::Error> for DomainError {
     /// Generic storage translation, matching the legacy `storage_error` helper.
+    ///
+    /// `AlreadyExists` is storage's way of saying a name is taken — by another
+    /// child of the same parent, by a folder holding a different kind of child,
+    /// or by the parent's own marker file — so it becomes a conflict rather
+    /// than an opaque storage failure.
     fn from(error: io::Error) -> Self {
         match error.kind() {
             io::ErrorKind::NotFound => Self::NotFound("Resource not found".to_owned()),
             io::ErrorKind::InvalidInput => Self::invalid_request("Invalid request"),
+            io::ErrorKind::AlreadyExists => Self::Conflict("Resource already exists".to_owned()),
             _ => Self::Storage,
         }
     }
@@ -92,6 +98,17 @@ pub fn read_error(error: io::Error) -> DomainError {
 pub fn delete_error(error: io::Error) -> DomainError {
     match error.kind() {
         io::ErrorKind::NotFound => DomainError::NotFound("Resource not found".to_owned()),
+        io::ErrorKind::InvalidInput => DomainError::invalid_id(),
+        _ => DomainError::from(error),
+    }
+}
+
+/// Translation for reading one stored document, where the caller names the
+/// missing entity and an unusable identifier is reported as such rather than
+/// as a generic bad request.
+pub fn document_error(error: io::Error, missing: &str) -> DomainError {
+    match error.kind() {
+        io::ErrorKind::NotFound => DomainError::NotFound(missing.to_owned()),
         io::ErrorKind::InvalidInput => DomainError::invalid_id(),
         _ => DomainError::from(error),
     }

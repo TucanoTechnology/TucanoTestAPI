@@ -2,9 +2,10 @@ mod common;
 
 use axum::http::StatusCode;
 use common::{
-    assert_error_envelope, content_type, create_test_case, delete, get, multipart_request,
-    multipart_without_file, send, send_full, send_json, test_app,
+    assert_error_envelope, content_type, create_test_case, delete, get, json_request,
+    multipart_request, multipart_without_file, send, send_full, send_json, test_app,
 };
+use serde_json::json;
 
 #[tokio::test]
 async fn attachments_support_upload_download_and_delete() {
@@ -120,4 +121,43 @@ async fn attachments_are_removed_with_their_test_case() {
     )
     .await;
     assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn attachments_cannot_address_an_ambiguous_case() {
+    let (_directory, app) = test_app();
+
+    // One id in two parents: the project's own case and a copy inside a suite.
+    let project = common::create_project(&app, "checkout").await;
+    let suite = common::create_suite(&app, &project, "smoke").await;
+    common::create_case_in(&app, &format!("/projects/{project}/test_cases"), "TC-001").await;
+    let (status, _) = send_json(
+        &app,
+        json_request(
+            "POST",
+            &format!("/test_suites/{suite}/test_cases"),
+            &json!({"testCaseId": "TC-001"}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    // The case is ambiguous now, so the attachment routes must not guess a home.
+    let (status, body) = send_json(
+        &app,
+        multipart_request("/test_cases/TC-001/attachments", "notes.txt", b"evidence"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_error_envelope(&body, "conflict");
+    assert!(
+        body["error"]["message"]
+            .as_str()
+            .expect("error message")
+            .contains("/projects/{id}/test_cases"),
+        "the conflict must name the parent-scoped routes: {body}"
+    );
+
+    let (status, _) = send(&app, get("/test_cases/TC-001/attachments/missing.txt")).await;
+    assert_eq!(status, StatusCode::CONFLICT);
 }
