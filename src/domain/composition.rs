@@ -5,7 +5,7 @@
 //! mutations of already-loaded documents so they can be reasoned about — and
 //! tested — without a server or a filesystem.
 
-use crate::models::{TestCase, TestCaseResult, TestRun, TestSuite};
+use crate::models::{TestCase, TestCaseResult, TestConfiguration, TestRun, TestSuite};
 
 use super::error::DomainError;
 
@@ -80,6 +80,54 @@ pub fn attach_case_to_run(
     Ok(())
 }
 
+/// Links a top-level configuration to a run, refusing one that is already
+/// referenced.
+///
+/// A configuration is a real resource with a home of its own, so the run stores
+/// a reference rather than a copy: the reference keeps the configuration's
+/// identifier and name, and drops the descriptive fields the resource owns.
+pub fn attach_configuration_to_run(
+    run: &mut TestRun,
+    configuration: &TestConfiguration,
+    target_config_id: &str,
+) -> Result<(), DomainError> {
+    let configurations = run.configurations.get_or_insert_with(Vec::new);
+    let duplicate = configurations.iter().any(|existing| {
+        existing.config_id == configuration.config_id || existing.config_id == target_config_id
+    });
+    if duplicate {
+        return Err(DomainError::Conflict(
+            "Test configuration is already linked to test run".to_owned(),
+        ));
+    }
+    configurations.push(TestConfiguration {
+        config_id: target_config_id.to_owned(),
+        name: configuration.name.clone(),
+        browser: None,
+        os: None,
+        device: None,
+        resolution: None,
+    });
+    Ok(())
+}
+
+/// Removes a configuration reference from a run; one that is not linked is a
+/// 404.
+pub fn detach_configuration_from_run(
+    run: &mut TestRun,
+    config_id: &str,
+) -> Result<(), DomainError> {
+    let configurations = run.configurations.get_or_insert_with(Vec::new);
+    let before = configurations.len();
+    configurations.retain(|existing| existing.config_id != config_id);
+    if configurations.len() == before {
+        return Err(DomainError::NotFound(
+            "Test configuration not linked to test run".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
 /// Records a result for a case, replacing any earlier result for that case.
 pub fn upsert_result(run: &mut TestRun, result: TestCaseResult) {
     let results = run.results.get_or_insert_with(Vec::new);
@@ -121,6 +169,17 @@ mod tests {
             description: None,
             test_cases: cases,
             tags: None,
+        }
+    }
+
+    fn configuration(id: &str, name: &str) -> TestConfiguration {
+        TestConfiguration {
+            config_id: id.to_owned(),
+            name: name.to_owned(),
+            browser: Some("chrome".to_owned()),
+            os: Some("linux".to_owned()),
+            device: None,
+            resolution: None,
         }
     }
 
@@ -222,5 +281,53 @@ mod tests {
             "the added case must be a copy"
         );
         assert_eq!(json!(source.test_case_id), json!("TC-1"));
+    }
+
+    #[test]
+    fn a_configuration_joins_a_run_as_a_reference_exactly_once() {
+        let mut target = run();
+        let source = configuration("chrome-linux.json", "chrome-linux");
+        attach_configuration_to_run(&mut target, &source, "chrome-linux.json").expect("link");
+
+        let linked = target.configurations.as_ref().expect("linked");
+        assert_eq!(linked.len(), 1);
+        assert_eq!(linked[0].config_id, "chrome-linux.json");
+        assert_eq!(linked[0].name, "chrome-linux");
+        assert_eq!(
+            linked[0].browser, None,
+            "a reference embeds no full document"
+        );
+
+        let error = attach_configuration_to_run(&mut target, &source, "chrome-linux.json")
+            .expect_err("second link must conflict");
+        assert!(matches!(error, DomainError::Conflict(_)));
+        assert_eq!(
+            target
+                .configurations
+                .map(|configurations| configurations.len()),
+            Some(1)
+        );
+    }
+
+    #[test]
+    fn removing_an_absent_configuration_is_not_found() {
+        let mut target = run();
+        let error = detach_configuration_from_run(&mut target, "chrome-linux.json")
+            .expect_err("absent link");
+        assert!(matches!(error, DomainError::NotFound(_)));
+
+        attach_configuration_to_run(
+            &mut target,
+            &configuration("chrome-linux.json", "chrome-linux"),
+            "chrome-linux.json",
+        )
+        .expect("link");
+        detach_configuration_from_run(&mut target, "chrome-linux.json").expect("unlink");
+        assert_eq!(
+            target
+                .configurations
+                .map(|configurations| configurations.len()),
+            Some(0)
+        );
     }
 }
