@@ -136,7 +136,10 @@ entity. This plan supersedes the flat-layout behaviour implied by the baseline: 
   (each recursively assembled) and, when the project owns at least one direct case, an additional **new optional
   `testCases` field** holding the assembled directly owned cases. The field is omitted when there are none so the
   legacy response shape is preserved in the common case. (Wire addition — see *Breaking change accounting*.)
-- `GET /test_suites` and `GET /test_cases` remain global scans of the tree and return distinct, sorted ids.
+- `GET /test_suites` and `GET /test_cases` remain global scans of the tree and return distinct, sorted ids. Both
+  scans are served but undocumented in `openapi.json` (retired with the flat creation routes — see *Real-Parent
+  Creation Plan*), so an old caller can still enumerate the tree while the published contract advertises only the
+  parent-scoped routes.
 - Global dereference (`GET`/`PUT`/`DELETE /test_suites/{id}`, `/test_cases/{id}`, attachment and duplicate
   routes): zero occurrences → `404 Not Found`, exactly one → operate, two or more → `409 Conflict` with a
   message directing the caller to the parent-scoped endpoints. Lists never fail on duplicates; they de-duplicate.
@@ -172,10 +175,12 @@ real parent; reads and global lists stay global.
 - Cases are created with `POST /projects/{project_id}/test_cases` or `POST /test_suites/{suite_id}/test_cases`
   (payload requires `testCaseId`, `title`, and `expectedResult`, as today). A case created under a suite is owned
   by that suite; a case created directly under a project is owned by that project.
-- The flat top-level creation endpoints `POST /test_suites` and `POST /test_cases` are retired: the router no
-  longer registers them and `openapi.json` documents only the parent-scoped creation. The response when a caller
-  needs a stable explanation is `400 Bad Request` with the standard error envelope and a message naming the
-  replacement route.
+- The flat top-level creation endpoints `POST /test_suites` and `POST /test_cases` are retired. The router still
+  registers the two paths so an old caller receives a stable explanation, but each answers `400 Bad Request` with
+  the standard error envelope and a message naming the replacement route, and **`openapi.json` documents only the
+  parent-scoped creation**. Because the published contract is compared path-by-path against the registered route
+  set, the exemption is path-granular: the whole `/test_suites` and `/test_cases` path keys are omitted, so the
+  global `GET /test_suites` and `GET /test_cases` scans described under Issue #65 are served but undocumented.
 - New parent-scoped collection routes, all documented in `openapi.json`:
   - `GET /projects/{project_id}/test_suites` — the project's suite ids.
   - `GET /projects/{project_id}/test_cases` — the project's direct-case ids.
@@ -290,6 +295,13 @@ decomposition plan, which is closed as superseded. #71 is the first step of the 
   the integration suites.
 - **Parent-required creation and copy/move placement** change the composition wire contract described by the
   Issue #23/#24 notes above; those notes remain valid only for the payload shapes that this plan keeps.
+- **Retired flat creation routes** (Issue #66). `POST /test_suites` and `POST /test_cases` no longer create; they
+  answer `400 Bad Request` naming the parent-scoped replacement. Both paths stay registered, so the published
+  contract omits them as a whole — which also removes the global `GET /test_suites` and `GET /test_cases` scans
+  from `openapi.json` even though the router serves them. The scans keep their distinct, sorted output and are
+  covered by `tests/suites.rs` and `tests/cases.rs`; only their documentation is withdrawn. Deviation recorded
+  with tests in `tests/service.rs::openapi_document_matches_the_registered_routes` (documented paths are exactly
+  `api::ROUTES` minus `api::UNDOCUMENTED_ROUTES`) and `tests/suites.rs::the_flat_creation_route_only_explains_the_replacement`.
 - **Create and update validate payloads before persisting** (Issue #71). A body carrying a top-level key the
   resource does not define is now rejected with `400 Bad Request` and the stable envelope
   (`{"error":{"code":"invalid_request","message":"Unknown field `x`"}}`), and nothing is written; previously any

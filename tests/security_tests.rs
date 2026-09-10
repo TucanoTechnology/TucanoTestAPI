@@ -2,6 +2,7 @@ mod common;
 
 use tempfile::TempDir;
 use tucano_test::repository::{FileRepository, Repository, Resource};
+use tucano_test::storage::Parent;
 
 /// Helper to create a test repository with a temporary directory
 fn setup_test_repo() -> (FileRepository, TempDir) {
@@ -17,21 +18,21 @@ mod path_traversal_tests {
     #[test]
     fn test_rejects_dot_dot_traversal_in_resource_id() {
         let (repo, _temp) = setup_test_repo();
-        let result = repo.read(Resource::Projects, "../../etc/passwd");
+        let result = repo.read_at(Resource::Projects, None, "../../etc/passwd.json");
         assert!(result.is_err(), "Path traversal should be rejected");
     }
 
     #[test]
     fn test_rejects_absolute_path_in_resource_id() {
         let (repo, _temp) = setup_test_repo();
-        let result = repo.read(Resource::Projects, "/etc/passwd");
+        let result = repo.read_at(Resource::Projects, None, "/etc/passwd.json");
         assert!(result.is_err(), "Absolute paths should be rejected");
     }
 
     #[test]
     fn test_rejects_encoded_traversal() {
         let (repo, _temp) = setup_test_repo();
-        let result = repo.read(Resource::Projects, "..%2F..%2Fetc%2Fpasswd");
+        let result = repo.read_at(Resource::Projects, None, "..%2F..%2Fetc%2Fpasswd.json");
         assert!(result.is_err(), "URL-encoded traversal should be rejected");
     }
 
@@ -43,11 +44,30 @@ mod path_traversal_tests {
             "name": "Malicious",
             "testSuites": []
         });
-        let result = repo.write(Resource::Projects, "../../etc/passwd.json", &value);
+        let result = repo.write_at(Resource::Projects, None, "../../etc/passwd.json", &value);
         assert!(
             result.is_err(),
             "Path traversal in write should be rejected"
         );
+    }
+
+    #[test]
+    fn test_rejects_traversal_through_a_case_identifier() {
+        let (repo, _temp) = setup_test_repo();
+        let home = Parent::Project("checkout.json".to_owned());
+
+        for identifier in ["../escape", "../../escape", "/etc/passwd"] {
+            let read = repo.read_at(Resource::Cases, Some(&home), identifier);
+            assert!(read.is_err(), "{identifier} should be rejected");
+
+            let written = repo.write_at(
+                Resource::Cases,
+                Some(&home),
+                identifier,
+                &serde_json::json!({"title": "x"}),
+            );
+            assert!(written.is_err(), "{identifier} should be rejected");
+        }
     }
 }
 
@@ -60,20 +80,17 @@ mod symlink_tests {
     fn test_rejects_symlink_escape() {
         let (repo, temp) = setup_test_repo();
 
-        // A valid-JSON file outside the data root: if the link were followed,
-        // `read` would succeed and leak its contents, so an `InvalidData` error
-        // would prove the check never ran.
-        let outside = temp.path().parent().unwrap().join("outside-secret.json");
-        std::fs::write(
-            &outside,
-            serde_json::to_string(&serde_json::json!({"name": "secret"})).unwrap(),
-        )
-        .unwrap();
+        // A folder outside the data root holding a valid project document: if
+        // the link were followed, `read_at` would succeed and leak its
+        // contents, so `PermissionDenied` proves the check never ran.
+        let outside = temp.path().parent().unwrap().join("outside-secret");
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(outside.join("project.json"), r#"{"name": "secret"}"#).unwrap();
 
-        let symlink_path = temp.path().join("projects").join("evil.json");
+        let symlink_path = temp.path().join("projects").join("evil");
         symlink(&outside, &symlink_path).unwrap();
 
-        let read_result = repo.read(Resource::Projects, "evil.json");
+        let read_result = repo.read_at(Resource::Projects, None, "evil.json");
         assert_eq!(
             read_result.unwrap_err().kind(),
             std::io::ErrorKind::PermissionDenied,
@@ -103,7 +120,7 @@ mod malformed_json_tests {
             "testSuites": [],
             "unknownField": "allowed at repo layer"
         });
-        let result = repo.write(Resource::Projects, "P-001.json", &value);
+        let result = repo.write_at(Resource::Projects, None, "P-001.json", &value);
         assert!(result.is_ok(), "Repository accepts any valid JSON");
     }
 
@@ -116,7 +133,7 @@ mod malformed_json_tests {
             "projectId": "P-001"
             // Missing required fields - repo accepts, API would reject
         });
-        let result = repo.write(Resource::Projects, "P-001.json", &value);
+        let result = repo.write_at(Resource::Projects, None, "P-001.json", &value);
         assert!(result.is_ok(), "Repository layer does not validate schema");
     }
 }
@@ -134,10 +151,12 @@ mod data_integrity_tests {
             "name": "Test Project",
             "testSuites": []
         });
-        repo.write(Resource::Projects, "P-001.json", &value)
+        repo.write_at(Resource::Projects, None, "P-001.json", &value)
             .unwrap();
 
-        let result = repo.read(Resource::Projects, "P-001.json").unwrap();
+        let result = repo
+            .read_at(Resource::Projects, None, "P-001.json")
+            .unwrap();
         assert_eq!(result["name"], "Test Project");
     }
 
@@ -163,7 +182,7 @@ mod data_integrity_tests {
                 "name": "Thread 1",
                 "testSuites": []
             });
-            repo1.write(Resource::Projects, "P-001.json", &value)
+            repo1.write_at(Resource::Projects, None, "P-001.json", &value)
         });
 
         let handle2 = thread::spawn(move || {
@@ -173,19 +192,22 @@ mod data_integrity_tests {
                 "name": "Thread 2",
                 "testSuites": []
             });
-            repo2.write(Resource::Projects, "P-001.json", &value)
+            repo2.write_at(Resource::Projects, None, "P-001.json", &value)
         });
 
         let result1 = handle1.join().unwrap();
         let result2 = handle2.join().unwrap();
 
-        // At least one should succeed, and the file should be valid
+        // Both writers run under the storage lock, so each either publishes a
+        // complete document or fails; the survivor is always valid JSON.
         assert!(
             result1.is_ok() || result2.is_ok(),
-            "At least one write should succeed"
+            "at least one write should succeed"
         );
 
-        let final_value = repo.read(Resource::Projects, "P-001.json").unwrap();
+        let final_value = repo
+            .read_at(Resource::Projects, None, "P-001.json")
+            .unwrap();
         assert!(
             final_value["name"].as_str().is_some(),
             "Final value should be valid JSON"

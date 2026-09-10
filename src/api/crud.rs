@@ -18,6 +18,7 @@
 use axum::{Json, http::StatusCode};
 use serde_json::{Value, json};
 
+use crate::domain::Composed;
 use crate::domain::duplicate::DuplicateSpec;
 
 /// Generates `list_*`, `get_*`, `create_*`, `update_*` and `delete_*` for one
@@ -90,6 +91,15 @@ pub(crate) fn duplicated(spec: &DuplicateSpec, new_id: &str) -> (StatusCode, Jso
     (
         StatusCode::CREATED,
         Json(json!({ "message": spec.duplicated_message, "id": new_id })),
+    )
+}
+
+/// The 201 body a create-or-place request returns. `noun` names the resource so
+/// the message says whether it was created, copied, or moved.
+pub(crate) fn composed_response(composed: &Composed, noun: &str) -> (StatusCode, Json<Value>) {
+    (
+        StatusCode::CREATED,
+        Json(json!({ "message": composed.message(noun), "id": composed.id() })),
     )
 }
 

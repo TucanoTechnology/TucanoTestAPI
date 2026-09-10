@@ -17,13 +17,25 @@ TUCANO_DATA_DIR/
 ├── projects/
 │   └── <project>/
 │       ├── project.json                 project details
-│       ├── <test case>/                 case data, steps, attachments (directly in the project)
+│       ├── <test case>/                 case data directly in the project
+│       │   ├── test-case.json           case details, steps, expected results
+│       │   └── <attachments>
 │       └── <test suite>/
-│           ├── suite.json               suite details + suite case data
-│           └── <test case>/             case data, steps, attachments
-├── test_runs/                           point-in-time runs and their results
-└── milestones/                          milestone details
+│           ├── suite.json               suite details
+│           └── <test case>/
+│               ├── test-case.json
+│               └── <attachments>
+├── test_runs/<id>.json                  point-in-time runs and their results
+├── milestones/<id>.json                 milestone details
+└── configurations/<id>.json             environment configurations
 ```
+
+A parent marker keeps the legacy document shape with an empty child array (`project.json` stores
+`testSuites: []`, `suite.json` stores `testCases: []`); membership is the folders themselves.
+Reads assemble the child documents from the tree, so `GET /projects/{id}` returns its suites (each
+recursively assembled) plus an optional response-only `testCases` field of directly owned cases, and
+`GET /test_suites/{id}` returns its member cases. Because membership lives in the folders, the
+stored markers can never contradict the tree.
 
 The conceptual hierarchy, as distinct from the exact on-disk encoding:
 
@@ -51,19 +63,28 @@ Milestones and test runs must never go silently stale when the source cases or s
 change: they either carry their own snapshot at inclusion time or record the history of the runs
 they were included in with that run's results.
 
-Two API semantics follow from this concept and apply to every composition request:
+Three API semantics follow from this concept and apply to every composition request:
 
 - **A real parent is required at creation.** A test suite is created inside its project and a test
   case inside its project or a test suite; nothing is created in a standalone top-level pool. The
   on-disk tree mirrors these homes: a suite folder lives under its project and a case folder under
-  its project or its suite. Reads remain global — listing and retrieval search the whole tree, so
-  cases and suites are always findable regardless of home.
+  its project or its suite. The creation endpoints are parent-scoped —
+  `POST /projects/{id}/test_suites`, `POST /projects/{id}/test_cases`, and
+  `POST /test_suites/{id}/test_cases`; the retired flat `POST /test_suites` and `POST /test_cases`
+  answer `400 Bad Request` naming their replacement. Reads remain global — listing and retrieval
+  search the whole tree, so cases and suites are always findable regardless of home.
 - **Inclusion is copy by default and move opt-in.** Adding an existing case or suite to another
   parent accepts `"mode": "copy" | "move"` and defaults to `copy`: `copy` duplicates the entity
   under the target parent (duplicate-on-include) while the source keeps its home and both copies
   are editable independently; `move` relocates the entity so the target parent becomes its only
   home. Test runs always copy at inclusion — they snapshot the selected cases and suites and never
   own them.
+- **Identifiers are unique where they live.** A project id is globally unique, a suite id is unique
+  within its project, and a case id is unique within its parent. Copy-on-include may therefore place
+  the same id under several parents; a document-level route (`GET`/`PUT`/`DELETE /test_cases/{id}`,
+  attachments, duplicate) operates on the one occurrence when it is unique and answers
+  `409 Conflict`, naming the parent-scoped routes, when it is ambiguous. Listing routes never fail on
+  duplicates; they de-duplicate.
 
 This concept is enforced for agent work in [AGENTS.md](AGENTS.md).
 
@@ -191,11 +212,11 @@ Tests are split into two layers and both run in CI on every push and pull reques
 
 | Suite | Covers |
 | --- | --- |
-| `tests/service.rs` | Health, OpenAPI document, Swagger UI, malformed bodies, traversal rejection, persistence across restarts |
+| `tests/service.rs` | Health, OpenAPI document, Swagger UI, malformed bodies, traversal rejection, the on-disk tree layout, persistence across restarts |
 | `tests/projects.rs` | Project CRUD, validation, conflicts, error envelopes |
-| `tests/suites.rs` | Test suite CRUD, validation, conflicts, missing resources |
+| `tests/suites.rs` | Test suite CRUD, parent-scoped creation, copy/move composition, ambiguity conflicts, missing resources |
 | `tests/runs.rs` | Test run CRUD, validation, conflicts, missing resources |
-| `tests/cases.rs` | Test case CRUD, required fields, conflicts, missing resources |
+| `tests/cases.rs` | Test case CRUD, required fields, parent-scoped creation, copy/move composition, conflicts, missing resources |
 | `tests/milestones.rs` | Milestone CRUD, validation, conflicts, and progress derived from the referenced runs |
 | `tests/configurations.rs` | Configuration CRUD, validation, conflicts, missing resources, restart persistence, and use by a run |
 | `tests/attachments.rs` | Upload, download, delete, content types, removal with the parent test case |
