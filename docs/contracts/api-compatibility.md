@@ -292,6 +292,119 @@ decomposition plan, which is closed as superseded. #71 is the first step of the 
   so a body carrying a field the resource does not define is rejected rather than stored. See *Breaking change
   accounting*.
 
+## Error Contract and Schema Strictness Plan (Issue #76)
+
+Issue: [#76](https://github.com/TucanoTechnology/TucanoTestAPI/issues/76) — `openapi.json` described an error
+contract that the service does not return: the `400`s several operations actually answer were missing, the
+`413` was published as the error envelope rather than the plain text the router sends, the multipart upload
+route's extractor-level rejection was undocumented, and the published schemas were neither as strict as the
+payload validation nor as permissive as the parsers that accept them. This plan reconciles the document with
+the observed behaviour. It is documentation-only: no status code, response body, or validation rule changed.
+
+### Validation order (the recorded decision)
+
+Whichever check runs first decides the error a caller sees, so the order is part of the contract. The decision
+for this issue was to **document where each code occurs**, not to re-order the checks:
+
+1. **Body framing (extractor).** The `Json` and `Multipart` extractors run before the handler. A body they
+   cannot frame is rejected there, and that rejection is plain text rather than the envelope (see
+   *Extractor responses*).
+2. **Payload validation.** `create` and `update` validate the body against the resource's typed model first:
+   a non-object body, an unknown top-level key, or a malformed nested collection answers
+   `400 invalid_request` and nothing is written. An empty object is a valid partial payload, so
+   `PUT /test_cases/{id}` with `{}` proceeds to the identifier lookup rather than failing validation.
+3. **Identifier resolution.** A path identifier that is not a single usable component answers
+   `400 invalid_id`. Test cases are addressed verbatim, so an unusable case identifier is simply a case that
+   does not exist (`404 not_found`) — never `invalid_id`.
+4. **Parent resolution.** A write refuses a parent that does not exist with `404 not_found`, so a write can
+   never invent a parent.
+5. **Existence and ambiguity.** A missing document is `404 not_found`; an identifier several parents hold is
+   `409 conflict`, with a message directing the caller to a parent-scoped route.
+
+The composition routes read what they act on from the **body before** they consult the path parent, and that
+ordering is observable. `POST /projects/{id}/test_suites` and `POST /projects/{id}/test_cases` read `name` /
+`title` to choose between the create and place arms, and on the place arm they read the `suiteId` /
+`testCaseId` they name; a body missing those fields answers `400 invalid_request` even when the path parent is
+itself unusable. The unusable path identifier is reported as `invalid_id` through the create arm
+(`require_parent`) or, on the place arm, once the named source has resolved. The run routes
+(`POST /test_runs/{id}/test_suites`, `POST /test_runs/{id}/test_cases`, `POST /test_runs/{id}/results`)
+likewise read the fields their body requires before they load the run. These routes therefore publish
+`InvalidIdOrRequest` (and `/results`, whose body also carries a constrained `status`, publishes
+`InvalidIdOrRequestOrStatus`). The whole order is pinned by
+`tests/service.rs::an_unusable_path_identifier_is_answered_with_invalid_id`.
+
+### Documented `400` codes
+
+Every operation that can answer `400` now publishes one, using a named response component so the description
+and code are visible in Swagger: `InvalidId` (`invalid_id`), `InvalidRequest` (`invalid_request`),
+`InvalidIdOrRequest` (`invalid_id` or `invalid_request`), `InvalidIdOrRequestOrStatus` (those plus
+`invalid_status`), and `AttachmentRejected` (`invalid_multipart` or `missing_file`). OpenAPI 3.0 ignores
+siblings of `$ref`, so each distinct description is its own component even where the status code matches.
+
+### Payload too large
+
+The router caps every request body at `api::MAX_BODY_BYTES` (50 MiB, the attachment limit) with a
+router-wide `RequestBodyLimitLayer`. Both the path that short-circuits on a declared `Content-Length` and the
+path that streams a body through the limited reader answer `413` with `text/plain; charset=utf-8` and the body
+`length limit exceeded` — the `BodyTooLarge` component, which deliberately publishes no JSON schema. Because
+the layer runs before the handler, the per-handler `PayloadTooLarge` envelope is unreachable for every
+published route; the guard remains as a backstop and is covered by
+`tests/service.rs::an_oversized_body_is_rejected_in_plain_text_before_the_handler_runs`, which observes the
+plain-text `413` on a JSON route, the upload route, and a run-results route. Every operation with a request
+body documents the `413`.
+
+### Extractor responses
+
+`POST /test_cases/{id}/attachments` is the one route that can answer before its handler runs. A request the
+multipart extractor cannot start on — a `Content-Type` without a boundary, for example — answers
+`400 text/plain` and never the error envelope; once the framing parses, the handler's rejections use the
+envelope (`missing_file` for a body with no file part). The route's `400` entry therefore publishes **both**
+content types, which is why it is the `AttachmentRejected` component rather than plain `Error`. The accepted
+`201` body the handler returns is documented as well. All three answers are asserted by
+`tests/service.rs::the_upload_route_answers_plain_text_only_when_multipart_framing_is_unusable`.
+
+### Schema strictness
+
+`additionalProperties: false` is now published only where the API genuinely rejects unknown fields — the
+typed models payload validation deserialises, all of which carry `deny_unknown_fields`: `Attachment`,
+`Project`, `TestSuite`, `TestCase`, `TestStep`, `TestCaseResult`, `Milestone`, `TestConfiguration`. The
+schemas stay permissive where the handler branches on a loose body or where the schema only ever describes a
+response: `AttachmentUpload` (a multipart part), `CompositionRequest` (the create/place union), the duplicate
+request bodies (`DuplicateRequest`, `DuplicateCaseRequest`, `DuplicateRunRequest`), `TestResultRequest`, and
+the response-only `CompositionResponse`, `MilestoneProgress`, and `Error`. Publishing `additionalProperties:
+false` on those would advertise a rejection the service does not perform — the opposite of the problem this
+issue fixes. `tests/service.rs::openapi_schemas_are_strict_only_where_the_api_rejects_unknown_fields` holds
+the split to the models.
+
+`Error` itself carries no top-level `required`: the envelope's only required member is the nested
+`error.code` / `error.message` pair.
+
+### Corrections made
+
+- `POST /test_runs/{id}/results` takes `TestResultRequest` (`testCaseId` and `status` required, `timestamp`
+  and `notes` optional), not `TestCaseResult`. The result the run stores is a `TestCaseResult`, which also
+  carries `attachments`; the request body cannot set those, so publishing the stored shape as the request
+  advertised fields the route ignores.
+- `TestCaseResult.timestamp` no longer claims a date `format`. It is whatever string the run body carried and
+  is never parsed, so the document now says so.
+- `Attachment` requires `filename`, `originalName`, `mimeType`, and `size`, with `uploadedAt` optional.
+
+### Recorded, not changed
+
+These were found while reconciling the document and are left as they are:
+
+- A request whose upload content type is neither `multipart/form-data` nor a JSON body the extractor accepts
+  can answer `415 Unsupported Media Type`, which the document does not publish.
+- `TestCase.priority` and `TestCase.severity` are published with `enum` values while the model accepts any
+  string, so the schema is narrower than the service. The values come from the legacy schema and are kept for
+  parity; the widening (or the `enum` on the Rust side) needs its own decision.
+- No `TestRun` schema is published, so the run documents referenced by responses are described only
+  structurally. Adding one is a follow-up.
+- Creating a run, milestone, or configuration from a body that names only `name` stores a document without
+  the identity field its model requires, so reading it back — `POST /test_runs/{id}/results`,
+  `GET /milestones/{id}/progress` — answers `500 storage_error`. The cause is the identity normalisation that
+  covers only projects and suites. It is tracked separately from this issue and is not a documentation bug.
+
 ## Breaking change accounting
 
 - **New optional `testCases` on assembled project responses** (Issue #65). Legacy Draft 2020-12 `Project`
@@ -319,6 +432,20 @@ decomposition plan, which is closed as superseded. #71 is the first step of the 
   (for example `{"name": "alpha"}`) still succeed. Composition, run-result, and duplicate endpoints keep their
   permissive parsing. Deviation recorded with tests in
   `tests/service.rs::create_and_update_reject_unknown_fields`.
+- **`openapi.json` error contract reconciled** (Issue #76). Documentation-only: no status code, response body,
+  or persisted document changed. The document **gains** the `400` responses the operations already answered,
+  publishes the plain-text `413` (and the `413` on every operation with a request body), corrects the
+  `/test_runs/{id}/results` request body to `TestResultRequest`, drops the `format` claim on
+  `TestCaseResult.timestamp`, and adds `additionalProperties: false` to exactly the schemas whose payloads
+  validation rejects unknown fields for. A consumer that generated a client from the old document may see new
+  error responses it previously treated as undocumented; no previously published success response changed.
+  Deviation recorded with tests in `tests/service.rs::openapi_documents_the_error_contract_of_every_operation`,
+  `::an_oversized_body_is_rejected_in_plain_text_before_the_handler_runs`,
+  `::the_upload_route_answers_plain_text_only_when_multipart_framing_is_unusable`,
+  `::an_unusable_path_identifier_is_answered_with_invalid_id`,
+  `::a_test_case_identifier_is_addressed_verbatim`,
+  `::duplicate_routes_report_an_unusable_identifier_as_their_own_description_says`, and
+  `::openapi_schemas_are_strict_only_where_the_api_rejects_unknown_fields`.
 
 ## Required case matrix
 
