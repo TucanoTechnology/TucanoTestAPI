@@ -222,6 +222,8 @@ mod tests {
             exploratory: None,
             attachments: None,
             tags: None,
+            version: None,
+            last_modified: None,
         }
     }
 

@@ -74,6 +74,46 @@ pub fn current_timestamp_string() -> String {
     format!("{now}")
 }
 
+/// Timestamp recorded as a test case's `lastModified`, in ISO-8601 UTC.
+///
+/// Test-case versioning records when a version was written in ISO-8601 UTC
+/// (`2023-11-14T22:13:20Z`), as the versioning plan specifies. That deliberately
+/// diverges from the Unix-seconds string [`current_timestamp_string`] writes
+/// into runs, so the two formats coexist: a stored document keeps whichever
+/// format its own field documents.
+pub fn current_iso8601_timestamp() -> String {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    format_iso8601(now)
+}
+
+/// Renders seconds since the Unix epoch as an ISO-8601 UTC timestamp.
+///
+/// Hand-rolled rather than pulled from a date-time crate: the API has no such
+/// dependency, and this needs exactly one fixed, UTC-only shape.
+fn format_iso8601(seconds: u64) -> String {
+    let days = seconds / 86_400;
+    let rem = seconds % 86_400;
+    let (hour, minute, second) = (rem / 3_600, (rem % 3_600) / 60, rem % 60);
+
+    // Days-to-civil conversion (Howard Hinnant's `civil_from_days`), shifted so
+    // the era boundary sits on a 400-year cycle of 146 097 days.
+    let z = days + 719_468;
+    let era = z / 146_097;
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+    let year = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = if month <= 2 { year + 1 } else { year };
+
+    format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}Z")
+}
+
 /// Content type recorded for, and served with, a stored attachment.
 pub fn mime_type(filename: &str) -> &'static str {
     match filename
@@ -90,5 +130,35 @@ pub fn mime_type(filename: &str) -> &'static str {
         "txt" => "text/plain",
         "json" => "application/json",
         _ => "application/octet-stream",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn iso8601_renders_known_epochs() {
+        for (seconds, expected) in [
+            (0_u64, "1970-01-01T00:00:00Z"),
+            (1, "1970-01-01T00:00:01Z"),
+            (86_399, "1970-01-01T23:59:59Z"),
+            (86_400, "1970-01-02T00:00:00Z"),
+            (1_700_000_000, "2023-11-14T22:13:20Z"),
+            // A leap day: 2024-02-29 is 28 days after 2024-02-01.
+            (1_709_164_800, "2024-02-29T00:00:00Z"),
+            (1_704_067_199, "2023-12-31T23:59:59Z"),
+        ] {
+            assert_eq!(format_iso8601(seconds), expected, "epoch {seconds}");
+        }
+    }
+
+    #[test]
+    fn current_iso8601_timestamp_has_the_documented_shape() {
+        let value = current_iso8601_timestamp();
+        assert_eq!(value.len(), 20, "timestamp: {value}");
+        assert!(value.ends_with('Z'), "timestamp: {value}");
+        assert_eq!(&value[4..5], "-");
+        assert_eq!(&value[10..11], "T");
     }
 }

@@ -61,6 +61,10 @@ pub struct TestCase {
     pub attachments: Option<Vec<Attachment>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tags: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub version: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_modified: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq)]
@@ -328,6 +332,44 @@ mod tests {
         assert_eq!(output["severity"], "Critical");
         assert_eq!(output["testType"], "Functional");
         assert_eq!(output["steps"][1]["action"], "Click Pay Now");
+    }
+
+    #[test]
+    fn test_case_carries_version_and_last_modified() {
+        let input = r#"{
+            "testCaseId": "TC-001",
+            "title": "Login",
+            "expectedResult": "Authenticated",
+            "version": 3,
+            "lastModified": "2023-11-14T22:13:20Z"
+        }"#;
+
+        let case: TestCase = serde_json::from_str(input).expect("valid versioned test case");
+        assert_eq!(case.version, Some(3));
+        assert_eq!(case.last_modified.as_deref(), Some("2023-11-14T22:13:20Z"));
+
+        let output = serde_json::to_value(&case).expect("serializable case");
+        assert_eq!(output["version"], 3);
+        assert_eq!(output["lastModified"], "2023-11-14T22:13:20Z");
+    }
+
+    #[test]
+    fn test_case_without_version_fields_still_round_trips() {
+        let input = r#"{"testCaseId":"TC-001","title":"Legacy","expectedResult":"Pass"}"#;
+
+        let case: TestCase = serde_json::from_str(input).expect("legacy test case");
+        assert!(case.version.is_none());
+        assert!(case.last_modified.is_none());
+
+        let output = serde_json::to_value(&case).expect("serializable case");
+        assert!(
+            output.get("version").is_none(),
+            "an unversioned case omits `version` from the wire"
+        );
+        assert!(
+            output.get("lastModified").is_none(),
+            "an unversioned case omits `lastModified` from the wire"
+        );
     }
 
     #[test]
