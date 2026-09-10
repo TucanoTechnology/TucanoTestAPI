@@ -108,6 +108,27 @@ impl<R: Repository> TestService<R> {
             });
         }
 
+        // Only runs carry configuration references, and an unnamed
+        // configuration yields an empty listing rather than an error, matching
+        // how the substring and tag filters already behave.
+        if resource == Resource::Runs
+            && let Some(config_id) = query.configuration.as_ref()
+        {
+            items.retain(|item| {
+                let Ok(value) = self.first_document(resource, item) else {
+                    return false;
+                };
+                let Some(configurations) = value.get("configurations").and_then(Value::as_array)
+                else {
+                    return false;
+                };
+                configurations.iter().any(|configuration| {
+                    configuration.get("configId").and_then(Value::as_str)
+                        == Some(config_id.as_str())
+                })
+            });
+        }
+
         Ok(items)
     }
 
@@ -1022,6 +1043,7 @@ mod tests {
             .list(
                 Resource::Projects,
                 &ListQuery {
+                    configuration: None,
                     filter: Some("ALPH".to_owned()),
                     tags: None,
                 },
@@ -1033,6 +1055,7 @@ mod tests {
             .list(
                 Resource::Projects,
                 &ListQuery {
+                    configuration: None,
                     filter: None,
                     tags: Some(" smoke ".to_owned()),
                 },
@@ -1044,12 +1067,98 @@ mod tests {
             .list(
                 Resource::Projects,
                 &ListQuery {
+                    configuration: None,
                     filter: None,
                     tags: Some("does-not-exist".to_owned()),
                 },
             )
             .expect("tags");
         assert!(untagged.is_empty());
+    }
+
+    #[test]
+    fn runs_are_listed_by_the_configuration_they_link() {
+        let (service, _directory) = service();
+        for (id, name) in [("R-1", "nightly"), ("R-2", "weekly"), ("R-3", "release")] {
+            service
+                .create(
+                    Resource::Runs,
+                    &json!({ "testRunId": id, "name": name, "timestamp": "1", "tags": ["ci"] }),
+                )
+                .expect("run");
+        }
+        for name in ["chrome-linux", "firefox-windows"] {
+            service
+                .create(Resource::Configurations, &json!({ "name": name }))
+                .expect("configuration");
+        }
+        for (run, configuration) in [
+            ("nightly.json", "chrome-linux.json"),
+            ("weekly.json", "firefox-windows.json"),
+        ] {
+            service
+                .link_configuration_to_run(run, &json!({ "configId": configuration }))
+                .expect("link");
+        }
+
+        let query = |configuration: &str| ListQuery {
+            configuration: Some(configuration.to_owned()),
+            ..ListQuery::default()
+        };
+
+        assert_eq!(
+            service
+                .list(Resource::Runs, &query("chrome-linux.json"))
+                .unwrap(),
+            vec!["nightly.json"]
+        );
+        assert_eq!(
+            service
+                .list(Resource::Runs, &query("firefox-windows.json"))
+                .unwrap(),
+            vec!["weekly.json"]
+        );
+
+        // A configuration no run links yields an empty listing rather than an
+        // error.
+        assert_eq!(
+            service
+                .list(Resource::Runs, &query("firefox-linux.json"))
+                .unwrap(),
+            Vec::<String>::new()
+        );
+
+        // The configuration filter composes with the substring and tag filters.
+        let composed = ListQuery {
+            filter: Some("NIGHT".to_owned()),
+            tags: Some(" ci ".to_owned()),
+            configuration: Some("chrome-linux.json".to_owned()),
+        };
+        assert_eq!(
+            service.list(Resource::Runs, &composed).unwrap(),
+            vec!["nightly.json"]
+        );
+
+        // A run that links a different configuration drops out of the composed
+        // listing even though it carries the same tag.
+        let tag_only = ListQuery {
+            tags: Some("ci".to_owned()),
+            configuration: Some("chrome-linux.json".to_owned()),
+            ..ListQuery::default()
+        };
+        assert_eq!(
+            service.list(Resource::Runs, &tag_only).unwrap(),
+            vec!["nightly.json"]
+        );
+
+        // The filter says nothing about other collections, which keeps their
+        // listings intact rather than emptying them.
+        assert_eq!(
+            service
+                .list(Resource::Configurations, &query("chrome-linux.json"))
+                .unwrap(),
+            vec!["chrome-linux.json", "firefox-windows.json"]
+        );
     }
 
     #[test]
