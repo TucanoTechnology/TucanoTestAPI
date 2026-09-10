@@ -17,7 +17,9 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 
-use crate::models::{Milestone, MilestoneProgress, TestCase, TestCaseResult, TestRun, TestSuite};
+use crate::models::{
+    Milestone, MilestoneProgress, TestCase, TestCaseResult, TestConfiguration, TestRun, TestSuite,
+};
 use crate::storage::{Parent, Placement, Repository, Resource, unique_suffix};
 
 use super::duplicate::{self, DuplicateSpec};
@@ -274,6 +276,33 @@ impl<R: Repository> TestService<R> {
             attachments: None,
         };
         composition::upsert_result(&mut run, result);
+        self.save(Resource::Runs, run_id, &run)
+    }
+
+    /// Links the top-level configuration named in `body` to a run by reference,
+    /// refusing one the run already references.
+    ///
+    /// A configuration owns its storage, so the run keeps a reference to it
+    /// rather than a copy; the referenced configuration is verified to exist.
+    pub fn link_configuration_to_run(&self, run_id: &str, body: &Value) -> Result<(), DomainError> {
+        let config_id = required_string(body, "configId")
+            .ok_or_else(|| DomainError::invalid_request("Required field configId is missing"))?;
+
+        let mut run = self.load::<TestRun>(Resource::Runs, run_id, "Test run not found")?;
+        let configuration =
+            self.load_entity::<TestConfiguration>(Resource::Configurations, &config_id)?;
+        composition::attach_configuration_to_run(&mut run, &configuration, &config_id)?;
+        self.save(Resource::Runs, run_id, &run)
+    }
+
+    /// Removes a configuration reference from a run.
+    pub fn unlink_configuration_from_run(
+        &self,
+        run_id: &str,
+        config_id: &str,
+    ) -> Result<(), DomainError> {
+        let mut run = self.load::<TestRun>(Resource::Runs, run_id, "Test run not found")?;
+        composition::detach_configuration_from_run(&mut run, config_id)?;
         self.save(Resource::Runs, run_id, &run)
     }
 
