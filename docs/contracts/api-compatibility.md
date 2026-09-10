@@ -462,8 +462,68 @@ the recorded merge decision.
   `a_partial_update_keeps_the_fields_the_body_leaves_out`, and the milestone suite also asserts
   `GET /milestones/{id}/progress` answers `200` after an empty `PUT`.
 
+## Per-Step Attachment Plan (Issue #93)
+
+Issue: [#93](https://github.com/TucanoTechnology/TucanoTestAPI/issues/93) — a structured step could describe an
+action and an expected result but could not carry the evidence for it, so a screenshot or log belonging to one
+step had to be attached to the whole case. This is the versioning plan for the schema field and the three
+operations the fix adds, recorded before the implementation commits.
+
+- **The field is additive and optional.** A step gains `attachments`, an array of
+  `{filename, originalName, mimeType, size}`, and nothing else about `TestStep` changes. A response that carried
+  no attachments before still carries none: the key is written only when the step owns at least one, so a case
+  whose steps have no attachments serialises byte-for-byte as it did before the change. A client that reads a
+  structured step without knowing the field is unaffected.
+- **`TestStep` becomes strict about the new key, which is why this note is required.** The model carries
+  `deny_unknown_fields`, so before the change a request body containing `attachments` on a step was rejected with
+  `400 invalid_request` and now is accepted (and validated). This widens the accepted input rather than narrowing
+  it — no payload that used to succeed is refused — and it is the only sense in which the stored-document
+  contract changes. `TestCaseStep` (a step is either a plain string or this structure, `untagged`) is untouched,
+  so a case whose steps are all plain strings is unchanged in every respect: it has no attachments, the new
+  routes address it only to answer `400` saying the step is not structured, and its stored JSON is identical.
+- **Simple string steps stay simple.** Attachments belong to structured steps only. A bare string step is not
+  rewritten into an object to hold them, so the documented example cases and every case already on disk keep
+  their shape.
+- **Storage is a nested `steps/<index>/` directory inside the case folder**, beside the case-level attachment
+  files. Step attachments and case attachments therefore cannot collide by name, `copy_dir_all` carries the
+  directory recursively when a case is duplicated or placed, and the case marker's `steps[i].attachments` array
+  is the index of what the directory holds — updated under the same storage lock as the file write, exactly as
+  the case-level `attachments` array already is.
+- **Three operations on two paths.** `POST /test_cases/{id}/steps/{step_index}/attachments` appends metadata and
+  `201`s; `GET .../attachments` lists the metadata (`200`, an empty array when the step carries none); `DELETE
+  .../attachments/{filename}` removes file and metadata and `404`s for a filename that is not attached. There is
+  **no download route**: the ticket's endpoint list and its definition of done name upload, list and delete only,
+  and the GUI flow that would consume a preview is paused. This is recorded as an intentional scope decision, so
+  a client that needs the bytes reads the stored file through the documented filesystem layout rather than the
+  API, and a download route would be a separate additive change.
+- **The index is validated like the identifiers are.** `step_index` must be a non-negative integer, so a
+  non-numeric or negative value is `400 invalid_request` — not `invalid_id`, which stays reserved for a path
+  identifier, and not a new code, so the published set of error codes does not grow. An index that is an integer
+  but addresses no step, and an index that addresses a plain string step, are also `400 invalid_request`, each
+  naming the reason. A case addressed by an unusable identifier answers `404`, never `400`, matching the verbatim
+  rule Issue #76 recorded for test cases.
+- **`file_name` handling follows the case-level rules unchanged.** The uploaded part's filename passes
+  `validate_component`, so `../escape`, a nested path, an empty name and `.` are refused; the stored name is
+  prefixed with a unique suffix exactly as a case attachment is, so two uploads that share an original name do
+  not overwrite each other; the file is written through the same atomic same-directory temp and `0o666`
+  permissions; and no raw path or filesystem error reaches the client.
+- **The error envelope is stable.** `400` with `invalid_request` or `invalid_multipart`, `404` with `not_found`
+  (an absent case, an unattached filename), `409` when a bare case identifier is ambiguous, and `413` plain text
+  for an oversized body are the responses `openapi.json` documents for these operations.
+- Deviation recorded with tests in `tests/cases.rs` and `tests/attachments.rs` — upload/list/delete on a
+  structured step, a simple step left untouched, an out-of-range index, a plain-string index, a non-numeric
+  index, an unattached filename, and a traversing filename — plus repository unit tests over the physical
+  `steps/<index>/` layout and `tests/service.rs` covering the documented routes and the strict `StepAttachment`
+  schema.
+
 ## Breaking change accounting
 
+- **Per-step attachments** (Issue #93, plan above). `TestStep` gains an optional `attachments` array and
+  `/test_cases/{id}/steps/{step_index}/attachments` (GET, POST) and `.../attachments/{filename}` (DELETE) are
+  added. The field is written only when a step owns attachments, so existing cases sign on disk and on the wire
+  unchanged, and a new key inside a step that used to be refused becomes accepted. No download route is added.
+  Deviation recorded with tests in `tests/cases.rs`, `tests/attachments.rs` and `tests/service.rs` as listed in
+  the plan.
 - **New optional `testCases` on assembled project responses** (Issue #65). Legacy Draft 2020-12 `Project`
   documents do not know this field; it appears only when a project directly owns cases. The GUI is updated to
   read it; legacy clients that reject unknown fields fail loudly only for projects with direct cases, which
