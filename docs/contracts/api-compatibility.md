@@ -663,6 +663,51 @@ it raised, and the first read of that link is a listing. This issue adds the `De
   `additionalProperties: false` and the route to the published contract, and model unit tests in
   `src/models.rs` for the camelCase wire shape and the omission of `title`/`status`.
 
+## Defect Link Writes Plan (Issue #88)
+
+Issue: [#88](https://github.com/TucanoTechnology/TucanoTestAPI/issues/88) — Issue #87 gave a failed result a
+way to *read* the defects it raised; this issue gives it a way to name and unname one, through
+`POST /test_runs/{id}/results/{case_id}/defects` and
+`DELETE /test_runs/{id}/results/{case_id}/defects/{link_id}`.
+
+- **The client supplies half the link and the API derives the rest.** The request body is a new
+  `DefectLinkRequest` — `defectId`, `defectUrl` and `trackerType` required, `title` and `status` optional. It is
+  deliberately *not* `DefectLink`: `linkId` and `linkedAt` are the API's to mint, so a body that carries either
+  is rejected as an unknown field rather than silently overriding what the server decided. `linkId` is derived
+  from the storage layer's monotonic `unique_suffix()` and `linkedAt` from the current Unix seconds, exactly as
+  the other create routes stamp their own fields.
+- **A link is created, not replaced, so the answer is `201` with the derived identity.** The response is
+  `{"message": "Defect linked to test result", "id": "<linkId>"}`. The id has to come back: `DELETE` addresses the
+  link by it, and the client has no other way to learn a value the server minted. This is the same shape the
+  other create routes answer with.
+- **`defectUrl` is validated against `trackerType` before anything is written.** `jira` requires a
+  `<org>.atlassian.net/browse/<KEY>` URL, `github` a `github.com/<owner>/<repo>/issues/<number>` URL and `gitlab`
+  a `gitlab.com/<group>/<project>/-/issues/<number>` URL; `custom` accepts any well-formed `https://` URL with a
+  non-empty host, because there is no third-party shape to hold it to. A mismatch, a non-`https` scheme, a
+  malformed host and an empty required field all answer `400 invalid_request`. The check is hand-rolled: this
+  crate carries no URL parser, and the accepted grammar per tracker is narrower than a general URL would allow
+  anyway. A query string or fragment is ignored, since a browser copy-paste carries one.
+- **A defect can be linked to a result once.** Linking a `defectId` that the result already carries answers
+  `409 conflict` and the original link survives untouched; a different `defectId` is a new link. The identity is
+  per result — the same defect on another `case_id` is a separate link, because two results can legitimately
+  raise the same bug.
+- **The unlink route is `DELETE` and it answers `200` with a message.** `DELETE` on an unknown `link_id`, or one
+  that belongs to another result, answers `404 not_found`; repeating a successful unlink is therefore a `404`,
+  not an idempotent `200`. The link is gone from the result's `defectLinks` afterwards.
+- **`link_id` is opaque and is never validated as a document name.** Unlike `{id}`, which names a stored run and
+  answers `400 invalid_id` when it cannot, `{link_id}` is an identifier the API minted inside a document — it is
+  looked up in the result's own list. It is published as its own `link_id` path parameter rather than reusing
+  `id`, so the contract does not imply a validation that is not performed.
+- **Failure answers follow the run-scoped rule.** An unusable run identifier answers `400 invalid_id` before
+  storage is consulted; an unknown run, a `case_id` the run never ran, and an unknown `link_id` answer
+  `404 not_found`. The body is validated before the run is loaded, so a malformed request never touches storage.
+- Deviation recorded with tests in `tests/runs.rs` — all four tracker types linked and read back, twelve
+  rejected bodies (missing, empty and mistyped fields, a body carrying `linkId`/`linkedAt`, an unknown tracker,
+  a per-tracker URL mismatch and a non-`https` URL) leaving the result untouched, the duplicate `409`, and the
+  `400`/`404` answers for an unusable `{id}`, an unknown run, an unrun `case_id`, a repeated unlink and an
+  unknown `link_id` — plus `tests/service.rs` holding `DefectLinkRequest` to `additionalProperties: false` and
+  `openapi.json` documenting both routes, the `link_id` parameter and the new schema.
+
 ## Breaking change accounting
 
 - **Tags added, and their query parameter withdrawn where it could not match** (Issue #49, plan above).
