@@ -296,3 +296,55 @@ async fn test_runs_can_reference_a_configuration() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(stored["configurations"][0]["configId"], "CFG-001");
 }
+
+#[tokio::test]
+async fn a_partial_update_keeps_the_fields_the_body_leaves_out() {
+    let (_directory, app) = test_app();
+
+    let (status, _) = send_json(
+        &app,
+        json_request(
+            "POST",
+            "/configurations",
+            &json!({
+                "configId": "CFG-001",
+                "name": "chrome-linux",
+                "browser": "Chrome",
+                "os": "Linux",
+            }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    let (status, body) = send_json(
+        &app,
+        json_request("PUT", "/configurations/chrome-linux.json", &json!({})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "updating: {body}");
+
+    let (status, stored) = send_json(&app, get("/configurations/chrome-linux.json")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(stored["configId"], "CFG-001");
+    assert_eq!(stored["name"], "chrome-linux");
+    assert_eq!(stored["browser"], "Chrome");
+    assert_eq!(stored["os"], "Linux");
+
+    // A field the body carries is replaced; the others survive it.
+    let (status, _) = send_json(
+        &app,
+        json_request(
+            "PUT",
+            "/configurations/chrome-linux.json",
+            &json!({"resolution": "1920x1080"}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let (_, stored) = send_json(&app, get("/configurations/chrome-linux.json")).await;
+    assert_eq!(stored["resolution"], "1920x1080");
+    assert_eq!(stored["browser"], "Chrome");
+    assert_eq!(stored["configId"], "CFG-001");
+}

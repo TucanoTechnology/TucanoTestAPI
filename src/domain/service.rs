@@ -151,16 +151,20 @@ impl<R: Repository> TestService<R> {
         self.create_at(resource, Some(parent), value)
     }
 
-    /// Validates and replaces an existing document.
+    /// Validates a partial body and merges it into an existing document.
+    ///
+    /// A `PUT` overlays the fields the body carries onto the stored document, so
+    /// the fields it leaves out keep their stored values and a partial body can
+    /// never store a document the API cannot read back.
     pub fn update(&self, resource: Resource, id: &str, value: &Value) -> Result<(), DomainError> {
         validation::validate_payload(resource, value)?;
         let parent = self.owner_for_write(resource, id, "Resource not found")?;
-        match self.repository.exists_at(resource, parent.as_ref(), id) {
-            Ok(true) => {}
-            Ok(false) => return Err(DomainError::NotFound("Resource not found".to_owned())),
-            Err(error) => return Err(error::delete_error(error)),
-        }
-        self.write_marker(resource, parent.as_ref(), id, value)
+        let stored = self
+            .repository
+            .read_at(resource, parent.as_ref(), id)
+            .map_err(error::read_error)?;
+        let merged = merged_document(&stored, value)?;
+        self.write_marker(resource, parent.as_ref(), id, &merged)
     }
 
     /// Removes a document, its folder, and everything it owns.
@@ -699,6 +703,31 @@ fn normalise_marker(resource: Resource, id: &str, document: &mut Value) {
             Value::String(current_timestamp_string()),
         );
     }
+}
+
+/// Merges a validated update body into the document already stored, so an
+/// update is partial: the fields the body carries are replaced and every other
+/// stored field is kept.
+///
+/// Only the top level is merged — a field the body carries replaces the stored
+/// field as a whole, so an array is replaced rather than concatenated — and a
+/// field carrying `null` counts as not supplied and keeps the stored value,
+/// the same reading of `null` the payload validation already uses. A stored
+/// document that is not an object cannot be merged, and is reported rather than
+/// silently replaced.
+fn merged_document(stored: &Value, body: &Value) -> Result<Value, DomainError> {
+    let Value::Object(stored) = stored else {
+        return Err(DomainError::Internal("Stored JSON is invalid".to_owned()));
+    };
+    let mut merged = stored.clone();
+    if let Some(fields) = body.as_object() {
+        for (key, value) in fields {
+            if !value.is_null() {
+                merged.insert(key.clone(), value.clone());
+            }
+        }
+    }
+    Ok(Value::Object(merged))
 }
 
 /// Whether a composition body asks for a new entity rather than a placement.

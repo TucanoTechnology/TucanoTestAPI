@@ -314,3 +314,63 @@ async fn duplicating_a_missing_milestone_returns_not_found() {
     assert_eq!(status, StatusCode::NOT_FOUND);
     assert_error_envelope(&body, "not_found");
 }
+
+#[tokio::test]
+async fn a_partial_update_keeps_the_fields_the_body_leaves_out() {
+    let (_directory, app) = test_app();
+
+    let (status, _) = send_json(
+        &app,
+        json_request(
+            "POST",
+            "/milestones",
+            &json!({
+                "milestoneId": "M-1.json",
+                "name": "Sprint 42",
+                "startDate": "2026-09-01",
+                "targetDate": "2026-09-15",
+                "status": "Open",
+            }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    // The body this bug is reported with: `{}` used to store a milestone with no
+    // fields at all, after which progress answered 500 storage_error.
+    let (status, body) = send_json(
+        &app,
+        json_request("PUT", "/milestones/M-1.json", &json!({})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "updating: {body}");
+
+    let (status, stored) = send_json(&app, get("/milestones/M-1.json")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(stored["milestoneId"], "M-1.json");
+    assert_eq!(stored["name"], "Sprint 42");
+    assert_eq!(stored["startDate"], "2026-09-01");
+    assert_eq!(stored["targetDate"], "2026-09-15");
+    assert_eq!(stored["status"], "Open");
+
+    let (status, progress) = send_json(&app, get("/milestones/M-1.json/progress")).await;
+    assert_eq!(status, StatusCode::OK, "progress: {progress}");
+    assert_eq!(progress["milestoneId"], "M-1.json");
+
+    // A field the body carries is still replaced.
+    let (status, _) = send_json(
+        &app,
+        json_request(
+            "PUT",
+            "/milestones/M-1.json",
+            &json!({"status": "Completed"}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let (_, stored) = send_json(&app, get("/milestones/M-1.json")).await;
+    assert_eq!(stored["status"], "Completed");
+    assert_eq!(stored["name"], "Sprint 42");
+    assert_eq!(stored["targetDate"], "2026-09-15");
+}

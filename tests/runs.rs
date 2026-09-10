@@ -302,3 +302,55 @@ async fn test_runs_support_composition_execution_and_isolation() {
     assert_eq!(tc001["title"], "Login");
     assert!(tc001.get("results").is_none());
 }
+
+#[tokio::test]
+async fn a_partial_update_keeps_the_fields_the_body_leaves_out() {
+    let (_directory, app) = test_app();
+
+    let (status, _) = send_json(
+        &app,
+        json_request(
+            "POST",
+            "/test_runs",
+            &json!({
+                "testRunId": "R-001",
+                "name": "nightly",
+                "timestamp": "2026-09-02T00:00:00Z",
+                "tags": ["ci"],
+            }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    let (status, body) = send_json(
+        &app,
+        json_request("PUT", "/test_runs/nightly.json", &json!({})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "updating: {body}");
+
+    let (status, stored) = send_json(&app, get("/test_runs/nightly.json")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(stored["testRunId"], "R-001");
+    assert_eq!(stored["name"], "nightly");
+    assert_eq!(stored["timestamp"], "2026-09-02T00:00:00Z");
+    assert_eq!(stored["tags"], json!(["ci"]));
+
+    // The run still reads back as its model, so recording a result works.
+    let (status, _) = send_json(
+        &app,
+        json_request(
+            "POST",
+            "/test_runs/nightly.json/results",
+            &json!({"testCaseId": "TC-001.json", "status": "Passed"}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let (status, stored) = send_json(&app, get("/test_runs/nightly.json")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(stored["results"][0]["status"], "Passed");
+    assert_eq!(stored["name"], "nightly");
+}
