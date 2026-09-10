@@ -13,10 +13,21 @@ pub struct Attachment {
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct StepAttachment {
+    pub filename: String,
+    pub original_name: String,
+    pub mime_type: String,
+    pub size: f64,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct TestStep {
     pub action: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub expected_result: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub attachments: Option<Vec<StepAttachment>>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
@@ -244,6 +255,7 @@ mod tests {
             TestCaseStep::Structured(TestStep {
                 action: "Click Pay Now".to_string(),
                 expected_result: Some("Payment processed".to_string()),
+                attachments: None,
             })
         );
 
@@ -252,6 +264,62 @@ mod tests {
         assert_eq!(output["severity"], "Critical");
         assert_eq!(output["testType"], "Functional");
         assert_eq!(output["steps"][1]["action"], "Click Pay Now");
+    }
+
+    #[test]
+    fn structured_steps_carry_step_attachment_metadata() {
+        let input = r#"{
+            "testCaseId": "TC-001",
+            "title": "Login",
+            "expectedResult": "User is authenticated",
+            "steps": [
+                "Navigate to /login",
+                {
+                    "action": "Click Submit",
+                    "expectedResult": "Dashboard shown",
+                    "attachments": [{
+                        "filename": "1726000000000000-screenshot.png",
+                        "originalName": "screenshot.png",
+                        "mimeType": "image/png",
+                        "size": 2048
+                    }]
+                }
+            ]
+        }"#;
+
+        let case: TestCase = serde_json::from_str(input).expect("valid case with step attachment");
+        let steps = case.steps.as_ref().expect("steps present");
+        let attachments = match &steps[1] {
+            TestCaseStep::Structured(step) => {
+                step.attachments.as_ref().expect("step attachments present")
+            }
+            TestCaseStep::Simple(_) => panic!("second step must be structured"),
+        };
+        assert_eq!(attachments.len(), 1);
+        assert_eq!(attachments[0].original_name, "screenshot.png");
+        assert_eq!(attachments[0].mime_type, "image/png");
+
+        let output = serde_json::to_value(&case).expect("serializable case");
+        assert_eq!(
+            output["steps"][1]["attachments"][0]["filename"],
+            "1726000000000000-screenshot.png"
+        );
+        assert!(
+            output["steps"][0].as_str() == Some("Navigate to /login"),
+            "simple steps stay untouched"
+        );
+    }
+
+    #[test]
+    fn structured_steps_omit_absent_step_attachments() {
+        let step = TestStep {
+            action: "Click Submit".to_string(),
+            expected_result: None,
+            attachments: None,
+        };
+
+        let output = serde_json::to_value(&step).expect("serializable step");
+        assert!(output.get("attachments").is_none());
     }
 
     #[test]
