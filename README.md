@@ -173,6 +173,8 @@ The API process is stateless: replicas do not keep sessions or in-memory records
 
 To validate a candidate build before it serves traffic, and to roll back to a previous build safely, follow [docs/deployment/canary-validation-and-rollback.md](docs/deployment/canary-validation-and-rollback.md).
 
+The full deployment model — the JSON volume mount that is the only state, the Compose configuration and container hardening, single-node versus shared-storage scaling, and rollback to an immutable release tag — is in [docs/deployment/deployment-guide.md](docs/deployment/deployment-guide.md).
+
 ## Smoke validation
 
 `scripts/smoke.sh` exercises a running API with a scratch CRUD round trip — health, create a project and a case, read both back, delete both, and confirm each deletion is observable — and exits non-zero on the first deviation. It needs `curl` and `python3`, removes its scratch data on exit, and accepts a base URL:
@@ -294,6 +296,7 @@ Repository contribution and agent workflow rules are documented in [AGENTS.md](A
 | [docs/architecture/gui-client-boundary.md](docs/architecture/gui-client-boundary.md) | The GUI client boundary and the generated-client strategy driven by `openapi.json` |
 | [docs/contracts/api-compatibility.md](docs/contracts/api-compatibility.md) | File-format and endpoint compatibility rules against the legacy implementation |
 | [docs/contracts/test-case-versioning-plan.md](docs/contracts/test-case-versioning-plan.md) | Field names, snapshot shape, trigger rules, and addressing for test-case versioning and revision history |
+| [docs/deployment/deployment-guide.md](docs/deployment/deployment-guide.md) | The deployment model: the JSON volume mount, Compose configuration, container hardening, scaling, and rollback to an immutable release tag |
 | [docs/deployment/canary-validation-and-rollback.md](docs/deployment/canary-validation-and-rollback.md) | Canary validation, the scratch-CRUD smoke check, and safe rollback |
 | [docs/security/threat-model.md](docs/security/threat-model.md) | Trust boundaries, abuse cases, and security invariants |
 | [docs/security/authentication-decision.md](docs/security/authentication-decision.md) | The authentication decision (deferred) and its tracking ticket |
