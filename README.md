@@ -247,7 +247,7 @@ Tests are split into two layers and both run in CI on every push and pull reques
 | `tests/projects.rs` | Project CRUD, validation, conflicts, error envelopes |
 | `tests/suites.rs` | Test suite CRUD, parent-scoped creation, copy/move composition, ambiguity conflicts, missing resources |
 | `tests/runs.rs` | Test run CRUD, validation, conflicts, missing resources, JUnit XML and JSON result import, and listing, linking and unlinking the defect links a result carries |
-| `tests/cases.rs` | Test case CRUD, required fields, parent-scoped creation, copy/move composition, conflicts, missing resources |
+| `tests/cases.rs` | Test case CRUD, required fields, parent-scoped creation, copy/move composition, conflicts, missing resources, and versioning — the `version`/`lastModified` stamp and the `revisions/` snapshots a qualifying update writes |
 | `tests/milestones.rs` | Milestone CRUD, validation, conflicts, duplication, and progress derived from the referenced runs |
 | `tests/configurations.rs` | Configuration CRUD, validation, conflicts, missing resources, restart persistence, and use by a run |
 | `tests/attachments.rs` | Upload, download, delete, content types, removal with the parent test case |

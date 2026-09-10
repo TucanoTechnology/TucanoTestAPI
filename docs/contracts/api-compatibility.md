@@ -708,6 +708,47 @@ way to *read* the defects it raised; this issue gives it a way to name and unnam
   unknown `link_id` — plus `tests/service.rs` holding `DefectLinkRequest` to `additionalProperties: false` and
   `openapi.json` documenting both routes, the `link_id` parameter and the new schema.
 
+## Test Case Versioning Plan (Issue #90)
+
+Issue: [#90](https://github.com/TucanoTechnology/TucanoTestAPI/issues/90) — persists the version numbers and
+revision snapshots the normative plan in
+[`test-case-versioning-plan.md`](./test-case-versioning-plan.md) describes. This issue is storage only: the read
+routes that expose the history belong to [#91](https://github.com/TucanoTechnology/TucanoTestAPI/issues/91) and
+the run-side capture to [#92](https://github.com/TucanoTechnology/TucanoTestAPI/issues/92).
+
+- **`TestCase` gains two optional, API-managed fields.** `version` is an integer and `lastModified` is a
+  `date-time` string. Both are response-only: a create stamps `version: 1` and the current instant, an update
+  rewrites them itself, and a value the body supplies is ignored rather than honoured. Neither is required, so
+  a document written before this issue still deserializes and still reads back.
+- **Only a qualifying change starts a version.** The plan names `title`, `steps`, `preconditions` and
+  `expectedResult` as the fields that carry the case's substance, so an update that changes any of them
+  snapshots the *previous* live document to `<case>/revisions/v{version}.json` and then increments `version`,
+  writing a fresh `lastModified`. Any other update — a `priority`, `description`, `severity`, `testType`,
+  `exploratory` or `tags` edit — leaves both `version` and `lastModified` exactly as they were.
+- **A snapshot is immutable.** The snapshot file is named for the version it holds, so writing it twice is not
+  meaningful: `save_revision` returns early when the marker already exists, and history stays append-only.
+- **`lastModified` is ISO-8601 UTC, which diverges from the crate's other timestamps.** This API's older
+  timestamps (`TestRun.timestamp`, `TestCaseResult.timestamp`, `DefectLink.linkedAt`) are Unix seconds rendered
+  as a string, because their routes store a client's value verbatim. `lastModified` is different: it is never
+  client-supplied, so it is written in the format the plan asks for — `YYYY-MM-DDTHH:MM:SSZ`. The formatter is
+  hand-rolled from the Unix clock (`current_iso8601_timestamp`), because this crate carries no date library.
+- **A document that predates versioning keeps its shape until it qualifies.** A case stored without `version`
+  or `lastModified` reads back without them, and a non-qualifying update still leaves them absent — the fields
+  are only added when the case is created or a qualifying change bumps it, so no old document is rewritten just
+  by being read or lightly edited.
+- **A copy carries its history with it.** Composition `copy` duplicates the case folder, so the new case already
+  holds the source's `revisions/` snapshots and starts its own history from the source's current version.
+  `duplicate` keeps the source document verbatim, so the copy shares that state — the plan's "a copied case
+  starts its own history carrying the source's snapshots".
+- Deviation recorded with tests in `tests/cases.rs` — a create stamping `version: 1`, ignoring a client's
+  `version`/`lastModified` and creating no `revisions/` folder; a qualifying update writing an immutable
+  `revisions/v1.json` holding the pre-update document and advancing to `version: 2`; a second qualifying update
+  writing `v2.json` without rewriting `v1.json`; a non-qualifying update leaving the version, the stamp and the
+  absence of a snapshot untouched; a pre-versioning document reading back without the fields and only gaining
+  them on a qualifying edit; and a copied case arriving with the source's snapshot — plus `tests/service.rs`
+  holding the `TestCase` additions to the published contract and `src/domain/mod.rs`, `src/models.rs` and
+  `src/storage/layout.rs` carrying the formatter, the fields and the `revisions/` path as unit tests.
+
 ## Breaking change accounting
 
 - **Tags added, and their query parameter withdrawn where it could not match** (Issue #49, plan above).
@@ -801,6 +842,14 @@ way to *read* the defects it raised; this issue gives it a way to name and unnam
   response that existed before was altered. Additive only: no request that used to succeed is refused, and an
   import can only add results a run did not already record. Deviation recorded with tests in `tests/runs.rs`,
   `src/domain/import.rs` and `tests/service.rs` as listed in the plan.
+- **Test-case versions added** (Issue #90, plan above). `TestCase` gains optional `version` and `lastModified`
+  fields that the API manages, and a qualifying update now writes a `revisions/v{version}.json` snapshot of the
+  previous document. Additive for stored data and for reads: a case written before the issue keeps its exact
+  shape and is never rewritten, and a case the API has since versioned simply carries two extra keys. The
+  loosening is that a case payload supplying `version` or `lastModified` used to be refused as an unknown field
+  and is now accepted and ignored — the API owns those keys, so the value a client sends has no effect. No
+  request that used to succeed is refused. Deviation recorded with tests in `tests/cases.rs` as listed in the
+  plan.
 
 ## Required case matrix
 

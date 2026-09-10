@@ -448,3 +448,332 @@ async fn a_partial_update_keeps_the_fields_the_body_leaves_out() {
     assert_eq!(assembled["testCases"][0]["title"], "Login");
     assert_eq!(assembled["testCases"][0]["expectedResult"], "Dashboard");
 }
+
+/// Reads a stored JSON document from the volume for assertions on the layout.
+fn read_json(path: &std::path::Path) -> serde_json::Value {
+    let bytes = std::fs::read(path).expect("stored document");
+    serde_json::from_slice(&bytes).expect("stored document is JSON")
+}
+
+/// Asserts the documented `lastModified` shape: an ISO-8601 UTC timestamp.
+fn assert_iso8601(value: &serde_json::Value) -> &str {
+    let stamp = value.as_str().unwrap_or_else(|| {
+        panic!("lastModified is a string, got {value}");
+    });
+    assert_eq!(stamp.len(), 20, "ISO-8601 UTC stamp: {stamp}");
+    assert!(stamp.ends_with('Z'), "ISO-8601 UTC stamp: {stamp}");
+    assert_eq!(&stamp[4..5], "-", "ISO-8601 UTC stamp: {stamp}");
+    assert_eq!(&stamp[10..11], "T", "ISO-8601 UTC stamp: {stamp}");
+    stamp
+}
+
+#[tokio::test]
+async fn a_new_test_case_is_stamped_with_its_first_version() {
+    let (directory, app) = test_app();
+    let project = create_project(&app, "checkout").await;
+    let suite = create_suite(&app, &project, "smoke").await;
+
+    // The server owns `version` and `lastModified`, so values a client supplies
+    // are overwritten rather than stored.
+    let (status, created) = send_json(
+        &app,
+        json_request(
+            "POST",
+            &format!("/projects/{project}/test_cases"),
+            &json!({
+                "testCaseId": "TC-001",
+                "title": "Login",
+                "expectedResult": "Authenticated",
+                "version": 7,
+                "lastModified": "1999-12-31T23:59:59Z",
+            }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{created}");
+
+    let (status, stored) = send_json(&app, get("/test_cases/TC-001")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(stored["version"], json!(1));
+    let stamped = assert_iso8601(&stored["lastModified"]).to_owned();
+
+    let marker = "projects/checkout/TC-001/test-case.json";
+    let on_disk = read_json(&directory.path().join(marker));
+    assert_eq!(on_disk["version"], json!(1), "the marker carries version 1");
+    assert_eq!(on_disk["lastModified"], json!(stamped));
+    assert!(
+        !directory
+            .path()
+            .join("projects/checkout/TC-001/revisions")
+            .exists(),
+        "a fresh case has no history yet"
+    );
+
+    // A case created inside a suite is stamped the same way.
+    let (status, nested) = send_json(
+        &app,
+        json_request(
+            "POST",
+            &format!("/test_suites/{suite}/test_cases"),
+            &case_body("TC-002"),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{nested}");
+    let nested_marker = read_json(
+        &directory
+            .path()
+            .join("projects/checkout/smoke/TC-002/test-case.json"),
+    );
+    assert_eq!(nested_marker["version"], json!(1));
+}
+
+#[tokio::test]
+async fn a_qualifying_update_snapshots_the_previous_version() {
+    let (directory, app) = test_app();
+    let project = create_project(&app, "checkout").await;
+    create_case_in(&app, &format!("/projects/{project}/test_cases"), "TC-001").await;
+
+    let (_, created) = send_json(&app, get("/test_cases/TC-001")).await;
+    let first_stamp = assert_iso8601(&created["lastModified"]).to_owned();
+    let case = directory.path().join("projects/checkout/TC-001");
+
+    // `title` is a qualifying field: the pre-update document is snapshotted as
+    // version 1 and the live document advances to version 2.
+    let (status, body) = send_json(
+        &app,
+        json_request(
+            "PUT",
+            "/test_cases/TC-001",
+            &json!({"title": "Login twice"}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+
+    let (_, stored) = send_json(&app, get("/test_cases/TC-001")).await;
+    assert_eq!(stored["version"], json!(2));
+    assert_eq!(stored["title"], "Login twice");
+    let second_stamp = assert_iso8601(&stored["lastModified"]).to_owned();
+
+    let first_snapshot = read_json(&case.join("revisions/v1.json"));
+    assert_eq!(first_snapshot["version"], json!(1));
+    assert_eq!(first_snapshot["title"], "Login");
+    assert_eq!(first_snapshot["expectedResult"], "Stored");
+    assert_eq!(first_snapshot["lastModified"], json!(first_stamp));
+    assert_eq!(
+        read_json(&case.join("test-case.json"))["lastModified"],
+        json!(second_stamp),
+        "the live document carries the refreshed stamp"
+    );
+
+    // `expectedResult` qualifies too, and the next snapshot is the version 2
+    // document rather than a re-serialisation of version 1.
+    let (status, body) = send_json(
+        &app,
+        json_request(
+            "PUT",
+            "/test_cases/TC-001",
+            &json!({"expectedResult": "Authenticated"}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+
+    let (_, stored) = send_json(&app, get("/test_cases/TC-001")).await;
+    assert_eq!(stored["version"], json!(3));
+
+    let second_snapshot = read_json(&case.join("revisions/v2.json"));
+    assert_eq!(second_snapshot["version"], json!(2));
+    assert_eq!(second_snapshot["title"], "Login twice");
+    assert_eq!(second_snapshot["expectedResult"], "Stored");
+    assert_eq!(second_snapshot["lastModified"], json!(second_stamp));
+
+    // Snapshots are immutable: the earliest one still records the original text.
+    assert_eq!(read_json(&case.join("revisions/v1.json"))["title"], "Login");
+}
+
+#[tokio::test]
+async fn a_non_qualifying_update_keeps_the_version_and_writes_no_snapshot() {
+    let (directory, app) = test_app();
+    let project = create_project(&app, "checkout").await;
+    create_case_in(&app, &format!("/projects/{project}/test_cases"), "TC-001").await;
+
+    let (_, created) = send_json(&app, get("/test_cases/TC-001")).await;
+    let created_stamp = assert_iso8601(&created["lastModified"]).to_owned();
+
+    // Only metadata changes, and the body tries to shove the bookkeeping along:
+    // none of it may move.
+    let (status, body) = send_json(
+        &app,
+        json_request(
+            "PUT",
+            "/test_cases/TC-001",
+            &json!({
+                "description": "Rewritten",
+                "priority": "High",
+                "severity": "Critical",
+                "testType": "Functional",
+                "exploratory": true,
+                "tags": ["smoke", "login"],
+                "version": 99,
+                "lastModified": "1999-12-31T23:59:59Z",
+            }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+
+    let (_, stored) = send_json(&app, get("/test_cases/TC-001")).await;
+    assert_eq!(stored["version"], json!(1), "the version is untouched");
+    assert_eq!(
+        stored["lastModified"],
+        json!(created_stamp),
+        "the stamp is untouched"
+    );
+    assert_eq!(stored["priority"], "High", "the metadata landed");
+    assert_eq!(stored["tags"], json!(["smoke", "login"]));
+
+    let case = directory.path().join("projects/checkout/TC-001");
+    assert!(
+        !case.join("revisions").exists(),
+        "a non-qualifying update records no snapshot"
+    );
+
+    // A body carrying only the bookkeeping is not a qualifying change either.
+    let (status, _) = send_json(
+        &app,
+        json_request(
+            "PUT",
+            "/test_cases/TC-001",
+            &json!({"version": 42, "lastModified": "2020-01-01T00:00:00Z"}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let (_, stored) = send_json(&app, get("/test_cases/TC-001")).await;
+    assert_eq!(stored["version"], json!(1));
+    assert_eq!(stored["lastModified"], json!(created_stamp));
+}
+
+#[tokio::test]
+async fn a_case_persisted_before_versioning_stays_readable_and_versions_on_demand() {
+    let directory = tempfile::TempDir::new().expect("temp dir");
+    let case = directory.path().join("projects/legacy/TC-001");
+    std::fs::create_dir_all(&case).expect("case folder");
+    std::fs::write(
+        directory.path().join("projects/legacy/project.json"),
+        br#"{"projectId":"legacy","name":"legacy","testSuites":[]}"#,
+    )
+    .expect("legacy project");
+    let legacy = json!({
+        "testCaseId": "TC-001",
+        "title": "Legacy",
+        "expectedResult": "Stored",
+    });
+    std::fs::write(
+        case.join("test-case.json"),
+        serde_json::to_vec(&legacy).expect("legacy document"),
+    )
+    .expect("legacy document");
+    let app = common::app_at(directory.path());
+
+    // A document persisted before the fields existed still deserialises, and is
+    // served in the shape it was stored in — no new keys, no rewrite.
+    let (status, stored) = send_json(&app, get("/test_cases/TC-001")).await;
+    assert_eq!(status, StatusCode::OK, "{stored}");
+    assert_eq!(stored["title"], "Legacy");
+    assert!(
+        stored.get("version").is_none() && stored.get("lastModified").is_none(),
+        "a legacy document gains no bookkeeping by being read: {stored}"
+    );
+
+    // A non-qualifying update keeps that on-disk shape.
+    let (status, _) = send_json(
+        &app,
+        json_request("PUT", "/test_cases/TC-001", &json!({"priority": "Low"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (_, stored) = send_json(&app, get("/test_cases/TC-001")).await;
+    assert_eq!(stored["priority"], "Low");
+    assert!(stored.get("version").is_none() && stored.get("lastModified").is_none());
+
+    // The first qualifying update treats the stored document as version 1: the
+    // legacy text is snapshotted verbatim and the live document becomes 2.
+    let (status, _) = send_json(
+        &app,
+        json_request(
+            "PUT",
+            "/test_cases/TC-001",
+            &json!({"title": "Legacy renamed"}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let (_, stored) = send_json(&app, get("/test_cases/TC-001")).await;
+    assert_eq!(stored["version"], json!(2));
+    assert_eq!(stored["title"], "Legacy renamed");
+    assert_iso8601(&stored["lastModified"]);
+    assert_eq!(
+        read_json(&case.join("revisions/v1.json")),
+        json!({
+            "testCaseId": "TC-001",
+            "title": "Legacy",
+            "expectedResult": "Stored",
+            "priority": "Low",
+        }),
+        "the snapshot is the pre-update document, verbatim"
+    );
+}
+
+#[tokio::test]
+async fn a_copied_case_carries_the_revision_snapshots_of_its_source() {
+    let (directory, app) = test_app();
+    let project = create_project(&app, "checkout").await;
+    let suite = create_suite(&app, &project, "smoke").await;
+    create_case_in(&app, &format!("/test_suites/{suite}/test_cases"), "TC-001").await;
+
+    let (status, _) = send_json(
+        &app,
+        json_request(
+            "PUT",
+            "/test_cases/TC-001",
+            &json!({"title": "Login twice"}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let source = directory.path().join("projects/checkout/smoke/TC-001");
+    let snapshot = read_json(&source.join("revisions/v1.json"));
+    assert_eq!(snapshot["title"], "Login");
+
+    // A folder copy duplicates the case's history with it, so the copy's next
+    // qualifying update continues from the version its live document carries.
+    let (status, copied) = send_json(
+        &app,
+        json_request(
+            "POST",
+            &format!("/projects/{project}/test_cases"),
+            &json!({"testCaseId": "TC-001"}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{copied}");
+
+    let copy = directory.path().join("projects/checkout/TC-001");
+    assert_eq!(read_json(&copy.join("revisions/v1.json")), snapshot);
+    assert_eq!(read_json(&copy.join("test-case.json"))["version"], json!(2));
+
+    // Two homes for one identifier: the copy is addressed through the routes
+    // that name its parent, and the flat routes refuse the ambiguity.
+    let (status, body) = send_json(&app, get("/test_cases/TC-001")).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_error_envelope(&body, "conflict");
+
+    let (_, owned) = send_json(&app, get(&format!("/projects/{project}/test_cases"))).await;
+    assert_eq!(owned, json!(["TC-001"]));
+}

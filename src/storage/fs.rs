@@ -6,8 +6,8 @@ use std::path::{Path, PathBuf};
 
 use super::layout::{
     Parent, Placement, attachment_path, case_dir, case_marker, document_path, folder_wire_id,
-    node_folder, parent_dir, project_dir, project_marker, root_dir, set_private_permissions,
-    step_attachment_path, suite_dir, suite_marker, unique_suffix,
+    node_folder, parent_dir, project_dir, project_marker, revision_marker, root_dir,
+    set_private_permissions, step_attachment_path, suite_dir, suite_marker, unique_suffix,
 };
 use super::{Repository, Resource};
 
@@ -538,6 +538,33 @@ impl Repository for FileRepository {
                 return Err(error);
             }
             Ok(())
+        })();
+        lock.unlock()?;
+        result
+    }
+
+    fn save_revision(
+        &self,
+        parent: &Parent,
+        case: &str,
+        version: u64,
+        value: &Value,
+    ) -> io::Result<()> {
+        let lock = self.acquire_lock()?;
+        let result = (|| {
+            let marker = case_marker(&self.root, parent, case)?;
+            if !marker.is_file() {
+                return Err(io::Error::new(
+                    io::ErrorKind::NotFound,
+                    "test case does not exist",
+                ));
+            }
+            let revision = revision_marker(&self.root, parent, case, version)?;
+            if revision.exists() {
+                // A revision snapshot is immutable: an existing one is never rewritten.
+                return Ok(());
+            }
+            self.write_json(&revision, value)
         })();
         lock.unlock()?;
         result
