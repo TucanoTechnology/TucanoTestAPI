@@ -107,6 +107,23 @@ pub struct DefectLink {
     pub linked_at: String,
 }
 
+/// The client-supplied half of a [`DefectLink`].
+///
+/// The API derives `link_id` and `linked_at`, so a request that carries either
+/// is rejected rather than silently ignored: a client that thinks it is naming
+/// the link would otherwise never learn that its identifier was thrown away.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DefectLinkRequest {
+    pub defect_id: String,
+    pub defect_url: String,
+    pub tracker_type: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct TestCaseResult {
