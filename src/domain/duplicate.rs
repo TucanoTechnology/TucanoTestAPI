@@ -73,12 +73,25 @@ pub const RUN: DuplicateSpec = DuplicateSpec {
     already_exists_message: "Test run already exists",
 };
 
+/// Duplication of a milestone, which keeps the runs it references and therefore
+/// derives the same progress as the source.
+pub const MILESTONE: DuplicateSpec = DuplicateSpec {
+    resource: Resource::Milestones,
+    id_field: "milestoneId",
+    not_found_message: "Milestone not found",
+    rename: None,
+    reset_run_state: false,
+    duplicated_message: "Milestone duplicated",
+    already_exists_message: "Milestone already exists",
+};
+
 /// Applies the request-body overrides to a duplicated document and returns the
 /// identifier the copy should be stored under.
 ///
-/// The derived identifier deliberately omits the `.json` suffix — that is the
-/// long-standing behaviour issue #68 tracks, and changing it here would be a
-/// silent breaking change.
+/// A body without `newId` derives `{source base}-copy-{suffix}`. File-backed
+/// resources address their documents through an identifier ending in `.json`,
+/// so the derived identifier carries one; test cases keep their bare
+/// identifier. An explicit `newId` is used verbatim.
 pub fn apply_overrides(
     spec: &DuplicateSpec,
     source_id: &str,
@@ -87,11 +100,18 @@ pub fn apply_overrides(
 ) -> String {
     let new_id = match body.get("newId").and_then(Value::as_str) {
         Some(new_id) => new_id.to_owned(),
-        None => format!(
-            "{}-copy-{}",
-            source_id.trim_end_matches(".json"),
-            unique_suffix()
-        ),
+        None => {
+            let derived = format!(
+                "{}-copy-{}",
+                source_id.trim_end_matches(".json"),
+                unique_suffix()
+            );
+            if spec.resource.id_requires_json_suffix() {
+                format!("{derived}.json")
+            } else {
+                derived
+            }
+        }
     };
     set_field(document, spec.id_field, json!(new_id));
 
@@ -148,7 +168,53 @@ mod tests {
             id.starts_with("checkout-copy-"),
             "unexpected derived id {id}"
         );
+        assert!(
+            id.ends_with(".json"),
+            "derived id must be addressable: {id}"
+        );
         assert_eq!(document["projectId"], id);
+    }
+
+    #[test]
+    fn derived_ids_carry_the_suffix_the_storage_layer_requires() {
+        for spec in [PROJECT, SUITE, RUN, MILESTONE] {
+            let mut document = json!({});
+            let id = apply_overrides(&spec, "source.json", &json!({}), &mut document);
+
+            assert!(id.starts_with("source-copy-"), "{spec:?} derived {id}");
+            assert!(id.ends_with(".json"), "{spec:?} derived {id}");
+            assert_eq!(document[spec.id_field], id);
+        }
+
+        let mut case_document = json!({ "testCaseId": "TC-1" });
+        let id = apply_overrides(&CASE, "TC-1", &json!({}), &mut case_document);
+
+        assert!(id.starts_with("TC-1-copy-"), "unexpected derived id {id}");
+        assert!(!id.ends_with(".json"), "test cases keep bare ids: {id}");
+        assert_eq!(case_document["testCaseId"], id);
+    }
+
+    #[test]
+    fn a_milestone_copy_keeps_every_field_it_references() {
+        let mut document = json!({
+            "milestoneId": "M-1.json",
+            "name": "Sprint 42",
+            "startDate": "2026-09-01",
+            "targetDate": "2026-09-15",
+            "status": "Open",
+            "testSuiteIds": ["S-1.json"],
+            "testRunIds": ["RUN-1.json"]
+        });
+        let id = apply_overrides(&MILESTONE, "M-1.json", &json!({}), &mut document);
+
+        assert!(id.starts_with("M-1-copy-"), "unexpected derived id {id}");
+        assert_eq!(document["milestoneId"], id);
+        assert_eq!(document["name"], "Sprint 42");
+        assert_eq!(document["startDate"], "2026-09-01");
+        assert_eq!(document["targetDate"], "2026-09-15");
+        assert_eq!(document["status"], "Open");
+        assert_eq!(document["testSuiteIds"], json!(["S-1.json"]));
+        assert_eq!(document["testRunIds"], json!(["RUN-1.json"]));
     }
 
     #[test]

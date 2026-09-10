@@ -3,15 +3,20 @@
 use axum::{
     Json, Router,
     extract::{Path, State},
-    routing::get,
+    routing::{get, post},
 };
 
 use crate::{
+    domain::{DomainError, duplicate},
     models::MilestoneProgress,
     storage::{Repository, Resource},
 };
 
-use super::{AppState, crud::crud_handlers, crud::prelude::*};
+use super::{
+    AppState,
+    crud::prelude::*,
+    crud::{crud_handlers, duplicate_handler},
+};
 
 crud_handlers!(
     list_milestones,
@@ -21,6 +26,8 @@ crud_handlers!(
     delete_milestone,
     Resource::Milestones
 );
+
+duplicate_handler!(duplicate_milestone, duplicate::MILESTONE);
 
 async fn get_milestone_progress<R: Repository>(
     State(service): State<AppState<R>>,
@@ -41,6 +48,7 @@ pub(crate) fn routes<R: Repository + 'static>() -> Router<AppState<R>> {
                 .put(update_milestone::<R>)
                 .delete(delete_milestone::<R>),
         )
+        .route("/milestones/{id}/duplicate", post(duplicate_milestone::<R>))
         .route(
             "/milestones/{id}/progress",
             get(get_milestone_progress::<R>),
