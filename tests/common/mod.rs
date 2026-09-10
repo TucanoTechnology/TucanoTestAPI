@@ -114,32 +114,62 @@ fn multipart_with_body(uri: &str, body: Vec<u8>) -> Request<Body> {
         .expect("request")
 }
 
-/// Creates a flat resource from its `name` and returns the generated identifier.
+/// Creates a project, suite, or flat resource from its `name` and returns the
+/// generated identifier.
 pub async fn create_named(app: &Router, collection: &str, name: &str) -> String {
-    let (status, created) = send_json(
+    created_id(
         app,
-        json_request("POST", collection, &json!({"name": name})),
+        collection,
+        &json!({"name": name}),
+        &format!("{name} in {collection}"),
     )
-    .await;
-    assert_eq!(
-        status,
-        StatusCode::CREATED,
-        "creating {name} in {collection}"
-    );
-    created["id"].as_str().expect("created id").to_owned()
+    .await
 }
 
-pub async fn create_test_case(app: &Router, id: &str) {
-    let (status, _) = send_json(
+/// Creates a project at the root of the tree.
+pub async fn create_project(app: &Router, name: &str) -> String {
+    create_named(app, "/projects", name).await
+}
+
+/// Creates a suite inside a project and returns the generated identifier.
+pub async fn create_suite(app: &Router, project: &str, name: &str) -> String {
+    created_id(
         app,
-        json_request(
-            "POST",
-            "/test_cases",
-            &json!({"testCaseId": id, "title": "Upload", "expectedResult": "Stored"}),
-        ),
+        &format!("/projects/{project}/test_suites"),
+        &json!({"name": name}),
+        &format!("suite {name} in {project}"),
     )
-    .await;
-    assert_eq!(status, StatusCode::CREATED, "creating test case {id}");
+    .await
+}
+
+/// A minimal payload that creates a test case.
+pub fn case_body(id: &str) -> Value {
+    json!({"testCaseId": id, "title": "Login", "expectedResult": "Stored"})
+}
+
+/// Creates a test case under an existing parent collection, given as a path
+/// such as `/projects/checkout.json/test_cases`.
+pub async fn create_case_in(app: &Router, collection: &str, id: &str) -> String {
+    created_id(
+        app,
+        collection,
+        &case_body(id),
+        &format!("test case {id} in {collection}"),
+    )
+    .await
+}
+
+/// Creates a test case in a project of its own, so that the case has exactly
+/// one home and every document-level route resolves it.
+pub async fn create_test_case(app: &Router, id: &str) {
+    let project = create_project(app, "checkout").await;
+    create_case_in(app, &format!("/projects/{project}/test_cases"), id).await;
+}
+
+async fn created_id(app: &Router, collection: &str, body: &Value, what: &str) -> String {
+    let (status, created) = send_json(app, json_request("POST", collection, body)).await;
+    assert_eq!(status, StatusCode::CREATED, "creating {what}: {created}");
+    created["id"].as_str().expect("created id").to_owned()
 }
 
 /// Asserts the stable `{ "error": { "code", "message" } }` envelope.

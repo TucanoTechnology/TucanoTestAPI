@@ -52,6 +52,10 @@ pub const ROUTES: &[&str] = &[
     "/projects",
     "/projects/{id}",
     "/projects/{id}/duplicate",
+    "/projects/{id}/test_suites",
+    "/projects/{id}/test_suites/{suite_id}",
+    "/projects/{id}/test_cases",
+    "/projects/{id}/test_cases/{case_id}",
     "/test_suites",
     "/test_suites/{id}",
     "/test_suites/{id}/duplicate",
@@ -77,9 +81,11 @@ pub const ROUTES: &[&str] = &[
 
 /// Paths that are served but have no separate entry in the published contract.
 ///
-/// Only the trailing-slash alias of the Swagger UI is listed: it is a routing
-/// convenience, not a distinct operation, and OpenAPI has no way to say so.
-pub const UNDOCUMENTED_ROUTES: &[&str] = &["/api-docs/"];
+/// The trailing-slash alias of the Swagger UI is a routing convenience, not a
+/// distinct operation. `POST /test_suites` and `POST /test_cases` are the
+/// retired flat creation routes: they survive only to explain where creation
+/// moved, so the published contract documents the parent-scoped routes alone.
+pub const UNDOCUMENTED_ROUTES: &[&str] = &["/api-docs/", "/test_suites", "/test_cases"];
 
 /// Builds the application, backed by `repository`.
 pub fn router<R>(repository: R) -> Router

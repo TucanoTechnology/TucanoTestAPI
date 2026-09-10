@@ -1,23 +1,28 @@
 //! `/test_cases` — a single executable check, with its attachments.
+//!
+//! A case has no top-level collection: it is created inside a project or a
+//! suite, either through the parent-scoped routes or by placing an existing
+//! case there. Attachment routes address a case by its bare identifier and only
+//! work when one parent owns it.
 
 use axum::{
     Json, Router,
     extract::{Multipart, Path, State},
     http::{StatusCode, header},
     response::{IntoResponse, Response},
-    routing::{get, post},
+    routing::{delete, get, post},
 };
 use serde_json::{Value, json};
 
 use crate::{
-    domain::{DomainError, MAX_ATTACHMENT_BYTES, duplicate},
-    storage::{Repository, Resource},
+    domain::{DomainError, MAX_ATTACHMENT_BYTES, duplicate, mime_type},
+    storage::{Parent, Repository, Resource},
 };
 
 use super::{
     AppState,
     crud::prelude::*,
-    crud::{crud_handlers, duplicate_handler},
+    crud::{composed_response, crud_handlers, duplicate_handler},
 };
 
 crud_handlers!(
@@ -31,12 +36,37 @@ crud_handlers!(
 
 duplicate_handler!(duplicate_test_case, duplicate::CASE);
 
+async fn list_project_cases<R: Repository>(
+    State(service): State<AppState<R>>,
+    Path(id): Path<String>,
+) -> Result<Json<Value>, DomainError> {
+    let items = service.list_children(&Parent::Project(id), Resource::Cases)?;
+    Ok(Json(json!(items)))
+}
+
+async fn create_project_case<R: Repository>(
+    State(service): State<AppState<R>>,
+    Path(id): Path<String>,
+    Json(body): Json<Value>,
+) -> Result<(StatusCode, Json<Value>), DomainError> {
+    let composed = service.compose(Resource::Cases, &Parent::Project(id), &body)?;
+    Ok(composed_response(&composed, "Test case"))
+}
+
+async fn delete_project_case<R: Repository>(
+    State(service): State<AppState<R>>,
+    Path((id, case_id)): Path<(String, String)>,
+) -> Result<Json<Value>, DomainError> {
+    service.delete_in(Resource::Cases, &Parent::Project(id), &case_id)?;
+    Ok(Json(json!({ "message": "Test case deleted" })))
+}
+
 async fn upload_attachment<R: Repository>(
     State(service): State<AppState<R>>,
     Path(id): Path<String>,
     mut multipart: Multipart,
 ) -> Result<(StatusCode, Json<Value>), DomainError> {
-    service.require_test_case(&id)?;
+    let parent = service.require_test_case(&id)?;
 
     let field = match multipart.next_field().await {
         Ok(Some(field)) => field,
@@ -53,7 +83,7 @@ async fn upload_attachment<R: Repository>(
         return Err(DomainError::PayloadTooLarge);
     }
 
-    let stored = service.store_attachment(&id, &original_name, &contents)?;
+    let stored = service.store_attachment(&parent, &id, &original_name, &contents)?;
     Ok((
         StatusCode::CREATED,
         Json(json!({
@@ -69,7 +99,8 @@ async fn download_attachment<R: Repository>(
     State(service): State<AppState<R>>,
     Path((id, filename)): Path<(String, String)>,
 ) -> Result<Response, DomainError> {
-    let contents = service.read_attachment(&id, &filename)?;
+    let parent = service.require_test_case(&id)?;
+    let contents = service.read_attachment(&parent, &id, &filename)?;
     Ok(([(header::CONTENT_TYPE, mime_type(&filename))], contents).into_response())
 }
 
@@ -77,12 +108,15 @@ async fn delete_attachment<R: Repository>(
     State(service): State<AppState<R>>,
     Path((id, filename)): Path<(String, String)>,
 ) -> Result<Json<Value>, DomainError> {
-    service.delete_attachment(&id, &filename)?;
+    let parent = service.require_test_case(&id)?;
+    service.delete_attachment(&parent, &id, &filename)?;
     Ok(Json(json!({ "message": "File deleted successfully" })))
 }
 
 pub(crate) fn routes<R: Repository + 'static>() -> Router<AppState<R>> {
     Router::new()
+        // Retired: a case is created inside a project or a suite. The handler
+        // answers with an explanation rather than a document.
         .route(
             "/test_cases",
             get(list_test_cases::<R>).post(create_test_case::<R>),
@@ -99,6 +133,14 @@ pub(crate) fn routes<R: Repository + 'static>() -> Router<AppState<R>> {
             "/test_cases/{id}/attachments/{filename}",
             get(download_attachment::<R>).delete(delete_attachment::<R>),
         )
+        .route(
+            "/projects/{id}/test_cases",
+            get(list_project_cases::<R>).post(create_project_case::<R>),
+        )
+        .route(
+            "/projects/{id}/test_cases/{case_id}",
+            delete(delete_project_case::<R>),
+        )
 }
 
 fn invalid_multipart(message: &str) -> DomainError {
@@ -112,23 +154,5 @@ fn missing_file() -> DomainError {
     DomainError::InvalidRequest {
         code: "missing_file",
         message: "No file uploaded".to_owned(),
-    }
-}
-
-fn mime_type(filename: &str) -> &'static str {
-    match filename
-        .rsplit('.')
-        .next()
-        .unwrap_or_default()
-        .to_ascii_lowercase()
-        .as_str()
-    {
-        "png" => "image/png",
-        "jpg" | "jpeg" => "image/jpeg",
-        "gif" => "image/gif",
-        "pdf" => "application/pdf",
-        "txt" => "text/plain",
-        "json" => "application/json",
-        _ => "application/octet-stream",
     }
 }
