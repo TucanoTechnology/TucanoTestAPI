@@ -280,15 +280,17 @@ async fn tags_do_not_weaken_unknown_field_rejection() {
     );
 }
 
-/// `validate_payload` type-checks only the nested collections, so a scalar
-/// field carrying the wrong JSON type is stored exactly as sent. This pins
-/// that behaviour as deliberate rather than accidental; #121 tightens the
-/// validation and replaces this test with one that expects a rejection.
+/// A scalar field carrying the wrong JSON type is rejected before anything is
+/// persisted. `tags` is an accepted key, so the rejection comes from the value:
+/// the model declares `Option<Vec<String>>` and a bare string contradicts it.
+/// #121 tightened this — before it, `validate_payload` type-checked only the
+/// nested collections and the wrong-typed value was stored verbatim, which left
+/// the documented `?tags=` filter silently unable to match the document.
 #[tokio::test]
-async fn a_wrong_typed_scalar_is_currently_stored_verbatim() {
+async fn a_wrong_typed_scalar_is_rejected_with_the_field_named() {
     let (_directory, app) = test_app();
 
-    let (status, created) = send_json(
+    let (status, body) = send_json(
         &app,
         json_request(
             "POST",
@@ -297,22 +299,14 @@ async fn a_wrong_typed_scalar_is_currently_stored_verbatim() {
         ),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{created}");
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    common::assert_error_envelope(&body, "invalid_request");
+    assert_eq!(body["error"]["message"], json!("Field `tags` is invalid"));
 
-    let id = created["id"].as_str().expect("created id");
-    let (status, stored) = send_json(&app, get(&format!("/projects/{id}"))).await;
-    assert_eq!(status, StatusCode::OK);
     assert_eq!(
-        stored["tags"],
-        json!("smoke"),
-        "the wrong-typed value survives a round trip (#121)"
-    );
-
-    // The documented `?tags=` filter reads the raw array, so the stored string
-    // can never match it: the resource is silently invisible to the filter.
-    assert_eq!(
-        listed_ids(&app, "/projects?tags=smoke").await,
-        Vec::<String>::new()
+        listed_ids(&app, "/projects").await,
+        Vec::<String>::new(),
+        "a rejected body must not be stored"
     );
 }
 
