@@ -2,6 +2,71 @@
 
 Rust architecture evaluation for TucanoTCM. The project preserves the file-based JSON storage model and keeps future GUI clients behind the documented HTTP API.
 
+## Storage concept
+
+Tucano Test is a **file-based test case management system**: there is no database. All state is
+kept as folders and JSON files on the filesystem, and everything is managed through the HTTP API —
+create, read, update, delete, and duplicate. The GUI and the API are equal citizens: every GUI
+action has an API equivalent, and no client ever touches the storage directory directly.
+
+The folder layout mirrors the conceptual organisation of the domain. Each entity is a folder that
+contains a JSON file with its details plus any supplementary files that belong to it:
+
+```text
+TUCANO_DATA_DIR/
+├── projects/
+│   └── <project>/
+│       ├── project.json                 project details
+│       ├── <test case>/                 case data, steps, attachments (directly in the project)
+│       └── <test suite>/
+│           ├── suite.json               suite details + suite case data
+│           └── <test case>/             case data, steps, attachments
+├── test_runs/                           point-in-time runs and their results
+└── milestones/                          milestone details
+```
+
+The conceptual hierarchy, as distinct from the exact on-disk encoding:
+
+- **Project** — the container for the work being tested. Contains multiple test cases and multiple
+  test suites; a test case may therefore live directly inside a project, without belonging to a
+  suite.
+- **Test Suite** — a reusable collection of test cases with its own suite-level data. Contains
+  multiple test cases. A suite always lives inside a project.
+- **Test Case** — a single test: its details, steps, expected results, and supplementary files
+  (for example attachments). Lives inside a project or inside a suite.
+
+Three properties follow from the concept and are binding on any implementation:
+
+1. **The file structure represents the conceptual organisation.** Nested entities are stored under
+   their parent rather than in sibling directories with duplicated copies. The on-disk tree must
+   read the same way the domain model reads: project → (suite →) test case.
+2. **A test run is a point-in-time execution.** A run captures the set of test cases and test suites
+   it executed plus the results recorded for that run. The same test case or suite can appear in
+   multiple test runs with different results, and later edits to a case or suite never rewrite what
+   a finished run recorded.
+3. **Supplementary files live with their entity.** Attachments are stored inside their test case
+   folder; run results are stored inside their test run folder (or as files under it).
+
+Milestones and test runs must never go silently stale when the source cases or suites they refer to
+change: they either carry their own snapshot at inclusion time or record the history of the runs
+they were included in with that run's results.
+
+Two API semantics follow from this concept and apply to every composition request:
+
+- **A real parent is required at creation.** A test suite is created inside its project and a test
+  case inside its project or a test suite; nothing is created in a standalone top-level pool. The
+  on-disk tree mirrors these homes: a suite folder lives under its project and a case folder under
+  its project or its suite. Reads remain global — listing and retrieval search the whole tree, so
+  cases and suites are always findable regardless of home.
+- **Inclusion is copy by default and move opt-in.** Adding an existing case or suite to another
+  parent accepts `"mode": "copy" | "move"` and defaults to `copy`: `copy` duplicates the entity
+  under the target parent (duplicate-on-include) while the source keeps its home and both copies
+  are editable independently; `move` relocates the entity so the target parent becomes its only
+  home. Test runs always copy at inclusion — they snapshot the selected cases and suites and never
+  own them.
+
+This concept is enforced for agent work in [AGENTS.md](AGENTS.md).
+
 ## Prerequisites
 
 To build and run the project manually you need:
@@ -54,30 +119,13 @@ Interactive Swagger UI is available at `http://localhost:3000/api-docs`; the raw
 
 The API process is stateless: replicas do not keep sessions or in-memory records. Horizontal scaling requires a shared persistent POSIX volume mounted at the same `TUCANO_DATA_DIR` for every replica. Repository mutations use an advisory lock file and atomic same-directory renames. A local Docker volume is suitable for one node; multi-node deployments must provide shared storage with working advisory locks. Do not use separate per-replica local volumes, or data will diverge.
 
-## Test Data Seeding and Cleanup
+## Test Data Cleanup
 
-Helper scripts are provided in `scripts/` to quickly populate or wipe sample test data against a running API instance (e.g. for GUI testing or manual verification):
+Helper scripts are provided in `scripts/` to wipe sample test data against a running API instance:
 
 ### Prerequisites
 
 Node.js 18+ (uses native `fetch` and ES modules).
-
-### Seeding Data
-
-Populates realistic test cases (with attachments), test suites, projects, test runs (with execution results), and milestones:
-
-```sh
-# From repository root:
-node scripts/seed-data.mjs
-# or (if executable permissions are set):
-./scripts/seed-data.mjs
-
-# From within the scripts/ folder:
-node seed-data.mjs
-
-# Provide a custom API base URL if needed:
-node scripts/seed-data.mjs http://localhost:3000
-```
 
 ### Clearing Data
 
