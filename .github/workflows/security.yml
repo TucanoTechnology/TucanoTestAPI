@@ -82,7 +82,34 @@ jobs:
       - name: Install cargo-cyclonedx
         run: cargo install cargo-cyclonedx --locked
       - name: Generate SBOM
-        run: cargo cyclonedx --format json > sbom.json
+        # cargo-cyclonedx prints nothing: it writes <crate>.cdx.json next to the
+        # manifest, so `> sbom.json` captured an empty document and the job
+        # published a 0-byte artifact (issue #139). --override-filename names the
+        # file instead, and the format supplies the extension.
+        run: cargo cyclonedx --format json --override-filename sbom
+      - name: Prove the SBOM lists the crate's components
+        # The image ships python3, so the document is parsed rather than merely
+        # size-checked: a malformed or empty write has to fail the job.
+        run: |
+          python3 - <<'PY'
+          import json
+          import pathlib
+          import sys
+
+          sbom = pathlib.Path("sbom.json")
+          if not sbom.is_file() or sbom.stat().st_size == 0:
+              sys.exit("sbom.json is missing or empty")
+
+          document = json.loads(sbom.read_text(encoding="utf-8"))
+          if document.get("bomFormat") != "CycloneDX":
+              sys.exit("sbom.json is not a CycloneDX document")
+
+          components = document.get("components") or []
+          if not components:
+              sys.exit("sbom.json lists no components")
+
+          print(f"sbom.json: CycloneDX {document.get('specVersion')} with {len(components)} components")
+          PY
       - name: Upload SBOM artifact
         uses: actions/upload-artifact@v5
         with:
