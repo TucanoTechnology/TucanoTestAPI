@@ -400,12 +400,32 @@ These were found while reconciling the document and are left as they are:
   parity; the widening (or the `enum` on the Rust side) needs its own decision.
 - No `TestRun` schema is published, so the run documents referenced by responses are described only
   structurally. Adding one is a follow-up.
-- Creating a run, milestone, or configuration from a body that names only `name` stores a document without
-  the identity field its model requires, so reading it back — `POST /test_runs/{id}/results`,
-  `GET /milestones/{id}/progress` — answers `500 storage_error`. The cause is the identity normalisation that
-  covers only projects and suites. It is tracked as
-  [#78](https://github.com/TucanoTechnology/TucanoTestAPI/issues/78), separately from this issue, and is not a
-  documentation bug.
+
+## Identity Normalisation Plan (Issue #78)
+
+Issue: [#78](https://github.com/TucanoTechnology/TucanoTestAPI/issues/78) — a create body that omits the
+identity field either stores a document that satisfies its model or is refused with a `4xx`, never `201`
+followed by a `500`. Found while reconciling the error contract for #76, which recorded it as outside its scope;
+this plan resolves it.
+
+- Every resource with an identity field records it on write, from the identifier the create body already
+  derived: `projectId`, `suiteId`, `testRunId`, `milestoneId`, `configId`. A value the body supplied is kept
+  verbatim; the derived id only fills a field that is absent or not a string.
+- A test run stored without a `timestamp` records the moment it was stored — Unix seconds rendered as a string,
+  applied by the same rule (`required_string(body, "timestamp").unwrap_or_else(current_timestamp_string)`) the
+  run-result route already used. A `timestamp` the body carries is kept.
+- The milestone identity is the stored name, so `POST /milestones {"name": "M1"}` stores
+  `milestoneId: "M1.json"`, the same id form duplication already derives.
+- Test cases are unaffected: the id is derived from `testCaseId`, so a body that omits it is refused with
+  `400 invalid_request` before anything is written. Storage stays permissive and reads are unchanged — no
+  document already on disk is re-validated or rewritten.
+- Parent markers are unchanged: `project.json` and `suite.json` still store empty `testSuites` / `testCases`
+  arrays, because membership lives in the folders.
+- Deviation recorded with tests in `tests/runs.rs::a_run_created_from_a_name_alone_reads_back_and_records_results`,
+  `tests/milestones.rs::a_milestone_created_from_a_name_alone_reads_back_and_reports_progress`,
+  `tests/configurations.rs::a_configuration_created_from_a_name_alone_reads_back_as_its_model`, and
+  `tests/service.rs::an_unusable_path_identifier_is_answered_with_invalid_id`, which now creates its run from a
+  name alone.
 
 ## Breaking change accounting
 
@@ -448,6 +468,18 @@ These were found while reconciling the document and are left as they are:
   `::a_test_case_identifier_is_addressed_verbatim`,
   `::duplicate_routes_report_an_unusable_identifier_as_their_own_description_says`, and
   `::openapi_schemas_are_strict_only_where_the_api_rejects_unknown_fields`.
+- **Identity fields recorded on write** (Issue #78). A create or update body that omits the identity field now
+  stores the field the derived id stands for, so a name-only `POST /test_runs {"name": "nightly"}` stores more
+  keys than before: `{"name": "nightly", "testRunId": "nightly.json", "timestamp": "…"}`. No request that used
+  to succeed is refused, no published response shape changed, no document already on disk is rewritten, and a
+  field the body supplied is still stored verbatim. The observable effect is that a route reading such a
+  document — `GET /test_runs/{id}`, `GET /milestones/{id}`, `GET /milestones/{id}/progress`, `GET
+  /configurations/{id}`, `POST /test_runs/{id}/{results,test_suites,test_cases}` — answers its document instead
+  of `500 storage_error`. Deviation recorded with tests in
+  `tests/runs.rs::a_run_created_from_a_name_alone_reads_back_and_records_results`,
+  `tests/milestones.rs::a_milestone_created_from_a_name_alone_reads_back_and_reports_progress`,
+  `tests/configurations.rs::a_configuration_created_from_a_name_alone_reads_back_as_its_model`, and
+  `tests/service.rs::an_unusable_path_identifier_is_answered_with_invalid_id`.
 
 ## Required case matrix
 
