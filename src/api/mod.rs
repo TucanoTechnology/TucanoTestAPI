@@ -13,6 +13,7 @@ mod crud;
 mod error;
 mod milestones;
 mod projects;
+mod reports;
 mod runs;
 mod suites;
 
@@ -86,6 +87,7 @@ pub const ROUTES: &[&str] = &[
     "/milestones/{id}",
     "/milestones/{id}/duplicate",
     "/milestones/{id}/progress",
+    "/reports/coverage",
     "/configurations",
     "/configurations/{id}",
 ];
@@ -115,6 +117,7 @@ where
         .merge(runs::routes::<R>())
         .merge(cases::routes::<R>())
         .merge(milestones::routes::<R>())
+        .merge(reports::routes::<R>())
         .merge(configurations::routes::<R>())
         .layer(RequestBodyLimitLayer::new(MAX_BODY_BYTES))
         .layer(TraceLayer::new_for_http())
