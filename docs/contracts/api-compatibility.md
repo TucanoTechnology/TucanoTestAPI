@@ -850,6 +850,29 @@ the run-side capture to [#92](https://github.com/TucanoTechnology/TucanoTestAPI/
   and is now accepted and ignored — the API owns those keys, so the value a client sends has no effect. No
   request that used to succeed is refused. Deviation recorded with tests in `tests/cases.rs` as listed in the
   plan.
+- **Test-case revision history endpoints added** (Issue #91, plan above). `GET /test_cases/{id}/history` and
+  `GET /test_cases/{id}/history/{version}`, the `CaseHistoryEntry` schema, the `version` path parameter and the
+  `InvalidVersion` `400` response are new; no stored document shape changed and no response that existed before
+  was altered, so the change is additive. Two decisions are recorded here. First, the listing is a **bare
+  array** — `[{"version", "lastModified"?, "changedFields"}]`, oldest first — as the normative versioning plan
+  specifies, not the `{"versions": […]}` wrapper the issue text sketched; the wrapper was redundant, and the
+  plan is the document the contract is held to. Second, `changedFields` names the qualifying fields (`title`,
+  `steps`, `preconditions`, `expectedResult`) in which a snapshot differs from the version that superseded it,
+  so the newest snapshot is measured against the live document; the live version is not a snapshot and never
+  appears, and a case that has never had a qualifying update lists `[]`. `lastModified` is optional on the
+  entry because a snapshot written before versioning carries no stamp. The revision route resolves the case
+  before it parses the version, so an unknown case answers `404` even when the version is unusable; an unusable
+  version on a known case is `400 invalid_request`, and an unrecorded version — including the current live
+  version, which is read through `GET /test_cases/{id}` — is `404`. Deviation recorded with tests in
+  `tests/cases.rs` (`::a_case_without_qualifying_updates_has_an_empty_history`,
+  `::case_history_lists_its_snapshots_oldest_first_with_the_fields_they_changed`,
+  `::a_recorded_revision_is_returned_verbatim_and_the_live_version_is_not_a_snapshot`,
+  `::history_resolves_the_case_before_it_validates_the_version`,
+  `::history_is_available_for_a_case_held_inside_a_suite`, and
+  `::a_snapshot_written_before_versioning_lists_without_a_timestamp`), with
+  `tests/service.rs::openapi_schemas_are_strict_only_where_the_api_rejects_unknown_fields` holding
+  `CaseHistoryEntry` to the permissive set, and `::openapi_document_matches_the_registered_routes` proving both
+  paths are published and registered.
 
 ## Required case matrix
 

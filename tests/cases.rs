@@ -777,3 +777,245 @@ async fn a_copied_case_carries_the_revision_snapshots_of_its_source() {
     let (_, owned) = send_json(&app, get(&format!("/projects/{project}/test_cases"))).await;
     assert_eq!(owned, json!(["TC-001"]));
 }
+
+#[tokio::test]
+async fn a_case_without_qualifying_updates_has_an_empty_history() {
+    let (_directory, app) = test_app();
+    let project = create_project(&app, "checkout").await;
+    create_case_in(&app, &format!("/projects/{project}/test_cases"), "TC-001").await;
+
+    // A non-qualifying update leaves the version alone and records nothing.
+    let (status, _) = send_json(
+        &app,
+        json_request("PUT", "/test_cases/TC-001", &json!({"priority": "High"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let (status, history) = send_json(&app, get("/test_cases/TC-001/history")).await;
+    assert_eq!(status, StatusCode::OK, "{history}");
+    assert_eq!(history, json!([]), "a case with no snapshots lists nothing");
+}
+
+#[tokio::test]
+async fn case_history_lists_its_snapshots_oldest_first_with_the_fields_they_changed() {
+    let (_directory, app) = test_app();
+    let project = create_project(&app, "checkout").await;
+    create_case_in(&app, &format!("/projects/{project}/test_cases"), "TC-001").await;
+
+    let (_, created) = send_json(&app, get("/test_cases/TC-001")).await;
+    let first_stamp = assert_iso8601(&created["lastModified"]).to_owned();
+
+    let (status, body) = send_json(
+        &app,
+        json_request(
+            "PUT",
+            "/test_cases/TC-001",
+            &json!({"title": "Login twice"}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (_, updated) = send_json(&app, get("/test_cases/TC-001")).await;
+    let second_stamp = assert_iso8601(&updated["lastModified"]).to_owned();
+
+    let (status, body) = send_json(
+        &app,
+        json_request(
+            "PUT",
+            "/test_cases/TC-001",
+            &json!({"preconditions": "Account exists"}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+
+    // Two qualifying updates recorded versions 1 and 2; the live document is
+    // version 3. Each entry names the qualifying fields the *next* version
+    // changed, so the newest snapshot is measured against the live document.
+    let (status, history) = send_json(&app, get("/test_cases/TC-001/history")).await;
+    assert_eq!(status, StatusCode::OK, "{history}");
+    assert_eq!(
+        history,
+        json!([
+            {"version": 1, "lastModified": first_stamp, "changedFields": ["title"]},
+            {"version": 2, "lastModified": second_stamp, "changedFields": ["preconditions"]},
+        ])
+    );
+
+    // The live version is not a snapshot, so it never appears in the listing.
+    let live = history.as_array().expect("history array");
+    assert!(
+        live.iter().all(|entry| entry["version"] != json!(3)),
+        "the live version is not a snapshot: {history}"
+    );
+}
+
+#[tokio::test]
+async fn a_recorded_revision_is_returned_verbatim_and_the_live_version_is_not_a_snapshot() {
+    let (_directory, app) = test_app();
+    let project = create_project(&app, "checkout").await;
+    create_case_in(&app, &format!("/projects/{project}/test_cases"), "TC-001").await;
+
+    let (_, created) = send_json(&app, get("/test_cases/TC-001")).await;
+    let first_stamp = assert_iso8601(&created["lastModified"]).to_owned();
+
+    let (status, body) = send_json(
+        &app,
+        json_request(
+            "PUT",
+            "/test_cases/TC-001",
+            &json!({"title": "Login twice"}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+
+    let (status, snapshot) = send_json(&app, get("/test_cases/TC-001/history/1")).await;
+    assert_eq!(status, StatusCode::OK, "{snapshot}");
+    assert_eq!(
+        snapshot,
+        json!({
+            "testCaseId": "TC-001",
+            "title": "Login",
+            "expectedResult": "Stored",
+            "version": 1,
+            "lastModified": first_stamp,
+        }),
+        "the pre-update document, verbatim"
+    );
+
+    // The live document is read through the case route; the revision route
+    // refuses the current version because it has no snapshot.
+    let (_, live) = send_json(&app, get("/test_cases/TC-001")).await;
+    assert_eq!(live["version"], json!(2));
+    let (status, body) = send_json(&app, get("/test_cases/TC-001/history/2")).await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+    assert_error_envelope(&body, "not_found");
+
+    // A version the case never recorded is a 404 as well.
+    let (status, body) = send_json(&app, get("/test_cases/TC-001/history/99")).await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+    assert_error_envelope(&body, "not_found");
+}
+
+#[tokio::test]
+async fn history_resolves_the_case_before_it_validates_the_version() {
+    let (_directory, app) = test_app();
+    let project = create_project(&app, "checkout").await;
+    create_case_in(&app, &format!("/projects/{project}/test_cases"), "TC-001").await;
+
+    // The listing route answers a case that is not there with a 404.
+    let (status, body) = send_json(&app, get("/test_cases/TC-404/history")).await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+    assert_error_envelope(&body, "not_found");
+
+    // The revision route resolves the case first, so an unknown case is a 404
+    // even when the version could never be parsed.
+    for version in ["abc", "0", "99"] {
+        let (status, body) =
+            send_json(&app, get(&format!("/test_cases/TC-404/history/{version}"))).await;
+        assert_eq!(
+            status,
+            StatusCode::NOT_FOUND,
+            "unknown case with version `{version}`: {body}"
+        );
+        assert_error_envelope(&body, "not_found");
+    }
+
+    // A known case reports an unusable version as `invalid_request`.
+    for version in ["abc", "0", "-1", "1.5"] {
+        let (status, body) =
+            send_json(&app, get(&format!("/test_cases/TC-001/history/{version}"))).await;
+        assert_eq!(
+            status,
+            StatusCode::BAD_REQUEST,
+            "unusable version `{version}`: {body}"
+        );
+        assert_error_envelope(&body, "invalid_request");
+    }
+}
+
+#[tokio::test]
+async fn history_is_available_for_a_case_held_inside_a_suite() {
+    let (_directory, app) = test_app();
+    let project = create_project(&app, "checkout").await;
+    let suite = create_suite(&app, &project, "smoke").await;
+    create_case_in(&app, &format!("/test_suites/{suite}/test_cases"), "TC-001").await;
+
+    let (status, body) = send_json(
+        &app,
+        json_request(
+            "PUT",
+            "/test_cases/TC-001",
+            &json!({"expectedResult": "Authenticated"}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+
+    let (status, history) = send_json(&app, get("/test_cases/TC-001/history")).await;
+    assert_eq!(status, StatusCode::OK, "{history}");
+    assert_eq!(history.as_array().expect("history").len(), 1, "{history}");
+    assert_eq!(history[0]["version"], json!(1));
+    assert_eq!(history[0]["changedFields"], json!(["expectedResult"]));
+
+    let (status, snapshot) = send_json(&app, get("/test_cases/TC-001/history/1")).await;
+    assert_eq!(status, StatusCode::OK, "{snapshot}");
+    assert_eq!(snapshot["expectedResult"], "Stored");
+}
+
+#[tokio::test]
+async fn a_snapshot_written_before_versioning_lists_without_a_timestamp() {
+    let directory = tempfile::TempDir::new().expect("temp dir");
+    let case = directory.path().join("projects/legacy/TC-001");
+    std::fs::create_dir_all(&case).expect("case folder");
+    std::fs::write(
+        directory.path().join("projects/legacy/project.json"),
+        br#"{"projectId":"legacy","name":"legacy","testSuites":[]}"#,
+    )
+    .expect("legacy project");
+    let legacy = json!({
+        "testCaseId": "TC-001",
+        "title": "Legacy",
+        "expectedResult": "Stored",
+    });
+    std::fs::write(
+        case.join("test-case.json"),
+        serde_json::to_vec(&legacy).expect("legacy document"),
+    )
+    .expect("legacy document");
+    let app = common::app_at(directory.path());
+
+    // Before any qualifying update the legacy case has no history at all.
+    let (status, history) = send_json(&app, get("/test_cases/TC-001/history")).await;
+    assert_eq!(status, StatusCode::OK, "{history}");
+    assert_eq!(history, json!([]));
+
+    let (status, body) = send_json(
+        &app,
+        json_request(
+            "PUT",
+            "/test_cases/TC-001",
+            &json!({"title": "Legacy renamed"}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+
+    // The snapshot is the stored document, which carries no stamp, so the entry
+    // omits `lastModified` rather than inventing one.
+    let (status, history) = send_json(&app, get("/test_cases/TC-001/history")).await;
+    assert_eq!(status, StatusCode::OK, "{history}");
+    assert_eq!(
+        history,
+        json!([{"version": 1, "changedFields": ["title"]}]),
+        "the timestamp is absent, not null"
+    );
+    assert!(history[0].get("lastModified").is_none());
+
+    // The snapshot itself is served as it was stored.
+    let (status, snapshot) = send_json(&app, get("/test_cases/TC-001/history/1")).await;
+    assert_eq!(status, StatusCode::OK, "{snapshot}");
+    assert_eq!(snapshot, legacy);
+}

@@ -572,6 +572,7 @@ async fn openapi_schemas_are_strict_only_where_the_api_rejects_unknown_fields() 
         "MilestoneProgress",
         "CompositionResponse",
         "TestResultRequest",
+        "CaseHistoryEntry",
         "Error",
     ] {
         assert!(
