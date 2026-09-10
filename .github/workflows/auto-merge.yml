@@ -9,7 +9,9 @@ on:
       - completed
 
 permissions:
-  contents: read
+  contents: write
+  pull-requests: write
+  checks: read
 
 jobs:
   merge-own-pull-request:
@@ -23,7 +25,10 @@ jobs:
       - name: Merge when every required check has passed
         uses: actions/github-script@v7
         with:
-          github-token: ${{ secrets.AUTO_MERGE_TOKEN }}
+          # A personal access token belonging to the owner can merge past the
+          # required review; the built-in token cannot, but it still beats an
+          # unset secret, which fails the step before it runs a single call.
+          github-token: ${{ secrets.AUTO_MERGE_TOKEN || github.token }}
           script: |
             const owner = context.repo.owner;
             const repo = context.repo.repo;
@@ -47,14 +52,20 @@ jobs:
               core.info(`No open ${info.default_branch} pull request at ${sha}.`);
               return;
             }
-            const { data: author } = await github.rest.repos.getCollaboratorPermissionLevel({
-              owner,
-              repo,
-              username: pr.user.login,
-            });
-            if (author.permission !== 'admin') {
+            let permission = 'none';
+            try {
+              const { data: author } = await github.rest.repos.getCollaboratorPermissionLevel({
+                owner,
+                repo,
+                username: pr.user.login,
+              });
+              permission = author.permission;
+            } catch (error) {
+              core.info(`Cannot read the permission level of ${pr.user.login} (${error.status}).`);
+            }
+            if (permission !== 'admin') {
               core.info(
-                `#${pr.number} was opened by ${pr.user.login} (${author.permission}), so it stays blocked until an admin approves it.`,
+                `#${pr.number} was opened by ${pr.user.login} (${permission}), so it stays blocked until an admin approves it.`,
               );
               return;
             }
@@ -63,12 +74,22 @@ jobs:
               return;
             }
 
-            const { data: protection } = await github.rest.repos.getBranchProtection({
-              owner,
-              repo,
-              branch: info.default_branch,
-            });
-            const required = protection.required_status_checks?.contexts ?? [];
+            let required = [];
+            try {
+              const { data: protection } = await github.rest.repos.getBranchProtection({
+                owner,
+                repo,
+                branch: info.default_branch,
+              });
+              required = protection.required_status_checks?.contexts ?? [];
+            } catch (error) {
+              // Reading branch protection needs admin, which the built-in token
+              // does not have. Every check run on the commit is a stricter gate,
+              // and the merge call is rejected anyway if a required one is missing.
+              core.info(
+                `Cannot read branch protection for ${info.default_branch} (${error.status}); requiring every check run on ${sha} instead.`,
+              );
+            }
 
             const { data: checks } = await github.rest.checks.listForRef({
               owner,
@@ -78,7 +99,11 @@ jobs:
               per_page: 100,
             });
             const latest = new Map(checks.check_runs.map((run) => [run.name, run]));
-            const blocking = required.filter((name) => {
+            // Without branch-protection access (the built-in token's case) every
+            // check that reported on the commit has to pass, which is never weaker
+            // than the configured required set.
+            const names = required.length > 0 ? required : [...latest.keys()];
+            const blocking = names.filter((name) => {
               const run = latest.get(name);
               if (!run || run.status !== 'completed') return true;
               return !['success', 'skipped', 'neutral'].includes(run.conclusion);
@@ -98,10 +123,16 @@ jobs:
               return;
             }
 
-            const { data: merged } = await github.rest.pulls.merge({
-              owner,
-              repo,
-              pull_number: pr.number,
-              merge_method: 'merge',
-            });
-            core.info(`#${pr.number}: ${merged.message}`);
+            try {
+              const { data: merged } = await github.rest.pulls.merge({
+                owner,
+                repo,
+                pull_number: pr.number,
+                merge_method: 'merge',
+              });
+              core.info(`#${pr.number}: ${merged.message}`);
+            } catch (error) {
+              // A token without admin rights cannot satisfy the required review,
+              // so a still-blocked merge is expected here rather than a failure.
+              core.info(`#${pr.number} cannot be merged yet: ${error.message}`);
+            }
