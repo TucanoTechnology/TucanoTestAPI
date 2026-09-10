@@ -36,6 +36,8 @@ pub fn known_fields(resource: Resource) -> &'static [&'static str] {
             "exploratory",
             "attachments",
             "tags",
+            "version",
+            "lastModified",
         ],
         Resource::Runs => &[
             "testRunId",
@@ -408,6 +410,8 @@ mod tests {
                     exploratory: None,
                     attachments: None,
                     tags: None,
+                    version: Some(1),
+                    last_modified: Some("1970-01-01T00:00:00Z".to_owned()),
                 })
                 .expect("serialisable case"),
             ),

@@ -239,6 +239,28 @@ pub fn case_marker(root: &Path, parent: &Parent, case_id: &str) -> io::Result<Pa
     Ok(case_dir(root, parent, case_id)?.join("test-case.json"))
 }
 
+/// Folder holding the immutable revision snapshots of a test case.
+///
+/// It sits inside the case folder, so the copy, move and delete semantics the
+/// real-home tree already defines carry the snapshots with their case.
+pub fn revision_dir(root: &Path, parent: &Parent, case_id: &str) -> io::Result<PathBuf> {
+    let path = case_dir(root, parent, case_id)?.join("revisions");
+    ensure_within(root, &path)?;
+    Ok(path)
+}
+
+/// Path of one immutable revision snapshot of a test case.
+pub fn revision_marker(
+    root: &Path,
+    parent: &Parent,
+    case_id: &str,
+    version: u64,
+) -> io::Result<PathBuf> {
+    let path = revision_dir(root, parent, case_id)?.join(format!("v{version}.json"));
+    ensure_within(root, &path)?;
+    Ok(path)
+}
+
 /// Path of an attachment inside a test case folder.
 pub fn attachment_path(
     root: &Path,
@@ -474,6 +496,31 @@ mod tests {
             step_attachment_path(root, &suite_parent(), "TC-001", 2, "shot.png")
                 .expect("step attachment"),
             root.join("projects/checkout/smoke/TC-001/steps/2/shot.png")
+        );
+    }
+
+    #[test]
+    fn revision_snapshots_live_in_a_revisions_subfolder() {
+        let directory = TempDir::new().expect("temp dir");
+        let root = directory.path();
+
+        assert_eq!(
+            revision_dir(root, &suite_parent(), "TC-001").expect("revision dir"),
+            root.join("projects/checkout/smoke/TC-001/revisions")
+        );
+        assert_eq!(
+            revision_marker(root, &suite_parent(), "TC-001", 2).expect("revision marker"),
+            root.join("projects/checkout/smoke/TC-001/revisions/v2.json")
+        );
+        assert_eq!(
+            revision_marker(
+                root,
+                &Parent::Project("checkout.json".to_owned()),
+                "TC-001",
+                1
+            )
+            .expect("direct revision marker"),
+            root.join("projects/checkout/TC-001/revisions/v1.json")
         );
     }
 

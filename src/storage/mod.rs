@@ -10,8 +10,8 @@ pub use fs::FileRepository;
 pub use layout::{
     Parent, Placement, Resource, attachment_path, case_dir, case_marker, document_path,
     ensure_within, folder_name, folder_wire_id, node_folder, parent_dir, parent_marker,
-    project_dir, project_marker, root_dir, set_private_permissions, step_attachment_path, step_dir,
-    suite_dir, suite_marker, unique_suffix, validate_component,
+    project_dir, project_marker, revision_dir, revision_marker, root_dir, set_private_permissions,
+    step_attachment_path, step_dir, suite_dir, suite_marker, unique_suffix, validate_component,
 };
 
 use serde_json::Value;
@@ -73,6 +73,18 @@ pub trait Repository: Send + Sync {
         filename: &str,
         entry: &Value,
         contents: &[u8],
+    ) -> io::Result<()>;
+
+    /// Write an immutable revision snapshot of a case under `revisions/`.
+    ///
+    /// The snapshot is the full document as it stood at `version`; a snapshot
+    /// that already exists is never rewritten, so history stays append-only.
+    fn save_revision(
+        &self,
+        parent: &Parent,
+        case: &str,
+        version: u64,
+        value: &Value,
     ) -> io::Result<()>;
 
     /// Read a supplementary file of a case.

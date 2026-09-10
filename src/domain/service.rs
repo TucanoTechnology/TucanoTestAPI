@@ -29,7 +29,8 @@ use super::error::{self, DomainError};
 use super::import::{self, ImportStatus, ParsedCase};
 use super::{
     Created, ListQuery, MAX_ATTACHMENT_BYTES, StoredAttachment, composition,
-    current_timestamp_string, defect, mime_type, progress, required_string, resources, validation,
+    current_iso8601_timestamp, current_timestamp_string, defect, mime_type, progress,
+    required_string, resources, validation,
 };
 
 /// Result statuses a test run accepts.
@@ -189,7 +190,10 @@ impl<R: Repository> TestService<R> {
             .repository
             .read_at(resource, parent.as_ref(), id)
             .map_err(error::read_error)?;
-        let merged = merged_document(&stored, value)?;
+        let mut merged = merged_document(&stored, value)?;
+        if resource == Resource::Cases {
+            self.revise_case(parent.as_ref(), id, &stored, &mut merged)?;
+        }
         self.write_marker(resource, parent.as_ref(), id, &merged)
     }
 
@@ -711,8 +715,64 @@ impl<R: Repository> TestService<R> {
         if self.repository.exists_at(resource, parent, &id)? {
             return Err(DomainError::Conflict("Resource already exists".to_owned()));
         }
-        self.write_marker(resource, parent, &id, value)?;
+        let mut document = value.clone();
+        if resource == Resource::Cases {
+            stamp_case_creation(&mut document);
+        }
+        self.write_marker(resource, parent, &id, &document)?;
         Ok(Created { id })
+    }
+
+    /// Applies the test-case version rules to a merged `PUT` document.
+    ///
+    /// A change to a qualifying field snapshots the pre-update document under
+    /// `revisions/` and starts a new version; any other update writes the
+    /// document without touching the history. The server owns `version` and
+    /// `lastModified`, so a value the client supplied is always discarded —
+    /// a legacy document that never carried them keeps its on-disk shape.
+    fn revise_case(
+        &self,
+        parent: Option<&Parent>,
+        id: &str,
+        stored: &Value,
+        merged: &mut Value,
+    ) -> Result<(), DomainError> {
+        let Some(parent) = parent else {
+            return Err(DomainError::Internal(
+                "A test case update needs a parent folder".to_owned(),
+            ));
+        };
+        let current = stored.get("version").and_then(Value::as_u64).unwrap_or(1);
+        let stored_last_modified = stored.get("lastModified").cloned();
+        let changed = case_content_changed(stored, merged);
+        let Some(object) = merged.as_object_mut() else {
+            return Err(DomainError::Internal("Stored JSON is invalid".to_owned()));
+        };
+        if changed {
+            self.repository
+                .save_revision(parent, id, current, stored)
+                .map_err(DomainError::from)?;
+            object.insert("version".to_owned(), Value::from(current + 1));
+            object.insert(
+                "lastModified".to_owned(),
+                Value::String(current_iso8601_timestamp()),
+            );
+        } else {
+            match stored_last_modified {
+                Some(value) => {
+                    object.insert("lastModified".to_owned(), value);
+                }
+                None => {
+                    object.remove("lastModified");
+                }
+            }
+            if stored.get("version").is_some() {
+                object.insert("version".to_owned(), Value::from(current));
+            } else {
+                object.remove("version");
+            }
+        }
+        Ok(())
     }
 
     /// Persists a document, keeping a parent marker's child collections empty:
@@ -964,6 +1024,32 @@ impl<R: Repository> TestService<R> {
             .write_at(resource, None, id, &document)
             .map_err(DomainError::from)
     }
+}
+
+/// The fields whose change starts a new test-case revision. The set is narrow on
+/// purpose: history tracks the executable content of a case, not incidental
+/// metadata churn.
+const QUALIFYING_CASE_FIELDS: [&str; 4] = ["title", "steps", "preconditions", "expectedResult"];
+
+/// Whether a merged update changed any qualifying field of a test case.
+fn case_content_changed(stored: &Value, merged: &Value) -> bool {
+    QUALIFYING_CASE_FIELDS
+        .iter()
+        .any(|field| stored.get(field) != merged.get(field))
+}
+
+/// Stamps the version bookkeeping a new test case starts with. The server owns
+/// both fields, so a value the client supplied is overwritten: a fresh case
+/// always begins its history at version 1.
+fn stamp_case_creation(document: &mut Value) {
+    let Some(object) = document.as_object_mut() else {
+        return;
+    };
+    object.insert("version".to_owned(), Value::from(1u64));
+    object.insert(
+        "lastModified".to_owned(),
+        Value::String(current_iso8601_timestamp()),
+    );
 }
 
 /// Normalises a document on its way to storage: a parent marker keeps its child
