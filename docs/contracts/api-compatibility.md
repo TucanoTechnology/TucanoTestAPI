@@ -427,6 +427,41 @@ this plan resolves it.
   `tests/service.rs::an_unusable_path_identifier_is_answered_with_invalid_id`, which now creates its run from a
   name alone.
 
+## Partial Update Plan (Issue #80)
+
+Issue: [#80](https://github.com/TucanoTechnology/TucanoTestAPI/issues/80) — a `PUT` with a partial body used to
+replace the stored document wholesale, so the fields the body left out were silently discarded: `PUT
+/projects/P1.json {}` dropped `name` and `PUT /milestones/M1.json {}` stored `{}`, after which
+`GET /milestones/M1.json/progress` answered `500 storage_error`. The ticket offered a merge and a refusal; this is
+the recorded merge decision.
+
+- **Decision: merge, not refuse.** A `PUT` overlays the top-level fields the body carries onto the document
+  already stored; every other stored field keeps its value. Refusing a body that omits a required field of the
+  target model — the other option the ticket offered — would have rejected the partial updates the API has always
+  accepted (`{"name": "alpha"}`) and would have needed a required-field list per resource that validation does
+  not have.
+- **Only the top level is merged.** A field the body carries replaces the stored field as a whole, so an array
+  (`testSuites`, `results`, `steps`) is replaced rather than concatenated, and nested objects are not
+  deep-merged.
+- **A field carrying `null` counts as not supplied** and keeps the stored value — the same reading of `null`
+  `validate_payload` already records for nested collections. A `PUT` therefore cannot remove an optional field:
+  removing one means deleting and recreating the document. This is what keeps a partial body from ever nulling a
+  required field, so a `200` can no longer be followed by a `500` on a later read.
+- **The rules that already applied to a write still apply after the merge.** The merged document is written
+  through the same normalisation as creation, so a parent marker still stores empty `testSuites` / `testCases`
+  arrays (Issue #65), the identity field is still recorded when it is absent or not a string (Issue #78), and a
+  run still records a `timestamp` when it has none.
+- **Bad input is still reported, never silently overwritten.** The body is validated before anything is read or
+  written (unknown key → `400 invalid_request`), a missing document is still `404 not_found`, and an unusable
+  identifier is still `400 invalid_id`. A stored document that is not a JSON object, or that is corrupt JSON, now
+  answers `500 storage_error` with "Stored JSON is invalid" instead of being replaced with the body. The update
+  path translates its read like every other read path rather than probing existence first, which also removes one
+  filesystem round-trip and the race between the probe and the write.
+- Deviation recorded with tests in `tests/projects.rs`, `tests/suites.rs`, `tests/cases.rs`, `tests/runs.rs`,
+  `tests/milestones.rs` and `tests/configurations.rs` — each carries
+  `a_partial_update_keeps_the_fields_the_body_leaves_out`, and the milestone suite also asserts
+  `GET /milestones/{id}/progress` answers `200` after an empty `PUT`.
+
 ## Breaking change accounting
 
 - **New optional `testCases` on assembled project responses** (Issue #65). Legacy Draft 2020-12 `Project`

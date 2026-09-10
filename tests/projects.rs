@@ -159,3 +159,73 @@ async fn missing_projects_return_a_stable_error_envelope() {
         assert_error_envelope(&body, "not_found");
     }
 }
+
+#[tokio::test]
+async fn a_partial_update_keeps_the_fields_the_body_leaves_out() {
+    let (_directory, app) = test_app();
+
+    let (status, _) = send_json(
+        &app,
+        json_request(
+            "POST",
+            "/projects",
+            &json!({
+                "projectId": "P-001",
+                "name": "checkout",
+                "description": "the shop",
+                "tags": ["release"],
+            }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    // A body naming nothing keeps the whole stored document, so the project
+    // still reads back afterwards.
+    let (status, body) = send_json(
+        &app,
+        json_request("PUT", "/projects/checkout.json", &json!({})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "updating: {body}");
+
+    let (status, stored) = send_json(&app, get("/projects/checkout.json")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(stored["projectId"], "P-001");
+    assert_eq!(stored["name"], "checkout");
+    assert_eq!(stored["description"], "the shop");
+    assert_eq!(stored["tags"], json!(["release"]));
+
+    // A field the body carries is replaced; the others survive it.
+    let (status, _) = send_json(
+        &app,
+        json_request(
+            "PUT",
+            "/projects/checkout.json",
+            &json!({"name": "checkout-v2"}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let (_, stored) = send_json(&app, get("/projects/checkout.json")).await;
+    assert_eq!(stored["name"], "checkout-v2");
+    assert_eq!(stored["projectId"], "P-001");
+    assert_eq!(stored["description"], "the shop");
+    assert_eq!(stored["tags"], json!(["release"]));
+
+    // A `null` field counts as not supplied, so it can never drop a stored one.
+    let (status, _) = send_json(
+        &app,
+        json_request(
+            "PUT",
+            "/projects/checkout.json",
+            &json!({"description": null}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let (_, stored) = send_json(&app, get("/projects/checkout.json")).await;
+    assert_eq!(stored["description"], "the shop");
+}
