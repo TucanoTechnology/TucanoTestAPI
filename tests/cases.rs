@@ -382,3 +382,47 @@ async fn creating_a_rich_test_case_preserves_preconditions_severity_and_steps() 
         "Payment screen loaded"
     );
 }
+
+#[tokio::test]
+async fn a_partial_update_keeps_the_fields_the_body_leaves_out() {
+    let (_directory, app) = test_app();
+    let project = create_project(&app, "checkout").await;
+
+    let (status, _) = send_json(
+        &app,
+        json_request(
+            "POST",
+            &format!("/projects/{project}/test_cases"),
+            &json!({
+                "testCaseId": "TC-001.json",
+                "title": "Login",
+                "expectedResult": "Dashboard",
+                "preconditions": "Account exists",
+                "priority": "High",
+            }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    let (status, body) = send_json(
+        &app,
+        json_request("PUT", "/test_cases/TC-001.json", &json!({})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "updating: {body}");
+
+    let (status, stored) = send_json(&app, get("/test_cases/TC-001.json")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(stored["testCaseId"], "TC-001.json");
+    assert_eq!(stored["title"], "Login");
+    assert_eq!(stored["expectedResult"], "Dashboard");
+    assert_eq!(stored["preconditions"], "Account exists");
+    assert_eq!(stored["priority"], "High");
+
+    // The case still satisfies its model, so the project assembles it.
+    let (status, assembled) = send_json(&app, get(&format!("/projects/{project}"))).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(assembled["testCases"][0]["title"], "Login");
+    assert_eq!(assembled["testCases"][0]["expectedResult"], "Dashboard");
+}
