@@ -235,6 +235,18 @@ pub struct MilestoneProgress {
     pub pass_percentage: f64,
 }
 
+/// One entry of a case's revision history: the snapshot's own version and
+/// timestamp, and the qualifying fields an update changed after it. A legacy
+/// snapshot written before versioning carries no timestamp.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct CaseHistoryEntry {
+    pub version: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_modified: Option<String>,
+    pub changed_fields: Vec<String>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

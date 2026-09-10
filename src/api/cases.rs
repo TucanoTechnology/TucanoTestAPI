@@ -169,6 +169,24 @@ async fn delete_step_attachment<R: Repository>(
     Ok(Json(json!({ "message": "File deleted successfully" })))
 }
 
+async fn list_case_history<R: Repository>(
+    State(service): State<AppState<R>>,
+    Path(id): Path<String>,
+) -> Result<Json<Value>, DomainError> {
+    let parent = service.require_test_case(&id)?;
+    let history = service.list_case_history(&parent, &id)?;
+    Ok(Json(json!(history)))
+}
+
+async fn read_case_revision<R: Repository>(
+    State(service): State<AppState<R>>,
+    Path((id, version)): Path<(String, String)>,
+) -> Result<Json<Value>, DomainError> {
+    let parent = service.require_test_case(&id)?;
+    let version = parse_version(&version)?;
+    Ok(Json(service.read_case_revision(&parent, &id, version)?))
+}
+
 pub(crate) fn routes<R: Repository + 'static>() -> Router<AppState<R>> {
     Router::new()
         // Retired: a case is created inside a project or a suite. The handler
@@ -196,6 +214,11 @@ pub(crate) fn routes<R: Repository + 'static>() -> Router<AppState<R>> {
         .route(
             "/test_cases/{id}/steps/{step_index}/attachments/{filename}",
             delete(delete_step_attachment::<R>),
+        )
+        .route("/test_cases/{id}/history", get(list_case_history::<R>))
+        .route(
+            "/test_cases/{id}/history/{version}",
+            get(read_case_revision::<R>),
         )
         .route(
             "/projects/{id}/test_cases",
@@ -227,4 +250,13 @@ fn parse_step_index(value: &str) -> Result<usize, DomainError> {
             "Step index `{value}` is not a non-negative integer"
         ))
     })
+}
+
+fn parse_version(value: &str) -> Result<u64, DomainError> {
+    match value.parse::<u64>() {
+        Ok(version) if version >= 1 => Ok(version),
+        _ => Err(DomainError::invalid_request(format!(
+            "Version `{value}` is not a positive integer"
+        ))),
+    }
 }
