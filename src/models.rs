@@ -99,6 +99,31 @@ pub struct TestCaseResult {
     pub attachments: Option<Vec<Attachment>>,
 }
 
+/// Counts of the results one import wrote, split by the status it mapped them
+/// to. `passed + failed + blocked` is the import's `imported` count.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ImportCounts {
+    pub passed: usize,
+    pub failed: usize,
+    pub blocked: usize,
+}
+
+/// What one import did: how many results it wrote or left alone, and how the
+/// imported results split by status.
+///
+/// `skipped` is the testcases the import deliberately did not write — those the
+/// run already recorded (`duplicates`) plus those it could not map (`errors`).
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ImportSummary {
+    pub imported: usize,
+    pub skipped: usize,
+    pub errors: usize,
+    pub duplicates: usize,
+    pub summary: ImportCounts,
+}
+
 #[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct TestRun {
