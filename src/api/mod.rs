@@ -74,6 +74,7 @@ pub const ROUTES: &[&str] = &[
     "/test_cases/{id}/attachments/{filename}",
     "/milestones",
     "/milestones/{id}",
+    "/milestones/{id}/duplicate",
     "/milestones/{id}/progress",
     "/configurations",
     "/configurations/{id}",
