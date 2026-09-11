@@ -116,20 +116,22 @@ against the document on `main` (`b17b26a`):
 
 | # | Gap | Affected | Effect on a generated client | Follow-up |
 | --- | --- | --- | --- | --- |
-| G1 | No `operationId` on any operation (all 60) | all operations | Generators synthesize method names from path + method (`postProjectsIdDuplicate`), so names shift whenever a path changes and cannot be referenced stably. | [#81](https://github.com/TucanoTechnology/TucanoTestAPI/issues/81) |
-| G2 | No operation `tags` (all 60) and no document-level `tags` array | all operations | Every operation lands in one undifferentiated client class instead of one per resource family. | [#81](https://github.com/TucanoTechnology/TucanoTestAPI/issues/81) |
-| G3 | `requestBody` declared as a bare `{"type": "object"}` with no properties and no `required` | `POST /projects`, `PUT /projects/{id}`, `PUT /test_suites/{id}`, `POST /test_runs`, `PUT /test_runs/{id}`, `PUT /test_cases/{id}`, `POST /milestones`, `PUT /milestones/{id}`, `POST /configurations`, `PUT /configurations/{id}` (10 operations) | The generated request type has no fields, so the client cannot construct or type-check a create/update body; the caller must pass an untyped object. The handlers parse `Json<Value>` and validate in the domain layer, and unknown fields are rejected, so the body really is typed — the document just does not say so. | new ticket (see *Follow-ups*) |
-| G4 | Success responses with no `content` schema | 31 API operations (the 3 operational endpoints — `/health`, `/openapi.json`, `/api-docs` — are deliberately non-JSON) | Create/update/delete/duplicate/record/link/unlink results generate as untyped or `void`. The wire shapes are stable — create and duplicate answer `{"message": …, "id": …}`, update and delete answer `{"message": …}` — but the document does not declare them. | new ticket (see *Follow-ups*) |
-| G5 | Five duplicate path items are `$ref`s into `#/components/x-duplicate*` extension objects | `/projects/{id}/duplicate`, `/test_suites/{id}/duplicate`, `/test_cases/{id}/duplicate`, `/test_runs/{id}/duplicate`, `/milestones/{id}/duplicate` | The targets are extension objects under `components`, not `components.pathItems` (an OpenAPI 3.1 location; this document is 3.0.3). Generators that resolve arbitrary refs are fine; a strict path-item resolver may fail to load these five operations. | [#81](https://github.com/TucanoTechnology/TucanoTestAPI/issues/81) |
-| G6 | `servers` is a single hard-coded `http://localhost:3000` with no variables | document | The generated client's base path is pinned to localhost; every real deployment must override it by hand. | [#81](https://github.com/TucanoTechnology/TucanoTestAPI/issues/81) |
+| G1 | No `operationId` on any operation (all 60) | all operations | Generators synthesize method names from path + method (`postProjectsIdDuplicate`), so names shift whenever a path changes and cannot be referenced stably. | [#145](https://github.com/TucanoTechnology/TucanoTestAPI/issues/145) |
+| G2 | No operation `tags` (all 60) and no document-level `tags` array | all operations | Every operation lands in one undifferentiated client class instead of one per resource family. | [#145](https://github.com/TucanoTechnology/TucanoTestAPI/issues/145) |
+| G3 | `requestBody` declared as a bare `{"type": "object"}` with no properties and no `required` | `POST /projects`, `PUT /projects/{id}`, `PUT /test_suites/{id}`, `POST /test_runs`, `PUT /test_runs/{id}`, `PUT /test_cases/{id}`, `POST /milestones`, `PUT /milestones/{id}`, `POST /configurations`, `PUT /configurations/{id}` (10 operations) | The generated request type has no fields, so the client cannot construct or type-check a create/update body; the caller must pass an untyped object. The handlers parse `Json<Value>` and validate in the domain layer, and unknown fields are rejected, so the body really is typed — the document just does not say so. | [#140](https://github.com/TucanoTechnology/TucanoTestAPI/issues/140) |
+| G4 | Success responses with no `content` schema | 31 API operations (the 3 operational endpoints — `/health`, `/openapi.json`, `/api-docs` — are deliberately non-JSON) | Create/update/delete/duplicate/record/link/unlink results generate as untyped or `void`. The wire shapes are stable — create and duplicate answer `{"message": …, "id": …}`, update and delete answer `{"message": …}` — but the document does not declare them. | [#140](https://github.com/TucanoTechnology/TucanoTestAPI/issues/140) |
+| G5 | Five duplicate path items are `$ref`s into `#/components/x-duplicate*` extension objects | `/projects/{id}/duplicate`, `/test_suites/{id}/duplicate`, `/test_cases/{id}/duplicate`, `/test_runs/{id}/duplicate`, `/milestones/{id}/duplicate` | The targets are extension objects under `components`, not `components.pathItems` (an OpenAPI 3.1 location; this document is 3.0.3). Generators that resolve arbitrary refs are fine; a strict path-item resolver may fail to load these five operations. | [#145](https://github.com/TucanoTechnology/TucanoTestAPI/issues/145) |
+| G6 | `servers` is a single hard-coded `http://localhost:3000` with no variables | document | The generated client's base path is pinned to localhost; every real deployment must override it by hand. | [#145](https://github.com/TucanoTechnology/TucanoTestAPI/issues/145) |
 | G7 | No `securitySchemes` and no `security` | document | No auth handling is generated. This is intentional while authentication is deferred; it must be revisited when auth lands, or the generated client will not carry credentials. | [#130](https://github.com/TucanoTechnology/TucanoTestAPI/issues/130) |
-| G8 | Error `code` is a plain `string` in one shared `Error` schema | every error response | A client can read a code but cannot exhaustively switch on a generated union of the published codes (`invalid_id`, `invalid_request`, `invalid_status`, `invalid_multipart`, `missing_file`, `not_found`, `conflict`, `storage_error`). | new ticket (see *Follow-ups*) |
+| G8 | Error `code` is a plain `string` in one shared `Error` schema | every error response | A client can read a code but cannot exhaustively switch on a generated union of the published codes (`invalid_id`, `invalid_request`, `invalid_status`, `invalid_multipart`, `missing_file`, `not_found`, `conflict`, `storage_error`). | [#140](https://github.com/TucanoTechnology/TucanoTestAPI/issues/140) |
 
 Ticket [#81](https://github.com/TucanoTechnology/TucanoTestAPI/issues/81) closed the renderability defect —
 the `x-crud`/`x-resource` `$ref` shortcuts that made Swagger UI show no operations for projects, test suites,
 test runs, test cases, milestones, and configurations are gone, so each of those resources' CRUD operations is
 now an inline path item. The five duplicate operations in G5 remain the only path-item `$ref`s. The gaps above
-are the *schema-level* residue that #81's scope did not cover.
+are the *schema-level* residue that #81's scope did not cover: the typed write bodies, success responses, and
+error codes are tracked in [#140](https://github.com/TucanoTechnology/TucanoTestAPI/issues/140), and the
+operation metadata in [#145](https://github.com/TucanoTechnology/TucanoTestAPI/issues/145).
 
 The `docs/contracts/api-compatibility.md` "Client generation" section the issue also names is a protected file
 on the API (code) track, so that section and its pointer back to this document are deferred there; the
@@ -146,11 +148,12 @@ deferral is recorded on [#99](https://github.com/TucanoTechnology/TucanoTestAPI/
 
 1. **Typed write bodies and success responses (G3, G4, G8).** Give the ten write operations named request-body
    schemas (the create subset each handler accepts) and give the success responses their `content` schemas, so
-   a generated client constructs and reads typed values. This is a `openapi.json` change on the API track and
-   needs its own ticket; the reduced `openapi.json` shapes are the reason a first generated client will be
-   partially untyped.
+   a generated client constructs and reads typed values. This is a `openapi.json` change on the API track,
+   tracked in [#140](https://github.com/TucanoTechnology/TucanoTestAPI/issues/140); the reduced `openapi.json`
+   shapes are the reason a first generated client will be partially untyped.
 2. **Operation metadata (G1, G2, G5, G6).** Add stable `operationId`s, resource-family `tags`, render the five
-   duplicate operations as concrete path items, and describe deployment servers with variables.
+   duplicate operations as concrete path items, and describe deployment servers with variables. Tracked in
+   [#145](https://github.com/TucanoTechnology/TucanoTestAPI/issues/145).
 3. **Authentication (G7).** Add `securitySchemes` and `security` when [#130](https://github.com/TucanoTechnology/TucanoTestAPI/issues/130)
    is implemented, and regenerate the client so it carries credentials.
 
