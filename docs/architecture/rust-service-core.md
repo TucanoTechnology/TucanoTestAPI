@@ -86,4 +86,6 @@ Still outstanding: a reviewed JSON Schema validator, `thiserror` domain errors, 
 
 The service core is accepted once it has endpoint and file-format compatibility fixtures, passes the security and failure-mode suite, documents all deviations, demonstrates bounded resource behaviour, and can be deployed and rolled back using the existing volume-mount model.
 
-Outstanding against these criteria: compatibility fixtures, property/fuzz testing, benchmarking, and authentication.
+Outstanding against these criteria: compatibility fixtures, property/fuzz testing, and benchmarking.
+Authentication and authorization landed in [#130](https://github.com/TucanoTechnology/TucanoTestAPI/issues/130),
+enforced at the request-validation boundary this document describes.

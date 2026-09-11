@@ -31,8 +31,10 @@ duplicate_handler!(duplicate_milestone, duplicate::MILESTONE);
 
 async fn get_milestone_progress<R: Repository>(
     State(service): State<AppState<R>>,
+    principal: Principal,
     Path(id): Path<String>,
 ) -> Result<Json<MilestoneProgress>, DomainError> {
+    access::guard_get(&service, &principal, Resource::Milestones, &id)?;
     Ok(Json(service.milestone_progress(&id)?))
 }
 
