@@ -20,11 +20,19 @@
 //! - **Authority is a rank.** A grant is a [`Role`], and a request is allowed
 //!   when the role the caller holds is at least the role it needs, so the
 //!   comparison is written once instead of naming each acceptable role.
+//!
+//! Verification itself costs no I/O: an access token carries its holder's
+//! subject and system-administrator flag inside its signed payload, so
+//! [`authenticate`] is a signature check and a parse. The store is touched on
+//! sign-in, rotation, sign-out, and role-grant changes — never on the
+//! authenticated path. The trade this buys is that a grant changed or an
+//! account removed after a token was minted takes effect when that token
+//! expires; the short access-token lifetime is what keeps that window small.
 
 use crate::domain::DomainError;
 
 use super::{
-    AuthConfig, AuthStore, Role, StoredRefreshToken, TokenError, hash_refresh_token,
+    AuthConfig, AuthStore, Role, StoredRefreshToken, TokenError, User, hash_refresh_token,
     mint_access_token, mint_refresh_token, random_id, verify_access_token, verify_password,
 };
 
@@ -39,12 +47,13 @@ use super::{
 const DECOY_HASH: &str = "$argon2id$v=19$m=19456,t=2,p=1$AAAAAAAAAAAAAAAAAAAAAA$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
 
 /// The caller behind one request, once their access token has been verified.
+///
+/// Everything here comes out of the token's signed claims; nothing is read from
+/// the store to build it, so an authenticated request never pays for file I/O.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Principal {
     /// The account identifier the access token's `sub` named.
     pub user_id: String,
-    /// The login name, for a reply that names the caller.
-    pub username: String,
     /// Whether the account may act outside the projects granted to it.
     pub system_admin: bool,
 }
@@ -132,7 +141,7 @@ pub fn login(
     }
 
     store.prune_expired_refresh_tokens(now)?;
-    issue_tokens(store, config, &user.id, secret, now)
+    issue_tokens(store, config, &user, secret, now)
 }
 
 /// Exchanges a refresh token for a fresh pair, revoking the one presented.
@@ -162,7 +171,7 @@ pub fn refresh(
     // The spent token goes first, so a replay of it cannot find it, whatever
     // happens next.
     store.revoke_refresh_token(&user.id, &stored.id)?;
-    issue_tokens(store, config, &user.id, secret, now)
+    issue_tokens(store, config, &user, secret, now)
 }
 
 /// Revokes one refresh token of the authenticated caller.
@@ -193,21 +202,20 @@ pub fn logout(
     Ok(true)
 }
 
-/// Verifies a bearer access token and resolves it to the account it names.
+/// Verifies a bearer access token and resolves it to the caller it names.
 ///
-/// The account is looked up again on every request rather than trusted from the
-/// claims, so deleting an account ends its sessions immediately instead of when
-/// its tokens happen to expire.
+/// The answer is derived from the token's signed claims alone — the subject and
+/// the system-administrator flag — so no store read happens here and a request
+/// is authorized in memory. What the token said when it was minted is what it
+/// still says until it expires, which is the deliberate bound on how long a
+/// revoked grant or a deleted account can still act.
 ///
 /// # Errors
 ///
 /// [`DomainError::token_expired`] when the token was well-formed but has
-/// passed, [`DomainError::invalid_token`] when it is malformed, badly signed,
-/// or names an account that no longer exists, [`DomainError::Internal`] when
-/// the server holds no signing secret, and whatever reading the store failed
-/// with.
+/// passed, [`DomainError::invalid_token`] when it is malformed or badly signed,
+/// and [`DomainError::Internal`] when the server holds no signing secret.
 pub fn authenticate(
-    store: &AuthStore,
     config: &AuthConfig,
     access_token: &str,
     now: u64,
@@ -217,29 +225,26 @@ pub fn authenticate(
         TokenError::Expired => DomainError::token_expired(),
         TokenError::Malformed | TokenError::BadSignature => DomainError::invalid_token(),
     })?;
-    let Some(user) = store.user(&claims.subject)? else {
-        return Err(DomainError::invalid_token());
-    };
     Ok(Principal {
-        user_id: user.id,
-        username: user.username,
-        system_admin: user.system_admin,
+        user_id: claims.subject,
+        system_admin: claims.system_admin,
     })
 }
 
-/// Mints a pair for `user_id` and records the refresh half.
+/// Mints a pair for `user` and records the refresh half.
 fn issue_tokens(
     store: &AuthStore,
     config: &AuthConfig,
-    user_id: &str,
+    user: &User,
     secret: &[u8],
     now: u64,
 ) -> Result<SessionTokens, DomainError> {
-    let access_token = mint_access_token(secret, user_id, config.access_ttl, now);
+    let access_token =
+        mint_access_token(secret, &user.id, user.system_admin, config.access_ttl, now);
     let refresh_token = mint_refresh_token();
     let refresh_expires_at = now.saturating_add(config.refresh_ttl.as_secs());
     store.insert_refresh_token(
-        user_id,
+        &user.id,
         &StoredRefreshToken {
             id: random_id(),
             hash: hash_refresh_token(&refresh_token),
@@ -513,13 +518,11 @@ mod tests {
     }
 
     #[test]
-    fn authenticating_returns_the_account_behind_the_token() {
+    fn authenticating_returns_the_caller_the_token_names() {
         let (_directory, store) = seeded();
         let tokens = login(&store, &config(), "alice", PASSWORD, NOW).expect("login");
-        let principal =
-            authenticate(&store, &config(), &tokens.access_token, NOW).expect("authenticate");
+        let principal = authenticate(&config(), &tokens.access_token, NOW).expect("authenticate");
         assert_eq!(principal.user_id, "u1");
-        assert_eq!(principal.username, "alice");
         assert!(!principal.system_admin);
     }
 
@@ -527,8 +530,7 @@ mod tests {
     fn an_expired_access_token_reports_its_own_code() {
         let (_directory, store) = seeded();
         let tokens = login(&store, &config(), "alice", PASSWORD, NOW).expect("login");
-        let error =
-            authenticate(&store, &config(), &tokens.access_token, NOW + 900).expect_err("expired");
+        let error = authenticate(&config(), &tokens.access_token, NOW + 900).expect_err("expired");
         assert_eq!(code(&error), "token_expired");
     }
 
@@ -539,19 +541,25 @@ mod tests {
         other.jwt_secret = Some(b"a-different-signing-secret-32-plus!!!".to_vec());
         let tokens = login(&store, &other, "alice", PASSWORD, NOW).expect("login");
         for token in ["", "not.a.token", tokens.access_token.as_str()] {
-            let error = authenticate(&store, &config(), token, NOW).expect_err(token);
+            let error = authenticate(&config(), token, NOW).expect_err(token);
             assert_eq!(code(&error), "invalid_token", "{token:?}");
         }
     }
 
     #[test]
-    fn a_token_for_an_account_that_no_longer_exists_is_refused() {
-        let (_directory, store) = seeded();
-        // A token that is correctly signed for an account this store has never
-        // held. Trusting the claims would accept it; resolving them would not.
-        let ghost = mint_access_token(SECRET, "ghost", Duration::from_secs(900), NOW);
-        let error = authenticate(&store, &config(), &ghost, NOW).expect_err("no such account");
-        assert_eq!(code(&error), "invalid_token");
+    fn a_signed_token_is_authoritative_until_it_expires() {
+        // Verification reads the claims rather than the store, so a token that
+        // is correctly signed for an account the store has never held is
+        // accepted, and stays accepted until its `exp` passes. The access-token
+        // TTL is what bounds that window — and it is what is accepted in
+        // exchange for authorizing a request without file I/O.
+        let ghost = mint_access_token(SECRET, "ghost", false, Duration::from_secs(900), NOW);
+        let principal = authenticate(&config(), &ghost, NOW).expect("the claims are the authority");
+        assert_eq!(principal.user_id, "ghost");
+        assert!(!principal.system_admin);
+
+        let error = authenticate(&config(), &ghost, NOW + 900).expect_err("expired");
+        assert_eq!(code(&error), "token_expired");
     }
 
     #[test]
@@ -564,7 +572,7 @@ mod tests {
             Err(DomainError::Internal(_))
         ));
         assert!(matches!(
-            authenticate(&store, &unconfigured, "any.token.at-all", NOW),
+            authenticate(&unconfigured, "any.token.at-all", NOW),
             Err(DomainError::Internal(_))
         ));
     }
@@ -573,8 +581,7 @@ mod tests {
     fn a_role_is_allowed_when_it_ranks_at_least_as_high_as_the_one_required() {
         let (_directory, store) = seeded();
         let tokens = login(&store, &config(), "alice", PASSWORD, NOW).expect("login");
-        let principal =
-            authenticate(&store, &config(), &tokens.access_token, NOW).expect("authenticate");
+        let principal = authenticate(&config(), &tokens.access_token, NOW).expect("authenticate");
 
         store
             .set_role("p1.json", "u1", Role::Viewer)
@@ -623,8 +630,7 @@ mod tests {
     fn a_caller_with_no_grant_is_forbidden() {
         let (_directory, store) = seeded();
         let tokens = login(&store, &config(), "alice", PASSWORD, NOW).expect("login");
-        let principal =
-            authenticate(&store, &config(), &tokens.access_token, NOW).expect("authenticate");
+        let principal = authenticate(&config(), &tokens.access_token, NOW).expect("authenticate");
         assert!(matches!(
             principal.require_role(&store, "p1.json", Role::Viewer),
             Err(DomainError::Forbidden(_))
@@ -639,8 +645,7 @@ mod tests {
         admin.system_admin = true;
         store.insert_user(&admin).expect("insert");
         let tokens = login(&store, &config(), "root", PASSWORD, NOW).expect("login");
-        let principal =
-            authenticate(&store, &config(), &tokens.access_token, NOW).expect("authenticate");
+        let principal = authenticate(&config(), &tokens.access_token, NOW).expect("authenticate");
         assert!(principal.system_admin);
         assert!(
             principal
@@ -659,8 +664,7 @@ mod tests {
     fn signing_out_revokes_the_callers_refresh_token_once() {
         let (_directory, store) = seeded();
         let tokens = login(&store, &config(), "alice", PASSWORD, NOW).expect("login");
-        let principal =
-            authenticate(&store, &config(), &tokens.access_token, NOW).expect("authenticate");
+        let principal = authenticate(&config(), &tokens.access_token, NOW).expect("authenticate");
         assert!(logout(&store, &principal, &tokens.refresh_token).expect("logout"));
         assert!(
             store
@@ -682,8 +686,7 @@ mod tests {
         store.insert_user(&account("u2", "bob")).expect("bob");
         let alice = login(&store, &config(), "alice", PASSWORD, NOW).expect("login alice");
         let bob = login(&store, &config(), "bob", PASSWORD, NOW).expect("login bob");
-        let principal =
-            authenticate(&store, &config(), &alice.access_token, NOW).expect("authenticate");
+        let principal = authenticate(&config(), &alice.access_token, NOW).expect("authenticate");
 
         assert!(!logout(&store, &principal, &bob.refresh_token).expect("logout"));
         assert!(
