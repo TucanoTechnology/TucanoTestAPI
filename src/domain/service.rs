@@ -570,21 +570,31 @@ impl<R: Repository> TestService<R> {
         Ok(progress::compute(&milestone, &runs))
     }
 
-    /// Reports how many cases the tree holds, per suite and in total, for one
-    /// project or for every project when `project_id` is `None`.
-    pub fn coverage_report(&self, project_id: Option<&str>) -> Result<CoverageReport, DomainError> {
-        let projects: Vec<String> = match project_id {
-            Some(id) => {
-                self.require_parent(&Parent::Project(id.to_owned()))?;
-                vec![id.to_owned()]
+    /// Reports how many cases the tree holds, per suite and in total, for the
+    /// projects the caller asked for.
+    ///
+    /// The scope decides which projects are walked: [`reports::Scope::All`]
+    /// walks every project, [`reports::Scope::Project`] verifies that one
+    /// project exists and walks it, and [`reports::Scope::Projects`] walks the
+    /// identifiers as given — its caller already filtered them by reachability,
+    /// so a project that has since been deleted contributes nothing rather than
+    /// failing the report.
+    pub fn coverage_report(&self, scope: reports::Scope) -> Result<CoverageReport, DomainError> {
+        let (echo, projects): (Option<String>, Vec<String>) = match scope {
+            reports::Scope::All => (
+                None,
+                self.repository
+                    .list(Resource::Projects)
+                    .map_err(error::read_error)?,
+            ),
+            reports::Scope::Project(id) => {
+                self.require_parent(&Parent::Project(id.clone()))?;
+                (Some(id.clone()), vec![id])
             }
-            None => self
-                .repository
-                .list(Resource::Projects)
-                .map_err(error::read_error)?,
+            reports::Scope::Projects(ids) => (None, ids),
         };
 
-        let mut scope = Vec::with_capacity(projects.len());
+        let mut project_cases = Vec::with_capacity(projects.len());
         for project in projects {
             let parent = Parent::Project(project);
             let direct = self
@@ -624,10 +634,10 @@ impl<R: Repository> TestService<R> {
                     case_count,
                 });
             }
-            scope.push(reports::ProjectCases { direct, suites });
+            project_cases.push(reports::ProjectCases { direct, suites });
         }
 
-        Ok(reports::coverage(project_id, scope))
+        Ok(reports::coverage(echo.as_deref(), project_cases))
     }
 
     /// Reports how the results recorded across the runs in scope split by
@@ -637,9 +647,14 @@ impl<R: Repository> TestService<R> {
     /// counted when it satisfies all of them. Runs that cannot be read or
     /// decoded are skipped rather than failing the whole report, matching how
     /// [`Self::milestone_progress`] treats its references.
+    ///
+    /// `reachable`, when set, is the authorisation filter: a run that names a
+    /// project outside it is skipped even though it would otherwise be in scope.
+    /// A trusted caller passes `None` and sees every run.
     pub fn summary_report(
         &self,
         filters: &reports::SummaryFilters,
+        reachable: Option<&[String]>,
     ) -> Result<SummaryReport, DomainError> {
         let mut filters = filters.clone();
         if let Some(project_id) = filters.project_id.as_deref() {
@@ -694,6 +709,11 @@ impl<R: Repository> TestService<R> {
             let Ok(run) = serde_json::from_value::<TestRun>(value) else {
                 continue;
             };
+            if let Some(reachable) = reachable
+                && !reports::run_reachable(&run, reachable)
+            {
+                continue;
+            }
             if !reports::run_is_in_scope(&run, &run_id, &filters, milestone_runs.as_deref()) {
                 continue;
             }
@@ -701,6 +721,39 @@ impl<R: Repository> TestService<R> {
         }
 
         Ok(reports::summary(&results))
+    }
+
+    // --- authorization scope -------------------------------------------
+
+    /// The project a suite or a case addressed by `id` belongs to.
+    ///
+    /// The authorization guard runs before the handler acts, so it must be able
+    /// to name the project without reading the document the request will read
+    /// next; this is the same resolution [`Self::update`] and [`Self::delete`]
+    /// perform, exposed for that one caller.
+    ///
+    /// # Errors
+    ///
+    /// [`DomainError::NotFound`] when nothing has that identifier, and a
+    /// conflict when more than one occurrence does, exactly as the routes that
+    /// act on the identifier answer.
+    pub fn project_of(
+        &self,
+        resource: Resource,
+        id: &str,
+        missing: &str,
+    ) -> Result<String, DomainError> {
+        Ok(self.parent_of(resource, id, missing)?.project().to_owned())
+    }
+
+    /// Reads a flat document as stored, without assembling its children.
+    ///
+    /// Used where a route needs a resource's own fields — the projects a run or
+    /// a milestone references — and not the tree below it.
+    pub fn document(&self, resource: Resource, id: &str) -> Result<Value, DomainError> {
+        self.repository
+            .read_at(resource, None, id)
+            .map_err(|error| error::load_error(error, entity_missing_message(resource)))
     }
 
     // --- attachments ---------------------------------------------------

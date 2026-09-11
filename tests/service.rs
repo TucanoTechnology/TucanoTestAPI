@@ -620,6 +620,84 @@ async fn openapi_documents_the_error_contract_of_every_operation() {
     }
 }
 
+/// The document states the posture the router enforces: every operation takes a
+/// bearer token except the five a caller reaches before it holds one, and every
+/// operation that checks a project role can answer 403.
+#[tokio::test]
+async fn openapi_declares_the_security_posture_of_every_operation() {
+    let (_directory, app) = test_app();
+    let (status, document) = send_json(&app, get("/openapi.json")).await;
+    assert_eq!(status, StatusCode::OK);
+
+    let bearer = json!([{ "bearerAuth": [] }]);
+    assert_eq!(
+        document["security"], bearer,
+        "the document no longer defaults to bearer authentication"
+    );
+    let scheme = &document["components"]["securitySchemes"]["bearerAuth"];
+    assert_eq!(scheme["type"], json!("http"));
+    assert_eq!(scheme["scheme"], json!("bearer"));
+
+    // The endpoints that exist before a caller does, and the two it signs in
+    // through: none of them names a token, and the sign-in routes answer their
+    // own documented failure instead.
+    const UNGUARDED: [&str; 5] = [
+        "get /health",
+        "get /openapi.json",
+        "get /api-docs",
+        "post /auth/login",
+        "post /auth/refresh",
+    ];
+
+    let operations = documented_operations(&document);
+    assert_eq!(operations.len(), 68, "the documented surface changed");
+
+    for (label, operation) in &operations {
+        let responses = operation["responses"].as_object().expect("responses");
+        let security = operation.get("security").unwrap_or(&document["security"]);
+
+        if UNGUARDED.contains(&label.as_str()) {
+            assert_eq!(security, &json!([]), "{label} must not require a token");
+            continue;
+        }
+
+        assert_eq!(security, &bearer, "{label} must require a bearer token");
+        assert!(
+            responses.contains_key("401"),
+            "{label} requires a token but documents no 401"
+        );
+
+        // A 403 is the answer to a caller that holds a token and still may not
+        // touch the resource; where it is documented it names the code a client
+        // switches on.
+        if let Some(forbidden) = responses.get("403") {
+            let forbidden = dereference(&document, forbidden);
+            let description = forbidden["description"]
+                .as_str()
+                .unwrap_or_else(|| panic!("{label} 403 has no description"));
+            assert!(
+                description.contains("forbidden"),
+                "{label} 403 names no error code: {description}"
+            );
+            assert!(
+                forbidden["content"]["application/json"]["schema"].is_object(),
+                "{label} 403 has no error envelope"
+            );
+        }
+    }
+
+    // The role-checked surface, frozen so a route that silently loses its check
+    // fails here rather than in review.
+    let refuses = operations
+        .iter()
+        .filter(|(_, operation)| operation["responses"].get("403").is_some())
+        .count();
+    assert_eq!(
+        refuses, 50,
+        "the 403 surface changed; update this count with it"
+    );
+}
+
 #[tokio::test]
 async fn openapi_schemas_are_strict_only_where_the_api_rejects_unknown_fields() {
     let (_directory, app) = test_app();
@@ -910,6 +988,7 @@ const ERROR_CODES: &[&str] = &[
     "token_expired",
     "invalid_credentials",
     "invalid_refresh_token",
+    "forbidden",
 ];
 
 /// Every `$ref` the document contains, wherever it sits.

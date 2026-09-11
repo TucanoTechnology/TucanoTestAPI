@@ -9,13 +9,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let repository = repository::FileRepository::new(data_dir.clone())?;
 
     let config = auth::AuthConfig::from_env()?;
-    if config.required {
-        return Err(
-            "TUCANO_AUTH_REQUIRED is set, but no route enforces a token yet, so the \
-             server would serve an unauthenticated API. Unset it until enforcement lands."
-                .into(),
-        );
-    }
     let store = auth::AuthStore::new(&data_dir)?;
     auth::ensure_bootstrap_user(&store, &config, now_seconds())?;
     let authentication = api::auth::AuthState::new(store, config);
