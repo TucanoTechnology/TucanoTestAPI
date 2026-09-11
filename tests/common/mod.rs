@@ -203,3 +203,159 @@ pub fn assert_error_envelope(body: &Value, code: &str) {
         "error message missing: {body}"
     );
 }
+
+/// The write operations a project-scoped role can refuse, labelled by the same
+/// `method path` convention `openapi::documented_operations` uses for the
+/// served document.
+///
+/// This single list is what both suites agree on: `auth` drives its matrix of
+/// `403` requests from it, so every listed route is proven to answer a caller
+/// that lacks the role, and `service` asserts each listed route documents a
+/// `403` in `openapi.json`. A route that gains or loses its guard therefore
+/// breaks one side or the other instead of quietly drifting out of the
+/// contract.
+pub const ROLE_CHECKED_WRITE_OPERATIONS: [&str; 33] = [
+    "post /projects",
+    "put /projects/{id}",
+    "delete /projects/{id}",
+    "post /projects/{id}/duplicate",
+    "put /test_suites/{id}",
+    "delete /test_suites/{id}",
+    "post /test_suites/{id}/duplicate",
+    "post /projects/{id}/test_suites",
+    "post /test_suites/{id}/test_cases",
+    "delete /test_suites/{id}/test_cases/{case_id}",
+    "delete /projects/{id}/test_suites/{suite_id}",
+    "put /test_cases/{id}",
+    "delete /test_cases/{id}",
+    "post /test_cases/{id}/duplicate",
+    "post /projects/{id}/test_cases",
+    "delete /projects/{id}/test_cases/{case_id}",
+    "post /test_runs",
+    "put /test_runs/{id}",
+    "delete /test_runs/{id}",
+    "post /test_runs/{id}/duplicate",
+    "post /test_runs/{id}/test_suites",
+    "post /test_runs/{id}/test_cases",
+    "post /test_runs/{id}/results",
+    "post /test_runs/{id}/results/{case_id}/defects",
+    "delete /test_runs/{id}/results/{case_id}/defects/{link_id}",
+    "post /test_runs/{id}/import/junit",
+    "post /test_runs/{id}/import/json",
+    "post /test_runs/{id}/configurations",
+    "delete /test_runs/{id}/configurations/{config_id}",
+    "put /milestones/{id}",
+    "delete /milestones/{id}",
+    "post /milestones/{id}/duplicate",
+    "post /milestones",
+];
+
+/// The request a role matrix sends for one entry of
+/// [`ROLE_CHECKED_WRITE_OPERATIONS`]. The identifiers come from the seeded
+/// tree; a payload that the route would accept is used so the request reaches
+/// the role check rather than failing an extractor first.
+pub fn role_checked_write(
+    label: &str,
+    project: &str,
+    suite: &str,
+    case: &str,
+    run: &str,
+    milestone: &str,
+) -> (&'static str, String, Option<Value>) {
+    let method = match label.split_once(' ').expect("label").0 {
+        "get" => "GET",
+        "put" => "PUT",
+        "post" => "POST",
+        "delete" => "DELETE",
+        other => panic!("unknown role-checked method: {other}"),
+    };
+    let request = match label {
+        "post /projects" => ("/projects".to_owned(), Some(json!({"name": "beta"}))),
+        "put /projects/{id}" => (format!("/projects/{project}"), Some(json!({}))),
+        "delete /projects/{id}" => (format!("/projects/{project}"), None),
+        "post /projects/{id}/duplicate" => {
+            (format!("/projects/{project}/duplicate"), Some(json!({})))
+        }
+        "put /test_suites/{id}" => (format!("/test_suites/{suite}"), Some(json!({}))),
+        "delete /test_suites/{id}" => (format!("/test_suites/{suite}"), None),
+        "post /test_suites/{id}/duplicate" => {
+            (format!("/test_suites/{suite}/duplicate"), Some(json!({})))
+        }
+        "post /projects/{id}/test_suites" => (
+            format!("/projects/{project}/test_suites"),
+            Some(json!({"name": "extra"})),
+        ),
+        "post /test_suites/{id}/test_cases" => (
+            format!("/test_suites/{suite}/test_cases"),
+            Some(case_body("TC-X")),
+        ),
+        "delete /test_suites/{id}/test_cases/{case_id}" => {
+            (format!("/test_suites/{suite}/test_cases/{case}"), None)
+        }
+        "delete /projects/{id}/test_suites/{suite_id}" => {
+            (format!("/projects/{project}/test_suites/{suite}"), None)
+        }
+        "put /test_cases/{id}" => (format!("/test_cases/{case}"), Some(json!({}))),
+        "delete /test_cases/{id}" => (format!("/test_cases/{case}"), None),
+        "post /test_cases/{id}/duplicate" => {
+            (format!("/test_cases/{case}/duplicate"), Some(json!({})))
+        }
+        "post /projects/{id}/test_cases" => (
+            format!("/projects/{project}/test_cases"),
+            Some(case_body("TC-Y")),
+        ),
+        "delete /projects/{id}/test_cases/{case_id}" => {
+            (format!("/projects/{project}/test_cases/{case}"), None)
+        }
+        "post /test_runs" => (
+            "/test_runs".to_owned(),
+            Some(json!({
+                "name": "extra",
+                "timestamp": "2026-09-04T00:00:00Z",
+                "projects": [{"projectId": project, "name": "alpha", "testSuites": []}],
+            })),
+        ),
+        "put /test_runs/{id}" => (format!("/test_runs/{run}"), Some(json!({}))),
+        "delete /test_runs/{id}" => (format!("/test_runs/{run}"), None),
+        "post /test_runs/{id}/duplicate" => {
+            (format!("/test_runs/{run}/duplicate"), Some(json!({})))
+        }
+        "post /test_runs/{id}/test_suites" => (
+            format!("/test_runs/{run}/test_suites"),
+            Some(json!({"suiteId": suite})),
+        ),
+        "post /test_runs/{id}/test_cases" => (
+            format!("/test_runs/{run}/test_cases"),
+            Some(json!({"testCaseId": case})),
+        ),
+        "post /test_runs/{id}/results" => (format!("/test_runs/{run}/results"), Some(json!({}))),
+        "post /test_runs/{id}/results/{case_id}/defects" => (
+            format!("/test_runs/{run}/results/{case}/defects"),
+            Some(json!({})),
+        ),
+        "delete /test_runs/{id}/results/{case_id}/defects/{link_id}" => (
+            format!("/test_runs/{run}/results/{case}/defects/link-1"),
+            None,
+        ),
+        "post /test_runs/{id}/import/junit" => (format!("/test_runs/{run}/import/junit"), None),
+        "post /test_runs/{id}/import/json" => (format!("/test_runs/{run}/import/json"), None),
+        "post /test_runs/{id}/configurations" => {
+            (format!("/test_runs/{run}/configurations"), Some(json!({})))
+        }
+        "delete /test_runs/{id}/configurations/{config_id}" => {
+            (format!("/test_runs/{run}/configurations/config-1"), None)
+        }
+        "put /milestones/{id}" => (format!("/milestones/{milestone}"), Some(json!({}))),
+        "delete /milestones/{id}" => (format!("/milestones/{milestone}"), None),
+        "post /milestones/{id}/duplicate" => (
+            format!("/milestones/{milestone}/duplicate"),
+            Some(json!({})),
+        ),
+        "post /milestones" => (
+            "/milestones".to_owned(),
+            Some(json!({"name": "linked", "testRunIds": [run]})),
+        ),
+        other => panic!("unknown role-checked operation: {other}"),
+    };
+    (method, request.0, request.1)
+}
