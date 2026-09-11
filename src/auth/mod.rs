@@ -15,18 +15,22 @@
 //!   accounts, their refresh tokens, and the per-project grants.
 //! - [`session`] is the rules those parts serve: signing in, rotating a refresh
 //!   token, signing out, and deciding whether a caller may act on a project.
+//! - [`bootstrap`] gives a fresh deployment its first account, and refuses to
+//!   let a server that enforces auth start with none.
 //!
 //! Nothing outside [`store`] reaches the network or the disk, except the one
 //! secret file [`config`] may read, and nothing reads the clock on its own: the
 //! instant a token is issued or checked against is a parameter, which is what
 //! makes the expiry rules testable without sleeping.
 
+pub mod bootstrap;
 pub mod config;
 pub mod password;
 pub mod session;
 pub mod store;
 pub mod token;
 
+pub use bootstrap::{BootstrapError, ensure_bootstrap_user};
 pub use config::{
     AuthConfig, ConfigError, DEFAULT_ACCESS_TTL, DEFAULT_REFRESH_TTL, MIN_SECRET_BYTES,
 };
