@@ -32,6 +32,7 @@ use axum::{
 use serde_json::{Value, json};
 use tower_http::{limit::RequestBodyLimitLayer, trace::TraceLayer};
 
+use self::auth::AuthState;
 use crate::{
     domain::{MAX_ATTACHMENT_BYTES, TestService},
     storage::Repository,
@@ -43,8 +44,59 @@ pub use crate::domain::ListQuery;
 /// rejected before they are read.
 pub const MAX_BODY_BYTES: usize = MAX_ATTACHMENT_BYTES;
 
-/// The service every request shares, behind an [`Arc`].
-pub type AppState<R> = Arc<TestService<R>>;
+/// Everything a request may need: the service that reaches storage, and the
+/// authentication material a guard reads.
+///
+/// It resolves to the service through [`Deref`], so a handler that only touches
+/// storage calls the service's methods exactly as it did when the state was a
+/// bare [`Arc`]; the authentication half is reached through [`AppState::auth`]
+/// and the [`Principal`](crate::auth::Principal) extractor.
+pub struct AppState<R> {
+    service: Arc<TestService<R>>,
+    auth: AuthState,
+}
+
+impl<R> AppState<R> {
+    /// Pairs `service` with the authentication material `auth`.
+    pub fn new(service: TestService<R>, auth: AuthState) -> Self {
+        Self {
+            service: Arc::new(service),
+            auth,
+        }
+    }
+
+    /// The authentication material a handler's guard reads.
+    pub fn auth(&self) -> &AuthState {
+        &self.auth
+    }
+}
+
+impl<R> std::ops::Deref for AppState<R> {
+    type Target = TestService<R>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.service
+    }
+}
+
+// Written out rather than derived so the bound stays `R: Repository` instead of
+// growing an `R: Clone` the state does not need.
+impl<R> Clone for AppState<R> {
+    fn clone(&self) -> Self {
+        Self {
+            service: Arc::clone(&self.service),
+            auth: self.auth.clone(),
+        }
+    }
+}
+
+// Lets the [`Principal`](crate::auth::Principal) extractor reach the
+// authentication material from the router's state alone.
+impl<R> axum::extract::FromRef<AppState<R>> for AuthState {
+    fn from_ref(state: &AppState<R>) -> Self {
+        state.auth.clone()
+    }
+}
 
 /// Every path the router answers on. [`crate::api::router`] registers exactly
 /// these, and `tests/service.rs` checks that against `openapi.json`.
@@ -104,12 +156,13 @@ pub const ROUTES: &[&str] = &[
 /// moved, so the published contract documents the parent-scoped routes alone.
 pub const UNDOCUMENTED_ROUTES: &[&str] = &["/api-docs/", "/test_suites", "/test_cases"];
 
-/// Builds the application, backed by `repository`.
-pub fn router<R>(repository: R) -> Router
+/// Builds the application, backed by `repository` and authenticated with
+/// `auth`.
+pub fn router<R>(repository: R, auth: AuthState) -> Router
 where
     R: Repository + 'static,
 {
-    let state: AppState<R> = Arc::new(TestService::new(repository));
+    let state = AppState::new(TestService::new(repository), auth);
 
     Router::<AppState<R>>::new()
         .route("/health", get(health))
