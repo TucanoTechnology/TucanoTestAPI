@@ -356,8 +356,19 @@ async fn the_tags_parameter_is_published_only_where_a_tag_can_be_stored() {
     carries_tags.sort();
     assert_eq!(
         carries_tags,
-        vec!["Project", "TestCase", "TestRun", "TestSuite"],
-        "the schemas publishing a tags array are the models that store one"
+        vec![
+            "Project",
+            "ProjectCreateRequest",
+            "ProjectUpdateRequest",
+            "TestCase",
+            "TestCaseUpdateRequest",
+            "TestRun",
+            "TestRunCreateRequest",
+            "TestRunUpdateRequest",
+            "TestSuite",
+            "TestSuiteUpdateRequest",
+        ],
+        "the schemas publishing a tags array are the models that store one and the write bodies that accept one"
     );
 
     let mut documented: Vec<String> = Vec::new();
