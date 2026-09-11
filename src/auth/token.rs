@@ -13,6 +13,13 @@
 //! therefore unguessable, revocable by deleting one record, and valueless to
 //! anyone who reads the store.
 //!
+//! The claims include the subject's system-administrator flag, so a request can
+//! be authorized without reading the account store at all: verification is a
+//! signature check and a parse, with no file I/O on the authenticated path. The
+//! flag is inside the signed payload, so it cannot be widened without the
+//! secret; the price is that a demoted account keeps its old authority until
+//! the token it already holds expires, which is why access tokens are short.
+//!
 //! Every function here takes the instant it should reason about as a parameter
 //! rather than reading the clock, so expiry is tested exactly at the boundary
 //! instead of by sleeping.
@@ -48,15 +55,27 @@ pub struct Claims {
     pub expires_at: u64,
     /// `jti` — a unique id, so one access token can be named apart from another.
     pub token_id: String,
+    /// `sys` — whether the account may act outside the projects granted to it.
+    ///
+    /// It travels in the signed claims so that a request can be authorized
+    /// without reading the store. The consequence, and the reason the access
+    /// token is short-lived, is that an account demoted after a token was minted
+    /// keeps its old authority until that token expires.
+    pub system_admin: bool,
 }
 
 /// The claims as the wire format spells them.
+///
+/// `sys` is required rather than defaulted: a token that does not say whether
+/// its subject is a system administrator was not minted by a server that knew
+/// about them, so it is refused rather than guessed at.
 #[derive(Debug, Serialize, Deserialize)]
 struct RawClaims {
     sub: String,
     iat: u64,
     exp: u64,
     jti: String,
+    sys: bool,
 }
 
 /// The JOSE header. Unknown members are ignored; `alg` is not.
@@ -79,14 +98,22 @@ pub enum TokenError {
 /// Mints a short-lived access token for `subject`, valid from `now`.
 ///
 /// `now` is Unix seconds. The token expires at `now + ttl`; a token is accepted
-/// strictly before that instant.
+/// strictly before that instant. `system_admin` is recorded in the signed
+/// claims, so the authority it grants cannot be widened without the secret.
 #[must_use]
-pub fn mint_access_token(secret: &[u8], subject: &str, ttl: Duration, now: u64) -> String {
+pub fn mint_access_token(
+    secret: &[u8],
+    subject: &str,
+    system_admin: bool,
+    ttl: Duration,
+    now: u64,
+) -> String {
     let claims = RawClaims {
         sub: subject.to_owned(),
         iat: now,
         exp: now.saturating_add(ttl.as_secs()),
         jti: random_id(),
+        sys: system_admin,
     };
     let header = URL_SAFE_NO_PAD.encode(br#"{"alg":"HS256","typ":"JWT"}"#);
     let payload = URL_SAFE_NO_PAD
@@ -146,6 +173,7 @@ pub fn verify_access_token(secret: &[u8], token: &str, now: u64) -> Result<Claim
         issued_at: claims.iat,
         expires_at: claims.exp,
         token_id: claims.jti,
+        system_admin: claims.sys,
     })
 }
 
@@ -230,19 +258,27 @@ mod tests {
 
     #[test]
     fn an_access_token_round_trips() {
-        let token = mint_access_token(SECRET, "user-1", Duration::from_secs(900), ISSUED);
+        let token = mint_access_token(SECRET, "user-1", false, Duration::from_secs(900), ISSUED);
         let claims = verify_access_token(SECRET, &token, ISSUED).expect("token verifies");
         assert_eq!(claims.subject, "user-1");
         assert_eq!(claims.issued_at, ISSUED);
         assert_eq!(claims.expires_at, ISSUED + 900);
         assert!(!claims.token_id.is_empty());
+        assert!(!claims.system_admin, "an ordinary account is not an admin");
         assert_eq!(segments(&token).len(), 3);
     }
 
     #[test]
+    fn an_access_token_carries_the_system_administrator_flag() {
+        let token = mint_access_token(SECRET, "user-1", true, Duration::from_secs(900), ISSUED);
+        let claims = verify_access_token(SECRET, &token, ISSUED).expect("token verifies");
+        assert!(claims.system_admin);
+    }
+
+    #[test]
     fn two_tokens_for_one_subject_differ() {
-        let first = mint_access_token(SECRET, "user-1", Duration::from_secs(900), ISSUED);
-        let second = mint_access_token(SECRET, "user-1", Duration::from_secs(900), ISSUED);
+        let first = mint_access_token(SECRET, "user-1", false, Duration::from_secs(900), ISSUED);
+        let second = mint_access_token(SECRET, "user-1", false, Duration::from_secs(900), ISSUED);
         assert_ne!(first, second, "each token carries its own jti");
         let first_claims = verify_access_token(SECRET, &first, ISSUED).expect("first");
         let second_claims = verify_access_token(SECRET, &second, ISSUED).expect("second");
@@ -251,7 +287,7 @@ mod tests {
 
     #[test]
     fn an_access_token_is_valid_until_the_moment_it_expires() {
-        let token = mint_access_token(SECRET, "user-1", Duration::from_secs(900), ISSUED);
+        let token = mint_access_token(SECRET, "user-1", false, Duration::from_secs(900), ISSUED);
         assert!(verify_access_token(SECRET, &token, ISSUED + 899).is_ok());
         assert_eq!(
             verify_access_token(SECRET, &token, ISSUED + 900),
@@ -266,7 +302,7 @@ mod tests {
 
     #[test]
     fn another_secret_cannot_verify_the_token() {
-        let token = mint_access_token(SECRET, "user-1", Duration::from_secs(900), ISSUED);
+        let token = mint_access_token(SECRET, "user-1", false, Duration::from_secs(900), ISSUED);
         assert_eq!(
             verify_access_token(OTHER_SECRET, &token, ISSUED),
             Err(TokenError::BadSignature)
@@ -275,21 +311,23 @@ mod tests {
 
     #[test]
     fn a_tampered_payload_fails_its_signature() {
-        let token = mint_access_token(SECRET, "user-1", Duration::from_secs(900), ISSUED);
+        let token = mint_access_token(SECRET, "user-1", false, Duration::from_secs(900), ISSUED);
         let parts = segments(&token);
-        let payload =
-            URL_SAFE_NO_PAD.encode(br#"{"sub":"root","iat":0,"exp":4294967295,"jti":"x"}"#);
+        // The same claims, with the system-administrator flag flipped. It is not
+        // the subject a forger would reach for, but the authority.
+        let payload = URL_SAFE_NO_PAD
+            .encode(br#"{"sub":"user-1","iat":1700000000,"exp":1700000900,"jti":"x","sys":true}"#);
         let forged = format!("{}.{payload}.{}", parts[0], parts[2]);
         assert_eq!(
             verify_access_token(SECRET, &forged, ISSUED),
             Err(TokenError::BadSignature),
-            "changing the subject invalidates the tag"
+            "raising your own authority invalidates the tag"
         );
     }
 
     #[test]
     fn a_tampered_signature_fails() {
-        let token = mint_access_token(SECRET, "user-1", Duration::from_secs(900), ISSUED);
+        let token = mint_access_token(SECRET, "user-1", false, Duration::from_secs(900), ISSUED);
         let parts = segments(&token);
         let forged = format!("{}.{}.{}", parts[0], parts[1], "A".repeat(43));
         assert_eq!(
@@ -311,7 +349,7 @@ mod tests {
 
     #[test]
     fn a_segment_that_is_not_base64url_is_malformed() {
-        let token = mint_access_token(SECRET, "user-1", Duration::from_secs(900), ISSUED);
+        let token = mint_access_token(SECRET, "user-1", false, Duration::from_secs(900), ISSUED);
         let parts = segments(&token);
         let forged = format!("not*base64*url.{}.{}", parts[1], parts[2]);
         assert_eq!(
@@ -324,12 +362,25 @@ mod tests {
     fn a_correctly_signed_token_with_a_foreign_algorithm_is_refused() {
         let token = forge(
             br#"{"alg":"none","typ":"JWT"}"#,
-            br#"{"sub":"root","iat":0,"exp":4294967295,"jti":"x"}"#,
+            br#"{"sub":"root","iat":0,"exp":4294967295,"jti":"x","sys":true}"#,
         );
         assert_eq!(
             verify_access_token(SECRET, &token, ISSUED),
             Err(TokenError::Malformed),
             "only HS256 is accepted, however well signed the rest is"
+        );
+    }
+
+    #[test]
+    fn a_correctly_signed_token_without_the_system_administrator_claim_is_malformed() {
+        let token = forge(
+            br#"{"alg":"HS256","typ":"JWT"}"#,
+            br#"{"sub":"root","iat":0,"exp":4294967295,"jti":"x"}"#,
+        );
+        assert_eq!(
+            verify_access_token(SECRET, &token, ISSUED),
+            Err(TokenError::Malformed),
+            "a token that does not say whether its subject is an admin is not guessed at"
         );
     }
 

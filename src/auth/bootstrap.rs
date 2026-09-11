@@ -165,9 +165,11 @@ mod tests {
         let (_directory, store) = store();
         ensure_bootstrap_user(&store, &config(true, true), NOW).expect("bootstrap");
         let tokens = login(&store, &config(true, true), "ROOT", PASSWORD, NOW).expect("login");
-        let principal =
-            authenticate(&store, &config(true, true), &tokens.access_token, NOW).expect("auth");
-        assert_eq!(principal.username, "root");
+        let principal = authenticate(&config(true, true), &tokens.access_token, NOW).expect("auth");
+        assert!(
+            principal.system_admin,
+            "the bootstrap account carries its authority in the token"
+        );
         assert!(
             principal
                 .require_role(&store, "p1.json", Role::Owner)
