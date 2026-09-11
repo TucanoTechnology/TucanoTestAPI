@@ -318,6 +318,7 @@ Tests are split into two layers and both run in CI on every push and pull reques
 | `tests/milestones.rs` | Milestone CRUD, validation, conflicts, duplication, and progress derived from the referenced runs |
 | `tests/configurations.rs` | Configuration CRUD, validation, conflicts, missing resources, restart persistence, and use by a run |
 | `tests/reports.rs` | The reports: the coverage report (per-suite and total case counts, the project scope filter, the global scope) and the run summary (the status buckets, the pass rate, the summed durations, the intersecting project/milestone/configuration and date filters), with the error answers for an unknown and an unusable identifier |
+| `tests/request_id.rs` | The request id: the minted `X-Request-Id` on a request that sends none, the verbatim echo of an inbound one, the replacement of an empty header, distinct ids per request, the `requestId` the error envelope carries, the header a plain-text rejection still carries, and the id the request span is given |
 | `tests/attachments.rs` | Upload, download, delete, content types, removal with the parent test case |
 | `tests/tags.rs` | The `tags` array on projects, suites, cases and runs, the shared `?tags=` OR filter, and the OpenAPI parameter it is published through |
 | `tests/validation.rs` | Scalar type validation: wrong-typed fields rejected on create and update with the field named, valid and omitted fields accepted, and documents persisted before the change still readable |
