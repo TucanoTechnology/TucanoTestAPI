@@ -16,20 +16,31 @@
 //! different: no identity is taken from the request and no grant is consulted,
 //! which is exactly the trusted-network service the API was before auth
 //! existed.
+//!
+//! [`routes`] is this module's half of the router: the four session endpoints a
+//! client signs in through, exchanges its refresh token at, signs out from, and
+//! asks who it is. Sign-in and rotation are the only operations in the API that
+//! do not need a caller, because they are how a caller comes to have one.
 
 use std::{
+    collections::BTreeMap,
     sync::Arc,
     time::{SystemTime, UNIX_EPOCH},
 };
 
 use axum::{
-    extract::{FromRef, FromRequestParts},
+    Json, Router,
+    extract::{FromRef, FromRequestParts, State, rejection::JsonRejection},
     http::{header, request::Parts},
+    routing::{get, post},
 };
+use serde_json::{Value, json};
 
+use super::AppState;
 use crate::{
-    auth::{AuthConfig, AuthStore, Principal, Role, authenticate},
+    auth::{AuthConfig, AuthStore, Principal, Role, SessionTokens, authenticate},
     domain::DomainError,
+    storage::Repository,
 };
 
 /// The authentication material a request needs, carried beside the service.
@@ -134,6 +145,185 @@ fn now_seconds() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |since_epoch| since_epoch.as_secs())
+}
+
+/// The credentials a client signs in with.
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct LoginRequest {
+    /// Login name, compared ASCII-case-insensitively.
+    username: String,
+    /// The account's password.
+    password: String,
+}
+
+/// The refresh token a client rotates.
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct RefreshRequest {
+    /// The token handed out by the sign-in or rotation it is replacing.
+    refresh_token: String,
+}
+
+/// The refresh token a client revokes.
+///
+/// The same shape as [`RefreshRequest`] — the two are separate types because
+/// they are separate operations in the contract, and a change to what signing
+/// out needs should not edit signing in.
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct LogoutRequest {
+    /// The token to revoke. One that was never issued revokes nothing.
+    refresh_token: String,
+}
+
+/// The session a signed-in client holds.
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SessionResponse {
+    /// The short-lived token to present on every request.
+    access_token: String,
+    /// The token to present in exchange for the next pair.
+    refresh_token: String,
+    /// How the access token is presented. Always `Bearer`.
+    token_type: &'static str,
+    /// How many seconds the access token stays valid.
+    expires_in: u64,
+}
+
+impl SessionResponse {
+    /// Shapes the tokens [`crate::auth::login`] and [`crate::auth::refresh`]
+    /// return into the body a client reads.
+    ///
+    /// The lifetimes are reported as a duration rather than as the absolute
+    /// instants the tokens carry, so a client with a skewed clock still knows
+    /// how long it has.
+    fn new(tokens: SessionTokens, config: &AuthConfig) -> Self {
+        Self {
+            access_token: tokens.access_token,
+            refresh_token: tokens.refresh_token,
+            token_type: "Bearer",
+            expires_in: config.access_ttl.as_secs(),
+        }
+    }
+}
+
+/// The caller the request authenticated as, and what it may reach.
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct MeResponse {
+    /// Identifier the account's grants and tokens refer to.
+    id: String,
+    /// The account's login name.
+    username: String,
+    /// Whether the caller may act beyond its granted projects.
+    system_admin: bool,
+    /// The role the caller holds in each project it has been granted one in,
+    /// keyed by project identifier.
+    roles: BTreeMap<String, String>,
+}
+
+/// The name a role is written as in a response.
+fn role_name(role: Role) -> &'static str {
+    match role {
+        Role::Viewer => "viewer",
+        Role::Editor => "editor",
+        Role::Owner => "owner",
+    }
+}
+
+/// Answers a body the JSON extractor refused as `invalid_request`.
+///
+/// The extractor's own rejection is a plain-text 400 or 422 belonging to no
+/// documented operation, so it is translated into the envelope every other
+/// rejected body already uses. The rejected text is not echoed, so a client
+/// learns nothing about the shape the server expected.
+fn rejected_body() -> DomainError {
+    DomainError::invalid_request("Invalid request body")
+}
+
+/// `POST /auth/login` — verifies credentials and starts a session.
+async fn login<R: Repository>(
+    State(state): State<AppState<R>>,
+    body: Result<Json<LoginRequest>, JsonRejection>,
+) -> Result<Json<SessionResponse>, DomainError> {
+    let Json(body) = body.map_err(|_| rejected_body())?;
+    let auth = state.auth();
+    let tokens = crate::auth::login(
+        &auth.store,
+        &auth.config,
+        &body.username,
+        &body.password,
+        now_seconds(),
+    )?;
+    Ok(Json(SessionResponse::new(tokens, &auth.config)))
+}
+
+/// `POST /auth/refresh` — exchanges a refresh token for a fresh pair.
+async fn refresh<R: Repository>(
+    State(state): State<AppState<R>>,
+    body: Result<Json<RefreshRequest>, JsonRejection>,
+) -> Result<Json<SessionResponse>, DomainError> {
+    let Json(body) = body.map_err(|_| rejected_body())?;
+    let auth = state.auth();
+    let tokens = crate::auth::refresh(
+        &auth.store,
+        &auth.config,
+        &body.refresh_token,
+        now_seconds(),
+    )?;
+    Ok(Json(SessionResponse::new(tokens, &auth.config)))
+}
+
+/// `POST /auth/logout` — revokes the caller's refresh token.
+///
+/// Answered the same way whether or not the token was live, so the response
+/// never confirms whether it existed.
+async fn logout<R: Repository>(
+    State(state): State<AppState<R>>,
+    principal: Principal,
+    body: Result<Json<LogoutRequest>, JsonRejection>,
+) -> Result<Json<Value>, DomainError> {
+    let Json(body) = body.map_err(|_| rejected_body())?;
+    let auth = state.auth();
+    crate::auth::logout(&auth.store, &principal, &body.refresh_token)?;
+    Ok(Json(json!({ "message": "Signed out" })))
+}
+
+/// `GET /auth/me` — reports the caller the request authenticated as.
+///
+/// The authority reported is the token's, not the account file's: it is what
+/// the caller can actually do until the token expires.
+async fn me<R: Repository>(
+    State(state): State<AppState<R>>,
+    principal: Principal,
+) -> Result<Json<MeResponse>, DomainError> {
+    let auth = state.auth();
+    let account = auth
+        .store
+        .user(&principal.user_id)?
+        .ok_or_else(DomainError::invalid_token)?;
+    let mut roles = BTreeMap::new();
+    for project in auth.store.projects_for_user(&principal.user_id)? {
+        if let Some(role) = auth.store.role_of(&project, &principal.user_id)? {
+            roles.insert(project, role_name(role).to_owned());
+        }
+    }
+    Ok(Json(MeResponse {
+        id: account.id,
+        username: account.username,
+        system_admin: principal.system_admin,
+        roles,
+    }))
+}
+
+/// The session endpoints this module owns.
+pub(crate) fn routes<R: Repository + 'static>() -> Router<AppState<R>> {
+    Router::new()
+        .route("/auth/login", post(login::<R>))
+        .route("/auth/refresh", post(refresh::<R>))
+        .route("/auth/logout", post(logout::<R>))
+        .route("/auth/me", get(me::<R>))
 }
 
 #[cfg(test)]
