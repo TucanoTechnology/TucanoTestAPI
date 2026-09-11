@@ -90,6 +90,12 @@ pub fn current_iso8601_timestamp() -> String {
     format_iso8601(now)
 }
 
+/// The calendar date (`YYYY-MM-DD`) of an instant given as Unix seconds, which
+/// is what the summary report's date filters compare against.
+pub fn iso8601_date(seconds: u64) -> String {
+    format_iso8601(seconds)[..10].to_owned()
+}
+
 /// Renders seconds since the Unix epoch as an ISO-8601 UTC timestamp.
 ///
 /// Hand-rolled rather than pulled from a date-time crate: the API has no such

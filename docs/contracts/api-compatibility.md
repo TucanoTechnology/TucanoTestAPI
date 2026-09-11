@@ -816,6 +816,64 @@ project section/suite". This child introduces the shared reports module the summ
   `::a_global_report_sums_every_project_and_keeps_their_suites`), and with
   `tests/service.rs::openapi_document_matches_the_registered_routes` holding the path to the registered route.
 
+## Summary Report Plan (Issue #95)
+
+Issue: [#95](https://github.com/TucanoTechnology/TucanoTestAPI/issues/95) — the second child of
+[#37](https://github.com/TucanoTechnology/TucanoTestAPI/issues/37), building on the shared `src/domain/reports.rs`
+module the coverage sibling introduced.
+
+- **One read-only route.** `GET /reports/summary` answers
+  `{"total", "passed", "failed", "blocked", "untested", "passPercentage", "totalDurationMs"}`, published under
+  `SummaryReport` in `openapi.json`. Nothing is written, so no stored document changes.
+- **The status mapping matches `MilestoneProgress`.** `Passed`, `Failed`, `Blocked` and `Untested` each count
+  into their own bucket. `Retest` — and any status the API does not recognise — counts toward `total`, and so
+  toward `passPercentage`'s denominator, but into no bucket. `passPercentage` is `passed / total * 100`, or `0.0`
+  when nothing is in scope, and is **not** rounded: the issue's illustrative `79.2` is the rounded form of
+  `95 / 120 * 100`, and the endpoint answers the exact fraction, matching how `MilestoneProgress` already reports
+  `33.33333333333333` rather than `33.3`.
+- **Every filter is optional and they intersect.** `projectId`, `milestoneId`, `configurationId`, `from` and `to`
+  may be supplied together, and a run contributes only when it satisfies all of them. With none supplied every
+  recorded result across every run is summarised.
+- **`from` and `to` bound a run's own `timestamp`, inclusively.** Both accept a bare `YYYY-MM-DD` date or a full
+  ISO-8601 timestamp, normalised to the date. A run stores its timestamp either as Unix seconds rendered as a
+  string (the shape the API writes by default) or verbatim as the ISO-8601 value the client supplied; both reduce
+  to a date. A run whose timestamp is in neither shape has no comparable date and is **left out** of a
+  date-filtered report rather than silently counted. A value that is not a date in either shape is
+  `400 invalid_request`.
+- **`totalDurationMs` sums `durationMs` over the results in scope.** The field is optional and new on both the
+  recorded result and the body that records one; a result without it contributes nothing. This is the only
+  stored-document change, and it is additive because the field is written only when a client supplies one.
+- **`total` counts every result, so it can exceed the four named buckets.** A report for a run that recorded a
+  `Retest` has a larger `total` than the buckets sum to. This is recorded because a client that adds up the
+  buckets would otherwise read the payload as inconsistent.
+- **Unknown filter ids are `404`; unusable ones are `400`.** An unknown `projectId` is `404 not_found`
+  (via `require_parent`); an unknown `milestoneId` is `404 not_found` with the milestone-specific message; an
+  unknown `configurationId` is `404 not_found` with the generic `Resource not found` message the rest of the API
+  uses for a missing resource. An identifier that cannot address the resource at all (no `.json`) is
+  `400 invalid_id`.
+- **The model follows the response-model convention.** The issue text asks for `deny_unknown_fields`, but
+  `src/models.rs` applies that only to writable request models; `SummaryReport` is response-only, so it follows
+  `MilestoneProgress`, `CaseHistoryEntry` and `CoverageReport` and uses bare `#[serde(rename_all = "camelCase")]`.
+  As with the coverage sibling this is the only deliberate deviation from the issue text.
+- Deviation recorded with tests in `tests/reports.rs`
+  (`::an_empty_tree_reports_an_all_zero_summary`, `::a_summary_buckets_every_status_and_sums_the_durations`,
+  `::results_from_every_run_join_an_unfiltered_summary`,
+  `::the_filters_combine_and_each_restricts_the_runs_that_contribute`,
+  `::a_milestone_filter_keeps_only_the_runs_it_references`,
+  `::the_date_bounds_are_inclusive_and_leave_out_uncomparable_runs`,
+  `::an_unknown_project_or_milestone_is_not_found`, `::an_unknown_configuration_is_not_found`,
+  `::an_unusable_filter_identifier_is_invalid_id`, `::an_unusable_date_filter_is_invalid_request`), with the
+  aggregation unit tests in `src/domain/reports.rs` (`::an_empty_result_set_reports_zeroes`,
+  `::the_buckets_split_by_status_and_retest_counts_only_toward_the_total`,
+  `::the_issue_example_produces_the_documented_pass_rate`,
+  `::durations_sum_and_a_result_without_one_counts_as_zero`,
+  `::a_project_filter_keeps_only_runs_that_embed_it`,
+  `::a_milestone_filter_keeps_only_the_runs_it_references`,
+  `::a_configuration_filter_keeps_only_linked_runs`, `::date_bounds_are_inclusive`,
+  `::a_run_without_a_comparable_date_is_left_out_when_a_date_filter_is_set`,
+  `::a_date_filter_accepts_a_bare_date_or_a_timestamp`), and with
+  `tests/service.rs::openapi_document_matches_the_registered_routes` holding the path to the registered route.
+
 ## Breaking change accounting
 
 - **Coverage report endpoint added** (Issue #94, plan above). `GET /reports/coverage` and the `CoverageReport` /
@@ -825,6 +883,14 @@ project section/suite". This child introduces the shared reports module the summ
   can exceed the sum of the per-suite `caseCount`; and `projectId` is echoed only when the report was scoped,
   which is why it is absent from the schema's `required` list. Deviation recorded with tests in `tests/reports.rs`
   and `src/domain/reports.rs` as listed in the plan.
+- **Summary report endpoint added, with an optional result duration** (Issue #95, plan above).
+  `GET /reports/summary` and the `SummaryReport` schema are new, and `TestCaseResult` / `TestResultRequest`
+  gain an optional `durationMs`. The change is additive: no payload that used to succeed is refused, an
+  existing document is never rewritten, and a stored result keeps its on-disk shape unless a client supplies a
+  duration. Two semantics are recorded here: `total` counts every result, including `Retest` and unrecognised
+  statuses, so it can exceed the sum of `passed` / `failed` / `blocked` / `untested`; and `passPercentage` is
+  the exact fraction, not a rounded percentage. Deviation recorded with tests in `tests/reports.rs` and
+  `src/domain/reports.rs` as listed in the plan.
 - **Tags added, and their query parameter withdrawn where it could not match** (Issue #49, plan above).
   `Project`, `TestSuite`, `TestCase` and `TestRun` gain an optional `tags` array and the list operations gain
   `?tags=a,b`. Additive only: no payload that used to succeed is refused, an existing document is never
