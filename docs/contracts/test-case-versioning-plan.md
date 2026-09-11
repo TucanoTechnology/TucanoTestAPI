@@ -12,6 +12,20 @@ it and its pointer back to this file are deferred to that track; the deferral is
 [#89](https://github.com/TucanoTechnology/TucanoTestAPI/issues/89). Until that section lands, **this file is the
 recorded plan**.
 
+## Current state (implemented)
+
+This plan is now implemented in the service:
+
+- `TestCase` carries `version` (`Option<u64>`) and `lastModified` (`Option<String>`), both
+  `#[serde(skip_serializing_if = "Option::is_none")]`.
+- Qualifying updates write an immutable pre-update snapshot under the case's `revisions/v<n>.json`.
+- `GET /test_cases/{id}/history` and `GET /test_cases/{id}/history/{version}` are live routes, documented in
+  `openapi.json`.
+- The run-side capture this plan deferred is also implemented: `TestRun` records `caseVersions`
+  (`Option<HashMap<String, u64>>`), pinning the case version each run executed.
+
+The sections below remain the recorded design and addressing rules.
+
 ## Field additions (the breaking-change caveat)
 
 The legacy Draft 2020-12 schemas set `additionalProperties: false`, so adding any field is a breaking change and
