@@ -2,6 +2,8 @@
 //!
 //! One module per resource — [`projects`], [`suites`], [`runs`], [`cases`],
 //! [`milestones`], [`configurations`] — each owning the routes that address it.
+//! [`auth`] is the exception: it owns the session endpoints a client signs in
+//! through rather than a resource.
 //! A handler does three things only: pull values out of the request, call
 //! [`TestService`], and shape the response. Every rule lives in
 //! [`crate::domain`]; every byte that reaches disk goes through
@@ -146,6 +148,10 @@ pub const ROUTES: &[&str] = &[
     "/reports/summary",
     "/configurations",
     "/configurations/{id}",
+    "/auth/login",
+    "/auth/refresh",
+    "/auth/logout",
+    "/auth/me",
 ];
 
 /// Paths that are served but have no separate entry in the published contract.
@@ -176,6 +182,7 @@ where
         .merge(milestones::routes::<R>())
         .merge(reports::routes::<R>())
         .merge(configurations::routes::<R>())
+        .merge(auth::routes::<R>())
         .layer(RequestBodyLimitLayer::new(MAX_BODY_BYTES))
         .layer(TraceLayer::new_for_http().make_span_with(request_id::request_span))
         .layer(middleware::from_fn(request_id::propagate))

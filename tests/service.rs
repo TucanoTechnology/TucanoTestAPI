@@ -711,8 +711,9 @@ async fn openapi_schemas_are_strict_only_where_the_api_rejects_unknown_fields() 
         json!("number")
     );
 
-    // A client can switch exhaustively on the error code; the enumerated set is
-    // exactly the codes the document's own `400` descriptions name.
+    // A client can switch exhaustively on the error code: the document's enum
+    // is the full set the API can emit, and the `400` descriptions it declares
+    // each name at least one of those codes.
     assert_eq!(
         schemas["Error"]["properties"]["error"]["properties"]["code"]["enum"],
         json!(ERROR_CODES)
@@ -787,6 +788,7 @@ async fn openapi_operations_carry_stable_ids_and_resource_tags() {
             "Milestones",
             "Configurations",
             "Reports",
+            "Auth",
         ],
         "the document declares one tag per resource family"
     );
@@ -821,7 +823,7 @@ async fn openapi_operations_carry_stable_ids_and_resource_tags() {
             "{label} carries an undeclared tag: {tag}"
         );
     }
-    assert_eq!(ids.len(), 64, "every documented operation is named");
+    assert_eq!(ids.len(), 68, "every documented operation is named");
 }
 
 #[tokio::test]
@@ -903,6 +905,11 @@ const ERROR_CODES: &[&str] = &[
     "not_found",
     "conflict",
     "storage_error",
+    "missing_token",
+    "invalid_token",
+    "token_expired",
+    "invalid_credentials",
+    "invalid_refresh_token",
 ];
 
 /// Every `$ref` the document contains, wherever it sits.
