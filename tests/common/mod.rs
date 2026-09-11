@@ -24,7 +24,19 @@ pub fn test_app() -> (TempDir, Router) {
 
 pub fn app_at(path: &Path) -> Router {
     let repository = FileRepository::new(path).expect("repository");
-    api::router(repository)
+    let store = tucano_test::auth::AuthStore::new(path).expect("auth store");
+    // Authentication is off by default, which is the behaviour these suites were
+    // written against: the resource routes ask no caller for a token. The suites
+    // that exercise authentication build their own router.
+    let config = tucano_test::auth::AuthConfig {
+        required: false,
+        jwt_secret: None,
+        access_ttl: tucano_test::auth::DEFAULT_ACCESS_TTL,
+        refresh_ttl: tucano_test::auth::DEFAULT_REFRESH_TTL,
+        bootstrap_username: None,
+        bootstrap_password: None,
+    };
+    api::router(repository, api::auth::AuthState::new(store, config))
 }
 
 pub async fn send_full(app: &Router, request: Request<Body>) -> (StatusCode, HeaderMap, Vec<u8>) {

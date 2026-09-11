@@ -23,28 +23,43 @@ use crate::domain::duplicate::DuplicateSpec;
 
 /// Generates `list_*`, `get_*`, `create_*`, `update_*` and `delete_*` for one
 /// resource. Import [`prelude`] before invoking it.
+///
+/// Each handler authorizes before it touches storage: a listing is filtered to
+/// the projects the caller can reach, and the rest ask [`super::access`] whether
+/// the caller may reach the resource this request names.
 macro_rules! crud_handlers {
     ($list:ident, $get:ident, $create:ident, $update:ident, $delete:ident, $resource:expr) => {
         pub(crate) async fn $list<R: Repository>(
-            State(service): State<AppState<R>>,
+            State(state): State<AppState<R>>,
+            principal: Principal,
             Query(query): Query<ListQuery>,
         ) -> Result<Json<Value>, DomainError> {
-            let items = service.list($resource, &query)?;
-            Ok(Json(json!(items)))
+            let scope = access::scope(state.auth(), &principal)?;
+            let items = state.list($resource, &query)?;
+            Ok(Json(json!(access::filter_list(
+                &state,
+                $resource,
+                items,
+                scope.as_ref(),
+            )?)))
         }
 
         pub(crate) async fn $get<R: Repository>(
-            State(service): State<AppState<R>>,
+            State(state): State<AppState<R>>,
+            principal: Principal,
             Path(id): Path<String>,
         ) -> Result<Json<Value>, DomainError> {
-            Ok(Json(service.get($resource, &id)?))
+            access::guard_get(&state, &principal, $resource, &id)?;
+            Ok(Json(state.get($resource, &id)?))
         }
 
         pub(crate) async fn $create<R: Repository>(
-            State(service): State<AppState<R>>,
+            State(state): State<AppState<R>>,
+            principal: Principal,
             Json(body): Json<Value>,
         ) -> Result<(StatusCode, Json<Value>), DomainError> {
-            let created = service.create($resource, &body)?;
+            access::guard_create(&state, &principal, $resource, &body)?;
+            let created = state.create($resource, &body)?;
             Ok((
                 StatusCode::CREATED,
                 Json(json!({ "message": "Resource created", "id": created.id })),
@@ -52,19 +67,23 @@ macro_rules! crud_handlers {
         }
 
         pub(crate) async fn $update<R: Repository>(
-            State(service): State<AppState<R>>,
+            State(state): State<AppState<R>>,
+            principal: Principal,
             Path(id): Path<String>,
             Json(body): Json<Value>,
         ) -> Result<Json<Value>, DomainError> {
-            service.update($resource, &id, &body)?;
+            access::guard_update(&state, &principal, $resource, &id, &body)?;
+            state.update($resource, &id, &body)?;
             Ok(Json(json!({ "message": "Resource updated" })))
         }
 
         pub(crate) async fn $delete<R: Repository>(
-            State(service): State<AppState<R>>,
+            State(state): State<AppState<R>>,
+            principal: Principal,
             Path(id): Path<String>,
         ) -> Result<Json<Value>, DomainError> {
-            service.delete($resource, &id)?;
+            access::guard_delete(&state, &principal, $resource, &id)?;
+            state.delete($resource, &id)?;
             Ok(Json(json!({ "message": "Resource deleted" })))
         }
     };
@@ -75,11 +94,13 @@ macro_rules! crud_handlers {
 macro_rules! duplicate_handler {
     ($handler:ident, $spec:expr) => {
         pub(crate) async fn $handler<R: Repository>(
-            State(service): State<AppState<R>>,
+            State(state): State<AppState<R>>,
+            principal: Principal,
             Path(id): Path<String>,
             Json(body): Json<Value>,
         ) -> Result<(StatusCode, Json<Value>), DomainError> {
-            let new_id = service.duplicate(&$spec, &id, &body)?;
+            access::guard_duplicate(&state, &principal, $spec.resource, &id)?;
+            let new_id = state.duplicate(&$spec, &id, &body)?;
             Ok($crate::api::crud::duplicated(&$spec, &new_id))
         }
     };
@@ -106,7 +127,8 @@ pub(crate) fn composed_response(composed: &Composed, noun: &str) -> (StatusCode,
 pub(crate) use crud_handlers;
 pub(crate) use duplicate_handler;
 
-/// Everything the generated handlers name, in one import.
+/// Everything the generated handlers name, plus the pieces the hand-written
+/// handlers reach for most often (`Role`, `access`), in one import.
 pub mod prelude {
     pub(crate) use axum::{
         Json,
@@ -116,6 +138,8 @@ pub mod prelude {
     pub(crate) use serde_json::{Value, json};
 
     pub(crate) use crate::{
+        api::access,
+        auth::{Principal, Role},
         domain::{DomainError, ListQuery},
         storage::Repository,
     };

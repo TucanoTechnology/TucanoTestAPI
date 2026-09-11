@@ -37,7 +37,7 @@ The service now exposes CRUD and attachment endpoints, so the controls below are
 | Concurrent write | Define lock and overwrite behavior; never publish a partial JSON document | Concurrent writer and atomicity tests |
 | Denial of service | Bound body size, JSON depth, filesystem work, uploads, and request duration | Timeout, cancellation, and resource-limit tests |
 | Data disclosure | Never return internal paths, stack traces, raw filesystem errors, secrets, or file contents in logs | Error and log-redaction tests |
-| Unauthorized access | Authenticate before protected operations and authorize by resource/action | Auth matrix tests (**not yet implemented** — the service is currently unauthenticated and must not be exposed beyond a trusted network) |
+| Unauthorized access | Authenticate before protected operations and authorize by resource/action | Auth matrix tests (`tests/auth.rs`; hand-marked public surface in `tests/service.rs`) |
 | Vulnerable dependency or image | Run advisory, secret, and container scans in CI | Security workflow and clean-baseline checks |
 
 ## Security invariants
@@ -48,13 +48,16 @@ The service now exposes CRUD and attachment endpoints, so the controls below are
 4. The GUI never reads or writes JSON files directly.
 5. `unsafe` Rust is forbidden by the crate lint unless the policy is explicitly revised and reviewed.
 6. Security-sensitive events exclude credentials, tokens, raw payloads, attachment contents, and internal paths.
+7. Credentials are never stored or logged in the clear: passwords are persisted only as Argon2id PHC hashes
+   and refresh tokens only as SHA-256 digests of an opaque value the client keeps.
 
 ## Open decisions
 
-- Authentication mechanism and token/session lifetime — **decided**: implementation is deferred, and the chosen
-  mechanism is a short-lived JWT access token plus a refresh token with no database
-  ([authentication-decision.md](authentication-decision.md); tracked in #130).
-- Authorization roles and resource ownership model — **decided**: project-scoped RBAC, a role granted per project
+- Authentication mechanism and token/session lifetime — **implemented**: a short-lived JWT access token
+  (default 15 minutes) plus a rotating opaque refresh token (default 14 days), no database
+  ([authentication-decision.md](authentication-decision.md); #130).
+- Authorization roles and resource ownership model — **implemented**: project-scoped RBAC, a role
+  (`viewer` < `editor` < `owner`) granted per project, with a `systemAdmin` global bypass
   ([authentication-decision.md](authentication-decision.md)).
 - Maximum request, JSON, attachment, and nesting sizes
 - Locking implementation and overwrite/conflict semantics
@@ -78,8 +81,26 @@ These decisions must be resolved before the HTTP compatibility layer is exposed 
 - ✅ Atomic write semantics implemented in repository layer
 - ✅ Container image scanning in CI (security workflow `container-scan` job)
 - ✅ SBOM generation for release artifacts (security workflow `sbom` job)
+- ✅ Authentication and authorization implemented (#130): HS256 access tokens, rotating refresh
+  tokens, Argon2id password hashes, and project-scoped RBAC enforced in every guarded handler.
+  Passwords and refresh tokens are stored only as hashes; the auth matrix is `tests/auth.rs`.
+
+### Known limitations
+
+- **Run scope can be narrowed by the caller that holds the run.** A run's reachable projects are the
+  projects its `projects` array names, and an `editor` may update that array, so a caller with write
+  access to a run can shrink the run's scope (for itself and for everyone else). The alternative — a
+  fixed scope stamped at creation — is deliberately deferred; raising a run's privileges is not
+  possible, so the weakness is a denial of access rather than an escalation.
+- **Authorization is decided before existence.** Because a handler checks the caller against the
+  project it names before it loads the resource, a restricted caller can receive `403` where an
+  anonymous-old deployment would have answered `404` for an identifier that does not exist. With
+  `TUCANO_AUTH_REQUIRED` off every guard returns, so behaviour is unchanged.
+- **There is no grant-administration endpoint.** Accounts and grants are read from
+  `TUCANO_DATA_DIR/auth/`, which must be provisioned out of band; creating a project does not grant
+  its creator a role, so a project can exist with no grant-holder until an administrator adds one.
 
 ### Pending
 
-- ⏳ Authentication and authorization implementation (tracked in #130)
+- ⏳ Grant-administration endpoints (create accounts, grant roles) — no API surface yet
 - ⏳ Contract tests against Node reference implementation

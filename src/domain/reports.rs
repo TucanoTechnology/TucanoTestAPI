@@ -30,6 +30,26 @@ pub struct ProjectCases {
     pub suites: Vec<SuiteCases>,
 }
 
+/// Which projects a report covers.
+///
+/// The caller resolves the scope before the walk: a trusted deployment and a
+/// system administrator both ask for [`Scope::All`], a request naming one
+/// project asks for [`Scope::Project`], and an ordinary caller gets the set of
+/// projects it can reach as [`Scope::Projects`].
+#[derive(Debug, Clone, Default, PartialEq)]
+pub enum Scope {
+    /// Every project in the tree.
+    #[default]
+    All,
+    /// Exactly the project `id`.
+    Project(String),
+    /// Exactly these projects. Unlike [`Scope::Project`] the identifiers are
+    /// taken as given, so a caller that filtered by reachability can report on
+    /// a project that has since been deleted without tripping its existence
+    /// check.
+    Projects(Vec<String>),
+}
+
 /// Builds a coverage report from the counts found under `project_id`, or under
 /// every project when no scope was asked for.
 ///
@@ -170,6 +190,22 @@ pub fn run_is_in_scope(
     }
 
     true
+}
+
+/// Whether every project a run names is one the caller can reach.
+///
+/// A run that names no project is out of reach: the caller's reachable set is
+/// only ever narrowed from below, so a run whose own scope is unstated cannot be
+/// shown to lie inside it. [`run_is_in_scope`] is the caller's own filter and
+/// this one is the authorization filter; they compose, and the more restrictive
+/// answer wins.
+pub fn run_reachable(run: &TestRun, reachable: &[String]) -> bool {
+    run.projects.as_ref().is_some_and(|projects| {
+        !projects.is_empty()
+            && projects
+                .iter()
+                .all(|project| reachable.iter().any(|id| id == &project.project_id))
+    })
 }
 
 /// Normalises a caller-supplied date filter to `YYYY-MM-DD`.
