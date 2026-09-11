@@ -762,6 +762,136 @@ async fn openapi_schemas_are_strict_only_where_the_api_rejects_unknown_fields() 
     );
 }
 
+#[tokio::test]
+async fn openapi_operations_carry_stable_ids_and_resource_tags() {
+    let (_directory, app) = test_app();
+    let (status, document) = send_json(&app, get("/openapi.json")).await;
+    assert_eq!(status, StatusCode::OK);
+
+    // The document declares the resource families once, so Swagger UI and a
+    // generated client can group by them.
+    let declared: Vec<&str> = document["tags"]
+        .as_array()
+        .expect("document tags")
+        .iter()
+        .map(|tag| tag["name"].as_str().expect("tag name"))
+        .collect();
+    assert_eq!(
+        declared,
+        vec![
+            "Service",
+            "Projects",
+            "TestSuites",
+            "TestCases",
+            "TestRuns",
+            "Milestones",
+            "Configurations",
+            "Reports",
+        ],
+        "the document declares one tag per resource family"
+    );
+
+    // Every operation carries a unique id a generated client can reference
+    // stably, and exactly one tag drawn from the declared set.
+    let mut ids = BTreeSet::new();
+    for (label, operation) in documented_operations(&document) {
+        let id = operation["operationId"]
+            .as_str()
+            .unwrap_or_else(|| panic!("{label} has no operationId"));
+        assert!(
+            id.chars().next().is_some_and(|c| c.is_ascii_alphabetic()),
+            "{label} operationId is not a client-safe identifier: {id}"
+        );
+        assert!(
+            ids.insert(id.to_owned()),
+            "{label} repeats operationId {id}"
+        );
+
+        let tags = operation["tags"]
+            .as_array()
+            .unwrap_or_else(|| panic!("{label} has no tags"));
+        assert_eq!(
+            tags.len(),
+            1,
+            "{label} must carry exactly one tag: {tags:?}"
+        );
+        let tag = tags[0].as_str().expect("tag name");
+        assert!(
+            declared.contains(&tag),
+            "{label} carries an undeclared tag: {tag}"
+        );
+    }
+    assert_eq!(ids.len(), 64, "every documented operation is named");
+}
+
+#[tokio::test]
+async fn openapi_inlines_the_duplicate_operations_and_drops_their_fragments() {
+    let (_directory, app) = test_app();
+    let (status, document) = send_json(&app, get("/openapi.json")).await;
+    assert_eq!(status, StatusCode::OK);
+
+    // The five duplicate routes are concrete path items, not `$ref`s into a
+    // components extension object a strict OpenAPI 3.0 path-item resolver may
+    // refuse to load.
+    for path in [
+        "/projects/{id}/duplicate",
+        "/test_suites/{id}/duplicate",
+        "/test_cases/{id}/duplicate",
+        "/test_runs/{id}/duplicate",
+        "/milestones/{id}/duplicate",
+    ] {
+        let item = document["paths"][path]
+            .as_object()
+            .unwrap_or_else(|| panic!("{path} is not a concrete path item"));
+        assert!(item.get("$ref").is_none(), "{path} is still a reference");
+        assert!(
+            item["post"]["operationId"].is_string(),
+            "{path} lost its operation"
+        );
+    }
+
+    // Nothing is left under `components` that only the old references used.
+    let fragments: Vec<&str> = document["components"]
+        .as_object()
+        .expect("components")
+        .keys()
+        .map(String::as_str)
+        .filter(|name| name.starts_with("x-"))
+        .collect();
+    assert_eq!(fragments, Vec::<&str>::new(), "leftover extension objects");
+}
+
+#[tokio::test]
+async fn openapi_servers_describe_the_deployment_with_variables() {
+    let (_directory, app) = test_app();
+    let (status, document) = send_json(&app, get("/openapi.json")).await;
+    assert_eq!(status, StatusCode::OK);
+
+    let servers = document["servers"].as_array().expect("servers");
+    assert_eq!(servers.len(), 1, "one deployment template");
+    let server = &servers[0];
+    let url = server["url"].as_str().expect("server url");
+    assert!(url.contains('{'), "the base path is not templated: {url}");
+
+    // Every placeholder the url uses is a declared variable with a default, so
+    // a generator that does not substitute still gets a usable base path.
+    let variables = server["variables"].as_object().expect("server variables");
+    for (name, variable) in variables {
+        assert!(
+            url.contains(&format!("{{{name}}}")),
+            "variable {name} is not used by {url}"
+        );
+        assert!(
+            variable["default"].is_string(),
+            "variable {name} declares no default"
+        );
+    }
+    assert!(
+        variables.contains_key("host") && variables.contains_key("port"),
+        "the deployment host and port are variables"
+    );
+}
+
 /// The error codes the API can put in the `{ "error": { "code": ... } }`
 /// envelope, as `openapi.json` spells them.
 const ERROR_CODES: &[&str] = &[
