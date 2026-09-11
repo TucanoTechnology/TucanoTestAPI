@@ -25,7 +25,7 @@ by the access-token expiry window, with refresh handling carrying the revocation
 - The service has **no authentication or authorization**: there are no user, role, or token types and no auth
   middleware in `src/`.
 - `openapi.json` publishes **no `securitySchemes`** and no `security` requirement; the `info.description` says
-  only that data is stored as JSON with no database.
+  only that data is stored as JSON with no database. (#130's branch adds both — see [Tracking](#tracking).)
 - The [threat model](threat-model.md) already lists "Unauthorized access" as **not yet implemented** and states
   the service must not be exposed beyond a trusted network until auth lands.
 - The architecture record already places an "authentication boundary" and "authorization" in the target
@@ -47,8 +47,8 @@ by the access-token expiry window, with refresh handling carrying the revocation
 1. No database, and no per-replica session state — consistent with `AGENTS.md` and the stateless-replica model.
 2. Principals and their per-project roles must be stored without a database; if any legacy Draft 2020-12 schema
    gains a field, that is a breaking change and needs its own versioning plan before code.
-3. The security scheme must be published in `openapi.json` and usable through Swagger UI; today the document
-   records none.
+3. The security scheme must be published in `openapi.json` and usable through Swagger UI; the document on
+   `main` records none, and #130's branch now publishes it (see [Tracking](#tracking)).
 4. The "Unauthorized access" abuse case in the [threat model](threat-model.md) must gain its auth-matrix tests.
 5. The API must **not** be exposed beyond a trusted network until this is implemented.
 
@@ -56,3 +56,19 @@ by the access-token expiry window, with refresh handling carrying the revocation
 
 Implementation is tracked in **[#130 — Auth: implement authentication](https://github.com/TucanoTechnology/TucanoTestAPI/issues/130)**,
 which carries this approach as its description, alongside the parent hardening ticket #14.
+
+Implementation lands on the `feat/p2-130-auth` branch in increments. What is already published there, and what
+still is not:
+
+- `openapi.json` declares `components.securitySchemes.bearerAuth` — an HTTP `bearer` scheme carrying a JWT
+  `bearerFormat` — and names it per operation: `security: []` on `/auth/login` and `/auth/refresh`, which have
+  no caller yet, and `[{"bearerAuth": []}]` on `/auth/logout` and `/auth/me`. The global `security` requirement
+  is still owed by the enforcement increment.
+- Four session endpoints exist: `POST /auth/login`, `POST /auth/refresh`, `POST /auth/logout`, and
+  `GET /auth/me`. Success answers `SessionResponse` (access token, refresh token, token type, and the access
+  token's lifetime in seconds) or `MeResponse` (the caller's identity plus its per-project roles). Failure
+  answers `401` with a `WWW-Authenticate: Bearer` challenge and one of the `missing_token`, `invalid_token`,
+  `token_expired`, `invalid_credentials`, or `invalid_refresh_token` codes.
+- Enforcement is **not** wired yet: no handler extracts a `Principal` or checks a role, so the endpoints report
+  who the caller is but do not yet decide what the caller may do. Until enforcement lands, requirement 5 stands
+  unchanged and the deployment must stay on a trusted network.
