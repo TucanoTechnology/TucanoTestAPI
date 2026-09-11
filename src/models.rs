@@ -139,6 +139,8 @@ pub struct TestCaseResult {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub notes: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub duration_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub attachments: Option<Vec<Attachment>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub defect_links: Option<Vec<DefectLink>>,
@@ -270,6 +272,24 @@ pub struct SuiteCoverage {
     pub suite_id: String,
     pub name: String,
     pub case_count: usize,
+}
+
+/// How the recorded results in scope split by status, with their pass rate and
+/// the wall-clock time they took.
+///
+/// `total` counts every result, so it is larger than the four named buckets
+/// whenever a result carries `Retest` or an unrecognised status: those count
+/// toward the pass rate's denominator without being a pass or a failure.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SummaryReport {
+    pub total: usize,
+    pub passed: usize,
+    pub failed: usize,
+    pub blocked: usize,
+    pub untested: usize,
+    pub pass_percentage: f64,
+    pub total_duration_ms: u64,
 }
 
 #[cfg(test)]
