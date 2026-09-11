@@ -115,6 +115,27 @@ which requires the volume to exist (`docker volume create tucano-test-data`, or 
 create it) and moves where the data physically lives. Nothing else changes: the container contract
 is the path `/data`, never the volume's name.
 
+### Enabling authentication
+
+Authentication is **off by default** (`TUCANO_AUTH_REQUIRED` defaults to `false`), so an existing
+deployment behaves exactly as before until an operator opts in. Turning it on requires a signing
+secret and, on a fresh volume, a bootstrap account:
+
+| Variable | Purpose |
+| --- | --- |
+| `TUCANO_AUTH_REQUIRED` | `true` makes every guarded route require a bearer token; leave it unset or `false` to keep the historic behaviour. |
+| `TUCANO_JWT_SECRET` | The HS256 signing secret, at least 32 bytes. Mutually exclusive with `TUCANO_JWT_SECRET_FILE`. |
+| `TUCANO_JWT_SECRET_FILE` | Path to a file holding the secret (surrounding whitespace trimmed) — the preferred form here, so the secret is not visible in `docker inspect`. |
+| `TUCANO_ACCESS_TOKEN_TTL` / `TUCANO_REFRESH_TOKEN_TTL` | Access-token and refresh-token lifetimes (defaults `15m` and `14d`). |
+| `TUCANO_BOOTSTRAP_USERNAME` / `TUCANO_BOOTSTRAP_PASSWORD` | Set **together** to create the first `systemAdmin` account when the volume holds none; skip once the account exists. |
+
+With `read_only: true` the secret file must be mounted read-only, for example
+`--mount type=bind,src=/etc/tucano/jwt-secret,dst=/run/secrets/jwt-secret,readonly` plus
+`--env TUCANO_JWT_SECRET_FILE=/run/secrets/jwt-secret`. Accounts and per-project grants are read from
+`$TUCANO_DATA_DIR/auth/`; there is no grant-administration API yet, so provision that tree out of
+band. See [docs/security/authentication-decision.md](../security/authentication-decision.md) and the
+threat model's "Known limitations" before exposing the service beyond a trusted network.
+
 ## Container hardening
 
 The Compose service and the standalone `docker run` examples in the promotion runbook both use the
@@ -212,6 +233,8 @@ makes the failure recoverable. The decision table and the snapshot command live 
 - [ ] `GET /health` answers; the Swagger UI at `/api-docs` and `openapi.json` respond if the
       deployment exposes them.
 - [ ] Multi-node deployments: shared storage with working advisory locks; no per-replica volumes.
+- [ ] Authentication decided: either the historic `TUCANO_AUTH_REQUIRED`-unset shape, or a signing
+      secret plus a provisioned `$TUCANO_DATA_DIR/auth/` tree.
 - [ ] Rollback target (`PREVIOUS` tag) recorded, and a volume snapshot taken if the release changes a
       stored document's shape, strictness or validation.
 

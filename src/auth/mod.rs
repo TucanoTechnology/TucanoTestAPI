@@ -1,0 +1,43 @@
+//! Authentication and per-project authorisation.
+//!
+//! The API keeps no database, so neither does this module: accounts, refresh
+//! tokens, and project grants live under `auth/` inside the data directory.
+//! The rest of the module is deliberately storage-free and clock-free so the
+//! rules can be exercised directly:
+//!
+//! - [`config`] resolves the environment into an [`AuthConfig`], refusing the
+//!   settings a running server must never accept (a missing or short signing
+//!   secret, an unusable lifetime).
+//! - [`password`] hashes and checks credentials with Argon2id.
+//! - [`token`] mints and verifies the short-lived HS256 access token and the
+//!   opaque refresh token, and derives the digest the store keeps at rest.
+//! - [`store`] is the one part that touches the disk: it reads and writes the
+//!   accounts, their refresh tokens, and the per-project grants.
+//! - [`session`] is the rules those parts serve: signing in, rotating a refresh
+//!   token, signing out, and deciding whether a caller may act on a project.
+//! - [`bootstrap`] gives a fresh deployment its first account, and refuses to
+//!   let a server that enforces auth start with none.
+//!
+//! Nothing outside [`store`] reaches the network or the disk, except the one
+//! secret file [`config`] may read, and nothing reads the clock on its own: the
+//! instant a token is issued or checked against is a parameter, which is what
+//! makes the expiry rules testable without sleeping.
+
+pub mod bootstrap;
+pub mod config;
+pub mod password;
+pub mod session;
+pub mod store;
+pub mod token;
+
+pub use bootstrap::{BootstrapError, ensure_bootstrap_user};
+pub use config::{
+    AuthConfig, ConfigError, DEFAULT_ACCESS_TTL, DEFAULT_REFRESH_TTL, MIN_SECRET_BYTES,
+};
+pub use password::{HashError, hash_password, verify_password};
+pub use session::{Principal, SessionTokens, authenticate, login, logout, refresh};
+pub use store::{AuthStore, Grants, Role, StoredRefreshToken, User};
+pub use token::{
+    Claims, REFRESH_TOKEN_BYTES, TokenError, hash_refresh_token, mint_access_token,
+    mint_refresh_token, random_id, verify_access_token,
+};

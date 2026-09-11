@@ -35,52 +35,78 @@ duplicate_handler!(duplicate_suite, duplicate::SUITE);
 
 async fn list_project_suites<R: Repository>(
     State(service): State<AppState<R>>,
+    principal: Principal,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, DomainError> {
+    access::require(&service, &principal, &id, Role::Viewer)?;
     let items = service.list_children(&Parent::Project(id), Resource::Suites)?;
     Ok(Json(json!(items)))
 }
 
 async fn create_project_suite<R: Repository>(
     State(service): State<AppState<R>>,
+    principal: Principal,
     Path(id): Path<String>,
     Json(body): Json<Value>,
 ) -> Result<(StatusCode, Json<Value>), DomainError> {
+    access::guard_composition(
+        &service,
+        &principal,
+        Resource::Suites,
+        &id,
+        &body,
+        Role::Editor,
+    )?;
     let composed = service.compose(Resource::Suites, &Parent::Project(id), &body)?;
     Ok(composed_response(&composed, "Test suite"))
 }
 
 async fn delete_project_suite<R: Repository>(
     State(service): State<AppState<R>>,
+    principal: Principal,
     Path((id, suite_id)): Path<(String, String)>,
 ) -> Result<Json<Value>, DomainError> {
+    access::guard_delete(&service, &principal, Resource::Suites, &suite_id)?;
     service.delete_in(Resource::Suites, &Parent::Project(id), &suite_id)?;
     Ok(Json(json!({ "message": "Test suite deleted" })))
 }
 
 async fn list_suite_cases<R: Repository>(
     State(service): State<AppState<R>>,
+    principal: Principal,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, DomainError> {
     let parent = service.suite_parent(&id)?;
+    access::require(&service, &principal, parent.project(), Role::Viewer)?;
     let items = service.list_children(&parent, Resource::Cases)?;
     Ok(Json(json!(items)))
 }
 
 async fn add_case_to_suite<R: Repository>(
     State(service): State<AppState<R>>,
+    principal: Principal,
     Path(id): Path<String>,
     Json(body): Json<Value>,
 ) -> Result<(StatusCode, Json<Value>), DomainError> {
     let parent = service.suite_parent(&id)?;
+    access::guard_composition(
+        &service,
+        &principal,
+        Resource::Cases,
+        parent.project(),
+        &body,
+        Role::Editor,
+    )?;
     let composed = service.compose(Resource::Cases, &parent, &body)?;
     Ok(composed_response(&composed, "Test case"))
 }
 
 async fn remove_case_from_suite<R: Repository>(
     State(service): State<AppState<R>>,
+    principal: Principal,
     Path((id, case_id)): Path<(String, String)>,
 ) -> Result<Json<Value>, DomainError> {
+    access::guard_removal(&service, &principal, Resource::Suites, &id, Role::Editor)?;
     service.remove_case_from_suite(&id, &case_id)?;
     Ok(Json(json!({ "message": "Test case removed from suite" })))
 }

@@ -115,13 +115,14 @@ surface is:
 | Area | Routes |
 | --- | --- |
 | Health and contract | `GET /health`, `GET /openapi.json`, `GET /api-docs` |
+| Authentication | `POST /auth/login`, `POST /auth/refresh`, `POST /auth/logout`, `GET /auth/me` |
 | Projects | `GET`/`POST /projects`, `GET`/`PUT`/`DELETE /projects/{id}`, `POST /projects/{id}/duplicate`, parent-scoped suite and case creation (`/projects/{id}/test_suites`, `/projects/{id}/test_cases`) |
 | Suites | `GET /test_suites`, `GET`/`PUT`/`DELETE /test_suites/{id}`, `POST /test_suites/{id}/duplicate`, parent-scoped case creation (`POST /test_suites/{id}/test_cases`) |
 | Cases | `GET`/`PUT`/`DELETE /test_cases/{id}`, `POST /test_cases/{id}/duplicate`, attachments (`/test_cases/{id}/attachments`), step attachments (`/test_cases/{id}/steps/{step_index}/attachments`), revision history (`GET /test_cases/{id}/history`, `GET /test_cases/{id}/history/{version}`) |
 | Runs | `GET`/`POST /test_runs`, `GET`/`PUT`/`DELETE /test_runs/{id}`, `POST /test_runs/{id}/duplicate`, suite and case inclusion (`/test_runs/{id}/test_suites`, `/test_runs/{id}/test_cases`), result recording (`POST /test_runs/{id}/results`), defect links (`/test_runs/{id}/results/{case_id}/defects`), imports (`POST /test_runs/{id}/import/junit`, `POST /test_runs/{id}/import/json`), configuration links (`/test_runs/{id}/configurations`) |
 | Milestones | `GET`/`POST /milestones`, `GET`/`PUT`/`DELETE /milestones/{id}`, `POST /milestones/{id}/duplicate`, `GET /milestones/{id}/progress` |
 | Configurations | `GET`/`POST /configurations`, `GET`/`PUT`/`DELETE /configurations/{id}` |
-| Reports | `GET /reports/coverage` |
+| Reports | `GET /reports/coverage`, `GET /reports/summary` |
 
 List endpoints share `?filter=`, `?tags=` (matched as an OR set), and — for runs, the only
 collection with configuration references — `?configuration=`.
@@ -194,17 +195,45 @@ Interactive Swagger UI is available at `http://localhost:3100/api-docs`; the raw
 at `http://localhost:3100/openapi.json`. A direct `docker run` of the image listens on `3000` unless
 you map it elsewhere.
 
-The service is unauthenticated today — it must not be exposed beyond a trusted network. The authentication
-decision (deferred implementation, project-scoped RBAC, short-lived JWT plus refresh token, no database) is
-recorded in [docs/security/authentication-decision.md](docs/security/authentication-decision.md) and tracked in
-[#130](https://github.com/TucanoTechnology/TucanoTestAPI/issues/130).
+### Authentication
+
+With `TUCANO_AUTH_REQUIRED` turned on, every operation but `GET /health`, `GET /openapi.json`,
+`GET /api-docs`, `POST /auth/login`, and `POST /auth/refresh` requires a bearer access token and is
+authorized against **project-scoped RBAC**: a role (`viewer`, `editor`, `owner`) granted per project,
+plus a `systemAdmin` account that reaches everything. A caller reaches only the projects it was
+granted; listings are filtered down to them rather than refused, and direct reads or writes of a
+project it does not reach answer `403`. Creating a project and duplicating one require the system
+administrator. `POST /milestones` and `PUT /milestones/{id}` must name a project-bearing reference,
+because a milestone is a project resource. Configurations are installation-wide and readable and
+writable by any authenticated caller.
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `TUCANO_AUTH_REQUIRED` | `false` | Require and enforce a bearer token on every guarded route. When off, every guard returns and the API is anonymous. |
+| `TUCANO_JWT_SECRET` | — | The HS256 signing secret. Required when auth is on; at least 32 bytes. |
+| `TUCANO_JWT_SECRET_FILE` | — | A file to read the secret from. Set this **or** `TUCANO_JWT_SECRET`, never both. |
+| `TUCANO_ACCESS_TOKEN_TTL` | `15m` | Access-token lifetime; accepts a duration such as `900s` or `15m`. |
+| `TUCANO_REFRESH_TOKEN_TTL` | `14d` | Refresh-token lifetime. Refresh tokens are rotated on every use. |
+| `TUCANO_BOOTSTRAP_USERNAME` | — | A `systemAdmin` account created at startup when the store holds no accounts. Set with `TUCANO_BOOTSTRAP_PASSWORD`. |
+| `TUCANO_BOOTSTRAP_PASSWORD` | — | The password for the bootstrap account, stored only as an Argon2id hash. |
+
+Accounts and grants live beside the data, under `TUCANO_DATA_DIR/auth/`; the deployment stays
+database-free. The decision of record is
+[docs/security/authentication-decision.md](docs/security/authentication-decision.md) and the
+enforcement matrix lives in `tests/auth.rs`.
+
+The run scope of a caller is the set of projects a run's `projects` array names, so a caller that may
+write a run could narrow its own later scope by editing that array. Tracked as a known weakness in
+[docs/security/threat-model.md](docs/security/threat-model.md).
 
 ### Errors and request limits
 
 Every rejection the application raises answers the stable envelope
 `{"error": {"code": "…", "message": "…"}}`. Published codes are `invalid_id`, `invalid_request`,
-`invalid_status`, `invalid_multipart`, `missing_file`, `not_found`, `conflict`, and `storage_error`.
-`openapi.json` names, per operation, the codes that operation can return.
+`invalid_status`, `invalid_multipart`, `missing_file`, `not_found`, `conflict`, `storage_error`,
+`missing_token`, `invalid_token`, `token_expired`, `invalid_credentials`, `invalid_refresh_token`,
+and `forbidden`. `openapi.json` names, per operation, the codes that operation can return. A `401`
+additionally carries a `WWW-Authenticate: Bearer realm="…"` challenge.
 
 Two answers do not use the envelope, because they come from the router or an extractor rather than from a
 handler:
@@ -354,7 +383,7 @@ Repository contribution and agent workflow rules are documented in [AGENTS.md](A
 | [docs/deployment/deployment-guide.md](docs/deployment/deployment-guide.md) | The deployment model: the JSON volume mount, Compose configuration, container hardening, scaling, and rollback to an immutable release tag |
 | [docs/deployment/canary-validation-and-rollback.md](docs/deployment/canary-validation-and-rollback.md) | Canary validation, the scratch-CRUD smoke check, and safe rollback |
 | [docs/security/threat-model.md](docs/security/threat-model.md) | Trust boundaries, abuse cases, and security invariants |
-| [docs/security/authentication-decision.md](docs/security/authentication-decision.md) | The authentication decision (deferred) and its tracking ticket |
+| [docs/security/authentication-decision.md](docs/security/authentication-decision.md) | The authentication decision and its implemented tracking ticket (#130) |
 | [docs/security/scanning-policy.md](docs/security/scanning-policy.md) | The dependency-audit, secret-scan, container-scan, and SBOM policy CI enforces |
 | [docs/roadmap.md](docs/roadmap.md) | The roadmap ordered by delivery priority, with the tracking issue for each item |
 | [AgentRules/](AgentRules/) | Organisation-wide engineering and process rules |

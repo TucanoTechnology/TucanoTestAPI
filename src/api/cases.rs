@@ -38,35 +38,50 @@ duplicate_handler!(duplicate_test_case, duplicate::CASE);
 
 async fn list_project_cases<R: Repository>(
     State(service): State<AppState<R>>,
+    principal: Principal,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, DomainError> {
+    access::require(&service, &principal, &id, Role::Viewer)?;
     let items = service.list_children(&Parent::Project(id), Resource::Cases)?;
     Ok(Json(json!(items)))
 }
 
 async fn create_project_case<R: Repository>(
     State(service): State<AppState<R>>,
+    principal: Principal,
     Path(id): Path<String>,
     Json(body): Json<Value>,
 ) -> Result<(StatusCode, Json<Value>), DomainError> {
+    access::guard_composition(
+        &service,
+        &principal,
+        Resource::Cases,
+        &id,
+        &body,
+        Role::Editor,
+    )?;
     let composed = service.compose(Resource::Cases, &Parent::Project(id), &body)?;
     Ok(composed_response(&composed, "Test case"))
 }
 
 async fn delete_project_case<R: Repository>(
     State(service): State<AppState<R>>,
+    principal: Principal,
     Path((id, case_id)): Path<(String, String)>,
 ) -> Result<Json<Value>, DomainError> {
+    access::require(&service, &principal, &id, Role::Editor)?;
     service.delete_in(Resource::Cases, &Parent::Project(id), &case_id)?;
     Ok(Json(json!({ "message": "Test case deleted" })))
 }
 
 async fn upload_attachment<R: Repository>(
     State(service): State<AppState<R>>,
+    principal: Principal,
     Path(id): Path<String>,
     mut multipart: Multipart,
 ) -> Result<(StatusCode, Json<Value>), DomainError> {
     let parent = service.require_test_case(&id)?;
+    access::require(&service, &principal, parent.project(), Role::Editor)?;
 
     let field = match multipart.next_field().await {
         Ok(Some(field)) => field,
@@ -97,27 +112,33 @@ async fn upload_attachment<R: Repository>(
 
 async fn download_attachment<R: Repository>(
     State(service): State<AppState<R>>,
+    principal: Principal,
     Path((id, filename)): Path<(String, String)>,
 ) -> Result<Response, DomainError> {
     let parent = service.require_test_case(&id)?;
+    access::require(&service, &principal, parent.project(), Role::Viewer)?;
     let contents = service.read_attachment(&parent, &id, &filename)?;
     Ok(([(header::CONTENT_TYPE, mime_type(&filename))], contents).into_response())
 }
 
 async fn delete_attachment<R: Repository>(
     State(service): State<AppState<R>>,
+    principal: Principal,
     Path((id, filename)): Path<(String, String)>,
 ) -> Result<Json<Value>, DomainError> {
     let parent = service.require_test_case(&id)?;
+    access::require(&service, &principal, parent.project(), Role::Editor)?;
     service.delete_attachment(&parent, &id, &filename)?;
     Ok(Json(json!({ "message": "File deleted successfully" })))
 }
 
 async fn list_step_attachments<R: Repository>(
     State(service): State<AppState<R>>,
+    principal: Principal,
     Path((id, step_index)): Path<(String, String)>,
 ) -> Result<Json<Value>, DomainError> {
     let parent = service.require_test_case(&id)?;
+    access::require(&service, &principal, parent.project(), Role::Viewer)?;
     let step_index = parse_step_index(&step_index)?;
     let attachments = service.list_step_attachments(&parent, &id, step_index)?;
     Ok(Json(json!(attachments)))
@@ -125,10 +146,12 @@ async fn list_step_attachments<R: Repository>(
 
 async fn upload_step_attachment<R: Repository>(
     State(service): State<AppState<R>>,
+    principal: Principal,
     Path((id, step_index)): Path<(String, String)>,
     mut multipart: Multipart,
 ) -> Result<(StatusCode, Json<Value>), DomainError> {
     let parent = service.require_test_case(&id)?;
+    access::require(&service, &principal, parent.project(), Role::Editor)?;
     let step_index = parse_step_index(&step_index)?;
 
     let field = match multipart.next_field().await {
@@ -161,9 +184,11 @@ async fn upload_step_attachment<R: Repository>(
 
 async fn delete_step_attachment<R: Repository>(
     State(service): State<AppState<R>>,
+    principal: Principal,
     Path((id, step_index, filename)): Path<(String, String, String)>,
 ) -> Result<Json<Value>, DomainError> {
     let parent = service.require_test_case(&id)?;
+    access::require(&service, &principal, parent.project(), Role::Editor)?;
     let step_index = parse_step_index(&step_index)?;
     service.delete_step_attachment(&parent, &id, step_index, &filename)?;
     Ok(Json(json!({ "message": "File deleted successfully" })))
@@ -171,18 +196,22 @@ async fn delete_step_attachment<R: Repository>(
 
 async fn list_case_history<R: Repository>(
     State(service): State<AppState<R>>,
+    principal: Principal,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, DomainError> {
     let parent = service.require_test_case(&id)?;
+    access::require(&service, &principal, parent.project(), Role::Viewer)?;
     let history = service.list_case_history(&parent, &id)?;
     Ok(Json(json!(history)))
 }
 
 async fn read_case_revision<R: Repository>(
     State(service): State<AppState<R>>,
+    principal: Principal,
     Path((id, version)): Path<(String, String)>,
 ) -> Result<Json<Value>, DomainError> {
     let parent = service.require_test_case(&id)?;
+    access::require(&service, &principal, parent.project(), Role::Viewer)?;
     let version = parse_version(&version)?;
     Ok(Json(service.read_case_revision(&parent, &id, version)?))
 }
