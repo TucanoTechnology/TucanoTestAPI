@@ -24,6 +24,10 @@ pub enum DomainError {
     Internal(String),
     /// A storage failure whose details must not reach the client.
     Storage,
+    /// The request carried no usable credential; `code` names what was wrong.
+    Unauthenticated { code: &'static str, message: String },
+    /// The credential is valid, but the caller may not perform this request.
+    Forbidden(String),
 }
 
 impl DomainError {
@@ -62,6 +66,53 @@ impl DomainError {
             message: "Imported status must be Passed, Failed, or Blocked".to_owned(),
         }
     }
+
+    /// `missing_token` — no `Authorization` header, or no bearer credential in it.
+    pub fn missing_token() -> Self {
+        Self::Unauthenticated {
+            code: "missing_token",
+            message: "Authentication required".to_owned(),
+        }
+    }
+
+    /// `invalid_token` — the access token could not be verified.
+    pub fn invalid_token() -> Self {
+        Self::Unauthenticated {
+            code: "invalid_token",
+            message: "Invalid access token".to_owned(),
+        }
+    }
+
+    /// `token_expired` — the access token was well-formed but has expired.
+    pub fn token_expired() -> Self {
+        Self::Unauthenticated {
+            code: "token_expired",
+            message: "Access token has expired".to_owned(),
+        }
+    }
+
+    /// `invalid_credentials` — the username or the password is wrong.
+    ///
+    /// The same answer for both, so the reply never says which half was right.
+    pub fn invalid_credentials() -> Self {
+        Self::Unauthenticated {
+            code: "invalid_credentials",
+            message: "Invalid username or password".to_owned(),
+        }
+    }
+
+    /// `invalid_refresh_token` — the refresh token is unknown, expired, or spent.
+    pub fn invalid_refresh_token() -> Self {
+        Self::Unauthenticated {
+            code: "invalid_refresh_token",
+            message: "Invalid refresh token".to_owned(),
+        }
+    }
+
+    /// `forbidden` — authenticated, but without the role this request needs.
+    pub fn forbidden(message: impl Into<String>) -> Self {
+        Self::Forbidden(message.into())
+    }
 }
 
 impl Display for DomainError {
@@ -73,6 +124,8 @@ impl Display for DomainError {
             Self::PayloadTooLarge => write!(formatter, "payload too large"),
             Self::Internal(message) => write!(formatter, "internal error: {message}"),
             Self::Storage => write!(formatter, "storage operation failed"),
+            Self::Unauthenticated { code, message } => write!(formatter, "{code}: {message}"),
+            Self::Forbidden(message) => write!(formatter, "forbidden: {message}"),
         }
     }
 }
