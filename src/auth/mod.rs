@@ -13,6 +13,8 @@
 //!   opaque refresh token, and derives the digest the store keeps at rest.
 //! - [`store`] is the one part that touches the disk: it reads and writes the
 //!   accounts, their refresh tokens, and the per-project grants.
+//! - [`session`] is the rules those parts serve: signing in, rotating a refresh
+//!   token, signing out, and deciding whether a caller may act on a project.
 //!
 //! Nothing outside [`store`] reaches the network or the disk, except the one
 //! secret file [`config`] may read, and nothing reads the clock on its own: the
@@ -21,6 +23,7 @@
 
 pub mod config;
 pub mod password;
+pub mod session;
 pub mod store;
 pub mod token;
 
@@ -28,6 +31,7 @@ pub use config::{
     AuthConfig, ConfigError, DEFAULT_ACCESS_TTL, DEFAULT_REFRESH_TTL, MIN_SECRET_BYTES,
 };
 pub use password::{HashError, hash_password, verify_password};
+pub use session::{Principal, SessionTokens, authenticate, login, logout, refresh};
 pub use store::{AuthStore, Grants, Role, StoredRefreshToken, User};
 pub use token::{
     Claims, REFRESH_TOKEN_BYTES, TokenError, hash_refresh_token, mint_access_token,
