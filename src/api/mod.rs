@@ -7,6 +7,7 @@
 //! [`crate::domain`]; every byte that reaches disk goes through
 //! [`crate::storage`].
 
+pub mod auth;
 mod cases;
 mod configurations;
 mod crud;
