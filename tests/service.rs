@@ -469,13 +469,38 @@ async fn openapi_documents_the_error_contract_of_every_operation() {
         }
     }
 
+    let schemas = document["components"]["schemas"]
+        .as_object()
+        .expect("schemas object");
+
     let operations = documented_operations(&document);
     assert!(operations.len() > 20, "the document lost its operations");
 
+    // Every 2xx that carries a payload declares a schema for each media type it
+    // can answer with, so a generated client is never left untyped. Only the
+    // three endpoints that serve the document itself answer with no schema.
+    const UNTYPED_2XX: [&str; 3] = ["get /health", "get /openapi.json", "get /api-docs"];
     for (label, operation) in &operations {
         let responses = operation["responses"]
             .as_object()
             .unwrap_or_else(|| panic!("{label} has no responses"));
+
+        for (status, response) in responses {
+            if !status.starts_with('2') || UNTYPED_2XX.contains(&label.as_str()) {
+                continue;
+            }
+            let response = dereference(&document, response);
+            let content = response["content"]
+                .as_object()
+                .unwrap_or_else(|| panic!("{label} {status} declares no content"));
+            assert!(!content.is_empty(), "{label} {status} has no media type");
+            for (media, body) in content {
+                assert!(
+                    body.get("schema").is_some(),
+                    "{label} {status} {media} has no schema"
+                );
+            }
+        }
 
         // Every operation that reads a body documents the router's limit.
         if operation.get("requestBody").is_some() {
@@ -525,6 +550,74 @@ async fn openapi_documents_the_error_contract_of_every_operation() {
     let content = rejected["content"].as_object().expect("400 content");
     assert!(content.contains_key("application/json"), "the envelope");
     assert!(content.contains_key("text/plain"), "the extractor's answer");
+
+    // Each write route names the schema for its body; the schema lists the
+    // fields the domain layer accepts, the fields it requires to derive the id,
+    // and rejects unknown fields the way `validate_payload` does.
+    const NO_REQUIRED: &[&str] = &[];
+    const NAME_REQUIRED: &[&str] = &["name"];
+    for (path, method, name, required) in [
+        ("/projects", "post", "ProjectCreateRequest", NAME_REQUIRED),
+        ("/projects/{id}", "put", "ProjectUpdateRequest", NO_REQUIRED),
+        (
+            "/test_suites/{id}",
+            "put",
+            "TestSuiteUpdateRequest",
+            NO_REQUIRED,
+        ),
+        ("/test_runs", "post", "TestRunCreateRequest", NAME_REQUIRED),
+        (
+            "/test_runs/{id}",
+            "put",
+            "TestRunUpdateRequest",
+            NO_REQUIRED,
+        ),
+        (
+            "/test_cases/{id}",
+            "put",
+            "TestCaseUpdateRequest",
+            NO_REQUIRED,
+        ),
+        (
+            "/milestones",
+            "post",
+            "MilestoneCreateRequest",
+            NAME_REQUIRED,
+        ),
+        (
+            "/milestones/{id}",
+            "put",
+            "MilestoneUpdateRequest",
+            NO_REQUIRED,
+        ),
+        (
+            "/configurations",
+            "post",
+            "TestConfigurationCreateRequest",
+            NAME_REQUIRED,
+        ),
+        (
+            "/configurations/{id}",
+            "put",
+            "TestConfigurationUpdateRequest",
+            NO_REQUIRED,
+        ),
+    ] {
+        let body = &document["paths"][path][method]["requestBody"]["content"]["application/json"]["schema"];
+        assert_eq!(
+            body["$ref"],
+            json!(format!("#/components/schemas/{name}")),
+            "{method} {path}"
+        );
+        let schema = &schemas[name];
+        assert!(schema["properties"].is_object(), "{name} has properties");
+        assert_eq!(schema["required"], json!(required), "{name} required");
+        assert_eq!(
+            schema["additionalProperties"],
+            json!(false),
+            "{name} rejects unknown fields"
+        );
+    }
 }
 
 #[tokio::test]
@@ -552,6 +645,16 @@ async fn openapi_schemas_are_strict_only_where_the_api_rejects_unknown_fields() 
         "TestConfiguration",
         "ImportEntry",
         "TestRun",
+        "ProjectCreateRequest",
+        "ProjectUpdateRequest",
+        "TestSuiteUpdateRequest",
+        "TestRunCreateRequest",
+        "TestRunUpdateRequest",
+        "TestCaseUpdateRequest",
+        "MilestoneCreateRequest",
+        "MilestoneUpdateRequest",
+        "TestConfigurationCreateRequest",
+        "TestConfigurationUpdateRequest",
     ] {
         assert_eq!(
             schemas[name]["additionalProperties"],
@@ -577,12 +680,43 @@ async fn openapi_schemas_are_strict_only_where_the_api_rejects_unknown_fields() 
         "TestResultRequest",
         "CaseHistoryEntry",
         "Error",
+        "CreateResponse",
+        "MessageResponse",
+        "UploadResponse",
     ] {
         assert!(
             schemas[name].get("additionalProperties").is_none(),
             "{name} ignores unknown fields"
         );
     }
+
+    // The three response components publish the wire shapes the success paths
+    // return, so a client can read the assigned id, the message, and the upload
+    // metadata without guessing.
+    assert_eq!(
+        schemas["CreateResponse"]["required"],
+        json!(["message", "id"])
+    );
+    assert_eq!(
+        schemas["CreateResponse"]["properties"]["id"]["type"],
+        json!("string")
+    );
+    assert_eq!(schemas["MessageResponse"]["required"], json!(["message"]));
+    assert_eq!(
+        schemas["UploadResponse"]["required"],
+        json!(["message", "filename", "originalName", "size"])
+    );
+    assert_eq!(
+        schemas["UploadResponse"]["properties"]["size"]["type"],
+        json!("number")
+    );
+
+    // A client can switch exhaustively on the error code; the enumerated set is
+    // exactly the codes the document's own `400` descriptions name.
+    assert_eq!(
+        schemas["Error"]["properties"]["error"]["properties"]["code"]["enum"],
+        json!(ERROR_CODES)
+    );
 
     // A case carries the attachments the upload route stores.
     assert_eq!(
@@ -636,6 +770,9 @@ const ERROR_CODES: &[&str] = &[
     "invalid_status",
     "invalid_multipart",
     "missing_file",
+    "not_found",
+    "conflict",
+    "storage_error",
 ];
 
 /// Every `$ref` the document contains, wherever it sits.

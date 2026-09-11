@@ -919,6 +919,107 @@ Issue: [#106](https://github.com/TucanoTechnology/TucanoTestAPI/issues/106) — 
   (`::minted_ids_differ_and_are_sixteen_hex_characters`, `::current_is_absent_outside_a_request`), and with
   `src/api/error.rs::the_envelope_carries_a_code_and_a_message` holding the out-of-band shape unchanged.
 
+## OpenAPI Typing Plan (Issue #140)
+
+Issue: [#140](https://github.com/TucanoTechnology/TucanoTestAPI/issues/140) — the document published the ten
+operations that accept a JSON body with a bare `{"type": "object"}` request schema, published 31 of the `2xx`
+answers as a description with no body at all, and left `Error.code` an unconstrained string, so a generated
+client could not tell what a write accepts from the document alone. This plan types all three. It is
+documentation-only: no status code, response body, validation rule or stored document changed, and the
+behaviour the document now describes was already pinned by the tests cited below.
+
+### Write request bodies (G3)
+
+The ten operations that read a JSON body now `$ref` a named schema instead of the open object:
+
+- `POST /projects` → `ProjectCreateRequest`; `PUT /projects/{id}` → `ProjectUpdateRequest`.
+- `PUT /test_suites/{id}` → `TestSuiteUpdateRequest`.
+- `POST /test_runs` → `TestRunCreateRequest`; `PUT /test_runs/{id}` → `TestRunUpdateRequest`.
+- `PUT /test_cases/{id}` → `TestCaseUpdateRequest`.
+- `POST /milestones` → `MilestoneCreateRequest`; `PUT /milestones/{id}` → `MilestoneUpdateRequest`.
+- `POST /configurations` → `TestConfigurationCreateRequest`; `PUT /configurations/{id}` →
+  `TestConfigurationUpdateRequest`.
+
+There is deliberately **no** `TestCaseCreateRequest` and no `TestSuiteCreateRequest`. Suites and cases are never
+created by a flat route: they are created or placed through the composition routes
+(`POST /projects/{id}/test_suites`, `POST /projects/{id}/test_cases`, `POST /test_suites/{id}/test_cases`), whose
+body is the create/place union `CompositionRequest` (Issue #66). A test case's identity is its `testCaseId`, so
+there is no partial "create a case from a name" arm to type.
+
+Each create schema requires exactly the field its identifier is derived from — `name` for projects, runs,
+milestones and configurations — which is what the create route already enforces. The update schemas require
+nothing, because a `PUT` is the partial merge Issue #80 records, and an empty object is a valid partial payload.
+All ten carry `additionalProperties: false`, because `validate_payload` rejects a body naming a field the
+resource does not define (Issue #71) and type-checks every field it does (Issue #121); the document now
+advertises that rejection instead of an open object.
+
+The write schemas are the read model's properties, so a field keeps the description the read schema publishes
+unless the write route behaves differently. Four descriptions are overridden to say what the write does:
+
+- `projectId`, `testRunId` and `configId` are **derived from `name`** as `<name>.json` when the body omits them,
+  and `milestoneId` defaults to `name` — the identity normalisation Issue #78 records.
+- `testRunId` and `timestamp` on `TestRunCreateRequest` record that a run written from a name alone still gets a
+  `timestamp`: the API stamps the current Unix-seconds string when the body omits one, and a supplied value is
+  stored verbatim.
+- `testSuites` on the project schemas and `testCases` on the suite schema are **accepted for wire compatibility
+  and discarded**: membership lives in the folder tree, not in the parent document (Issue #65).
+- `TestCaseUpdateRequest` needs no override — the read descriptions already say that a client-supplied `version`
+  or `lastModified` is ignored (Issues #90 and #92) — and the request arms that mint those fields are not the
+  body's.
+
+`ProjectCreateRequest` and `ProjectUpdateRequest` therefore drop the response-only `testCases` field, because no
+write stores it (Issue #65).
+
+### Success responses (G4)
+
+The shared response components `CreateResponse` (`{message, id}`, both required), `MessageResponse`
+(`{message}`, required) and `UploadResponse` (`{message, filename, originalName, size}`, all required) are added,
+and every `2xx` answer that had no body now `$ref`s the one that matches:
+
+- **`CreateResponse`** — the four path-keyed creates (`POST /projects`, `POST /test_runs`, `POST /milestones`,
+  `POST /configurations`) and the five shared `x-duplicate*` fragments the duplicate routes are documented with.
+- **`MessageResponse`** — the 22 update, delete, composition, record, configuration-link and attachment-delete
+  answers enumerated in `tests/service.rs`.
+- **`UploadResponse`** — the two attachment uploads.
+
+Four responses that already carried these shapes inline now `$ref` the shared components, so the shape is
+written once: the defect-link `201` (→ `CreateResponse`, which drops its redundant inline
+`additionalProperties: false`), the defect-unlink `200` (→ `MessageResponse`), and both attachment-upload `201`s
+(→ `UploadResponse`). The defect *listing* stays inline: it answers `{"defects": [...]}` and is not one of the
+three shapes.
+
+**The count is 31 = 26 path-keyed operations + 5 shared `x-duplicate*` fragments.** The five duplicate operations
+are documented as `$ref`s to the `components` fragments rather than as inline path items, so a fragment is what a
+caller resolves and what had to be typed; the earlier figure of 26 counted only the path-keyed operations and
+omitted the duplicate routes. Three `2xx` answers deliberately keep no JSON body: `GET /health`,
+`GET /openapi.json` and `GET /api-docs`, which are not JSON operations. The `200` on
+`GET /test_cases/{id}/attachments/{filename}` was already typed — `application/octet-stream`, a binary body — so
+it is not one of the 31.
+
+`tests/service.rs` holds the invariant generically: every `2xx` response outside those three routes declares a
+non-empty `content` and a `schema` on every media type it publishes, so a future operation that forgets its body
+fails the suite.
+
+### Error codes (G8)
+
+`Error.error.properties.code` now enumerates the eight codes the service publishes — `invalid_id`,
+`invalid_request`, `invalid_status`, `invalid_multipart`, `missing_file`, `not_found`, `conflict`,
+`storage_error` — each of them already recorded as its own response component under Issue #76. `Error` itself
+stays free of `additionalProperties`, because the envelope is not a body a caller submits and
+`tests/service.rs::openapi_schemas_are_strict_only_where_the_api_rejects_unknown_fields` holds it to the
+permissive set.
+
+### Deviation recorded
+
+Documentation-only, held by tests that fail against the untyped document: the generic `2xx`-content invariant and
+the ten write-body `$ref` assertions in
+`tests/service.rs::openapi_documents_the_error_contract_of_every_operation` (the bare bodies and the missing
+content are exactly what it now rejects), the response-component shapes and the `code` enum in
+`tests/service.rs`, and
+`tests/tags.rs::the_tags_parameter_is_published_only_where_a_tag_can_be_stored`, whose schema discovery now also
+finds the write bodies that legitimately accept a `tags` array (`ProjectCreateRequest`, `ProjectUpdateRequest`,
+`TestCaseUpdateRequest`, `TestRunCreateRequest`, `TestRunUpdateRequest`, `TestSuiteUpdateRequest`).
+
 ## Breaking change accounting
 
 - **Request id propagated, echoed and published in the error envelope** (Issue #106, plan above). `X-Request-Id`
@@ -1071,6 +1172,16 @@ Issue: [#106](https://github.com/TucanoTechnology/TucanoTestAPI/issues/106) — 
   versioned simply carries one more key. The loosening mirrors #90 — a run payload supplying `caseVersions` used
   to be refused as an unknown field and is now accepted, so no request that used to succeed is refused.
   Deviation recorded with tests in `tests/runs.rs` and `src/models.rs` as listed in the plan.
+- **Write bodies, success responses and error codes typed in `openapi.json`** (Issue #140, plan above).
+  Documentation-only: the ten JSON write operations now `$ref` named request schemas with
+  `additionalProperties: false`, the 31 body-less `2xx` answers (26 path-keyed operations plus the five shared
+  `x-duplicate*` fragments) now `$ref` `CreateResponse` / `MessageResponse` / `UploadResponse`, and
+  `Error.error.properties.code` enumerates the eight published codes. No status code, response body, validation
+  rule or stored document changed; the write schemas narrow an open object to the rejection the service already
+  performs (Issues #71 and #121) and to the required fields the create routes already enforce. A consumer that
+  generated a client from the old document may see narrower request types it previously treated as free-form,
+  and the error envelope's `code` may now be modeled as an enum; no previously published success response
+  changed. Deviation recorded with tests in `tests/service.rs` and `tests/tags.rs` as listed in the plan.
 
 ## Required case matrix
 
