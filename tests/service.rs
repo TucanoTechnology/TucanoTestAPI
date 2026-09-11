@@ -3,8 +3,8 @@ mod common;
 use axum::body::Body;
 use axum::http::{Request, StatusCode, header};
 use common::{
-    app_at, assert_error_envelope, content_type, get, json_request, raw_json_request, send,
-    send_full, send_json, test_app,
+    ROLE_CHECKED_WRITE_OPERATIONS, app_at, assert_error_envelope, content_type, get, json_request,
+    raw_json_request, send, send_full, send_json, test_app,
 };
 use serde_json::{Value, json};
 use std::collections::BTreeSet;
@@ -686,6 +686,21 @@ async fn openapi_declares_the_security_posture_of_every_operation() {
         }
     }
 
+    // The reverse direction: every route the shared surface lists as
+    // role-checked must document the 403 its guard can answer. A route that
+    // gains a guard without a matching change to the document fails here, which
+    // is the failure the three create routes used to slip through.
+    for label in ROLE_CHECKED_WRITE_OPERATIONS {
+        let (_, operation) = operations
+            .iter()
+            .find(|(name, _)| name == label)
+            .unwrap_or_else(|| panic!("{label} is role-checked but not documented"));
+        assert!(
+            operation["responses"].get("403").is_some(),
+            "{label} is role-checked but documents no 403"
+        );
+    }
+
     // The role-checked surface, frozen so a route that silently loses its check
     // fails here rather than in review.
     let refuses = operations
@@ -693,7 +708,7 @@ async fn openapi_declares_the_security_posture_of_every_operation() {
         .filter(|(_, operation)| operation["responses"].get("403").is_some())
         .count();
     assert_eq!(
-        refuses, 50,
+        refuses, 53,
         "the 403 surface changed; update this count with it"
     );
 }
