@@ -1,6 +1,9 @@
-# Tucano Test Rust
+# Tucano Test API
 
-Rust architecture evaluation for TucanoTCM. The project preserves the file-based JSON storage model and keeps future GUI clients behind the documented HTTP API.
+The Tucano Test API is the file-based test case management service for TucanoTCM: a Rust service
+built on Axum that stores projects, suites, cases, runs, milestones, and configurations as JSON
+documents on disk — no database — and exposes every operation through the documented HTTP contract
+in [openapi.json](openapi.json).
 
 ## Storage concept
 
@@ -19,11 +22,15 @@ TUCANO_DATA_DIR/
 │       ├── project.json                 project details
 │       ├── <test case>/                 case data directly in the project
 │       │   ├── test-case.json           case details, steps, expected results
+│       │   ├── revisions/v<n>.json      snapshots written by a qualifying update
+│       │   ├── steps/<n>/               attachments of one structured step
 │       │   └── <attachments>
 │       └── <test suite>/
 │           ├── suite.json               suite details
 │           └── <test case>/
 │               ├── test-case.json
+│               ├── revisions/v<n>.json
+│               ├── steps/<n>/
 │               └── <attachments>
 ├── test_runs/<id>.json                  point-in-time runs and their results
 ├── milestones/<id>.json                 milestone details
@@ -65,11 +72,13 @@ Three properties follow from the concept and are binding on any implementation:
    multiple test runs with different results, and later edits to a case or suite never rewrite what
    a finished run recorded.
 3. **Supplementary files live with their entity.** Attachments are stored inside their test case
-   folder; run results are stored inside their test run folder (or as files under it).
+   folder; run results are recorded inside the run's own document under `test_runs/` — a run is one
+   flat `<id>.json` file, not a folder.
 
 Milestones and test runs must never go silently stale when the source cases or suites they refer to
 change: they either carry their own snapshot at inclusion time or record the history of the runs
-they were included in with that run's results.
+they were included in with that run's results. A run records, per case, the case revision it
+captured, so reading a finished run back never shows a version its source case no longer has.
 
 Three API semantics follow from this concept and apply to every composition request:
 
@@ -95,6 +104,27 @@ Three API semantics follow from this concept and apply to every composition requ
   duplicates; they de-duplicate.
 
 This concept is enforced for agent work in [AGENTS.md](AGENTS.md).
+
+## HTTP API
+
+`openapi.json` is the authoritative contract: it is served at `/openapi.json` and rendered by the
+Swagger UI at `/api-docs`. `tests/service.rs` checks it from both sides — that the document matches
+the routes the router registers, and that the router serves every route the document names. The
+surface is:
+
+| Area | Routes |
+| --- | --- |
+| Health and contract | `GET /health`, `GET /openapi.json`, `GET /api-docs` |
+| Projects | `GET`/`POST /projects`, `GET`/`PUT`/`DELETE /projects/{id}`, `POST /projects/{id}/duplicate`, parent-scoped suite and case creation (`/projects/{id}/test_suites`, `/projects/{id}/test_cases`) |
+| Suites | `GET /test_suites`, `GET`/`PUT`/`DELETE /test_suites/{id}`, `POST /test_suites/{id}/duplicate`, parent-scoped case creation (`POST /test_suites/{id}/test_cases`) |
+| Cases | `GET`/`PUT`/`DELETE /test_cases/{id}`, `POST /test_cases/{id}/duplicate`, attachments (`/test_cases/{id}/attachments`), step attachments (`/test_cases/{id}/steps/{step_index}/attachments`), revision history (`GET /test_cases/{id}/history`, `GET /test_cases/{id}/history/{version}`) |
+| Runs | `GET`/`POST /test_runs`, `GET`/`PUT`/`DELETE /test_runs/{id}`, `POST /test_runs/{id}/duplicate`, suite and case inclusion (`/test_runs/{id}/test_suites`, `/test_runs/{id}/test_cases`), result recording (`POST /test_runs/{id}/results`), defect links (`/test_runs/{id}/results/{case_id}/defects`), imports (`POST /test_runs/{id}/import/junit`, `POST /test_runs/{id}/import/json`), configuration links (`/test_runs/{id}/configurations`) |
+| Milestones | `GET`/`POST /milestones`, `GET`/`PUT`/`DELETE /milestones/{id}`, `POST /milestones/{id}/duplicate`, `GET /milestones/{id}/progress` |
+| Configurations | `GET`/`POST /configurations`, `GET`/`PUT`/`DELETE /configurations/{id}` |
+| Reports | `GET /reports/coverage` |
+
+List endpoints share `?filter=`, `?tags=` (matched as an OR set), and — for runs, the only
+collection with configuration references — `?configuration=`.
 
 ## Prerequisites
 
@@ -136,15 +166,33 @@ The GitHub Actions extension may report `Context access might be invalid: GITHUB
 
 ## Application container
 
-Build and run the production API with Docker Compose:
+Build and run the Compose stack:
 
 ```sh
 docker compose up -d --build
 ```
 
-The API listens on port `3000`, runs as an unprivileged user, and stores inspectable JSON and attachments in the persistent `tucano-test-data` volume mounted at `/data`. The storage location is configurable through `TUCANO_DATA_DIR`. Keep test data and secrets out of version control; only `data/.gitkeep` is tracked.
+`docker-compose.yml` defines two services: `api`, built from this repository's `Dockerfile`, and
+`gui`, built from a sibling `../Tucano-Test-GUI` checkout that must be present for the default
+command. Start the API alone with `docker compose up -d --build api`.
 
-Interactive Swagger UI is available at `http://localhost:3000/api-docs`; the raw OpenAPI document is at `http://localhost:3000/openapi.json`.
+| Service | Host port | Container port | Image |
+| --- | --- | --- | --- |
+| `api` | `3100` | `3000` | `tucano-test-api:local` |
+| `gui` | `8080` | `8080` | `tucano-test-gui:local` |
+
+The API runs as an unprivileged user (`uid 10001`) with a read-only root filesystem, a `/tmp` tmpfs,
+and `no-new-privileges`; only `/data` and `/tmp` are writable. It stores inspectable JSON and
+attachments in the data directory that Compose bind-mounts from the host `./data` folder at `/data`
+(Docker creates the folder on first run), and the image also declares `/data` as a `VOLUME`. The
+storage location is configurable through `TUCANO_DATA_DIR`. Keep test data and secrets out of version
+control — the `.gitignore` excludes `/data/*`, so test data is never committed. A deployment that
+prefers a managed named volume can mount `tucano-test-data:/data` instead; the container contract is
+the path `/data`, never the volume name, as described in the deployment guide.
+
+Interactive Swagger UI is available at `http://localhost:3100/api-docs`; the raw OpenAPI document is
+at `http://localhost:3100/openapi.json`. A direct `docker run` of the image listens on `3000` unless
+you map it elsewhere.
 
 The service is unauthenticated today — it must not be exposed beyond a trusted network. The authentication
 decision (deferred implementation, project-scoped RBAC, short-lived JWT plus refresh token, no database) is
@@ -181,6 +229,7 @@ The full deployment model — the JSON volume mount that is the only state, the 
 
 ```sh
 scripts/smoke.sh                       # defaults to http://localhost:3000
+scripts/smoke.sh http://localhost:3100 # the Compose api service
 scripts/smoke.sh http://localhost:3101 # any replica, for example a canary
 ```
 
@@ -196,7 +245,10 @@ Node.js 18+ (uses native `fetch` and ES modules).
 
 ### Clearing Data
 
-Wipes all test cases, test suites, projects, test runs, and milestones from the API:
+Wipes all milestones, test runs, test suites, projects, and test cases (with their attachments) from
+the API. With no argument the script probes `http://localhost:3100`, then `http://localhost:8080/api`,
+then `http://localhost:3000`, and uses the first base URL that answers `/health`, so a Compose stack
+is found without arguments. Configurations are not removed.
 
 ```sh
 # From repository root:
@@ -208,7 +260,7 @@ node scripts/clear-data.mjs
 node clear-data.mjs
 
 # Provide a custom API base URL if needed:
-node scripts/clear-data.mjs http://localhost:3000
+node scripts/clear-data.mjs http://localhost:3100
 ```
 
 ## Release numbering
@@ -223,9 +275,9 @@ beneath it, and nothing below the HTTP layer knows about Axum:
 | Path | Role |
 | --- | --- |
 | `src/models.rs` | The stored documents (projects, suites, cases, runs, milestones, configurations) in their legacy JSON shapes |
-| `src/storage/` | The only code that touches the filesystem: the `Repository` trait, its `FileRepository` implementation, the path layout, and path confinement |
-| `src/domain/` | The business rules — validation, composition, duplication, milestone progress — behind `TestService<R: Repository>` |
-| `src/api/` | The HTTP layer: one module per resource, plus `crud.rs` (the shared handler macros) and `error.rs` (the error envelope) |
+| `src/storage/` | The only code that touches the filesystem: the `Repository` trait, its `FileRepository` implementation (`fs.rs`), and the path layout and confinement rules (`layout.rs`) |
+| `src/domain/` | The business rules behind `TestService<R: Repository>`: validation, identifier derivation and required fields, composition, duplication, milestone progress, result import, defect links, coverage aggregation, and error translation |
+| `src/api/` | The HTTP layer: one module per resource (`projects`, `suites`, `cases`, `runs`, `milestones`, `configurations`), plus `reports.rs` for the coverage endpoint, `crud.rs` (the shared handler macros) and `error.rs` (the error envelope) |
 | `src/repository.rs` | Compatibility re-export of the storage types so existing imports keep resolving |
 
 `src/api.rs` no longer exists as a monolith: the HTTP surface lives in `src/api/`. The domain layer
@@ -303,4 +355,6 @@ Repository contribution and agent workflow rules are documented in [AGENTS.md](A
 | [docs/deployment/canary-validation-and-rollback.md](docs/deployment/canary-validation-and-rollback.md) | Canary validation, the scratch-CRUD smoke check, and safe rollback |
 | [docs/security/threat-model.md](docs/security/threat-model.md) | Trust boundaries, abuse cases, and security invariants |
 | [docs/security/authentication-decision.md](docs/security/authentication-decision.md) | The authentication decision (deferred) and its tracking ticket |
+| [docs/security/scanning-policy.md](docs/security/scanning-policy.md) | The dependency-audit, secret-scan, container-scan, and SBOM policy CI enforces |
+| [docs/roadmap.md](docs/roadmap.md) | The roadmap ordered by delivery priority, with the tracking issue for each item |
 | [AgentRules/](AgentRules/) | Organisation-wide engineering and process rules |
