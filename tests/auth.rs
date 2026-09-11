@@ -14,6 +14,8 @@
 //! tests below them drive the session endpoints and assert the contract a
 //! client sees, which no assertion on the files at rest can cover.
 
+mod common;
+
 use axum::Router;
 use axum::body::Body;
 use axum::http::{HeaderMap, Request, StatusCode, header};
@@ -26,6 +28,8 @@ use tucano_test::auth::{
     AuthConfig, AuthStore, Role, User, hash_password, hash_refresh_token, login, refresh,
 };
 use tucano_test::{api, repository::FileRepository};
+
+use common::{ROLE_CHECKED_WRITE_OPERATIONS, role_checked_write};
 
 const SECRET: &[u8] = b"an-integration-test-secret-of-32-plus!";
 const PASSWORD: &str = "correct horse battery staple";
@@ -949,121 +953,22 @@ async fn a_viewer_reads_the_projects_it_reaches_and_cannot_write() {
     let me = call_ok(&app, Some(token), "GET", "/auth/me", None).await;
     assert_eq!(me["roles"][project.as_str()], json!("viewer"));
 
-    let writes: Vec<(&str, String, Option<Value>)> = vec![
-        (
-            "POST",
-            "/projects".to_owned(),
-            Some(json!({ "name": "beta" })),
-        ),
-        ("PUT", format!("/projects/{project}"), Some(json!({}))),
-        ("DELETE", format!("/projects/{project}"), None),
-        (
-            "POST",
-            format!("/projects/{project}/duplicate"),
-            Some(json!({})),
-        ),
-        ("PUT", format!("/test_suites/{suite}"), Some(json!({}))),
-        ("DELETE", format!("/test_suites/{suite}"), None),
-        (
-            "POST",
-            format!("/test_suites/{suite}/duplicate"),
-            Some(json!({})),
-        ),
-        (
-            "POST",
-            format!("/projects/{project}/test_suites"),
-            Some(json!({ "name": "extra" })),
-        ),
-        (
-            "POST",
-            format!("/test_suites/{suite}/test_cases"),
-            Some(case_body("TC-X")),
-        ),
-        (
-            "DELETE",
-            format!("/test_suites/{suite}/test_cases/{case}"),
-            None,
-        ),
-        (
-            "DELETE",
-            format!("/projects/{project}/test_suites/{suite}"),
-            None,
-        ),
-        ("PUT", format!("/test_cases/{case}"), Some(json!({}))),
-        ("DELETE", format!("/test_cases/{case}"), None),
-        (
-            "POST",
-            format!("/test_cases/{case}/duplicate"),
-            Some(json!({})),
-        ),
-        (
-            "POST",
-            format!("/projects/{project}/test_cases"),
-            Some(case_body("TC-Y")),
-        ),
-        (
-            "DELETE",
-            format!("/projects/{project}/test_cases/{case}"),
-            None,
-        ),
-        (
-            "POST",
-            "/test_runs".to_owned(),
-            Some(run_body("extra", project)),
-        ),
-        ("PUT", format!("/test_runs/{run}"), Some(json!({}))),
-        ("DELETE", format!("/test_runs/{run}"), None),
-        (
-            "POST",
-            format!("/test_runs/{run}/duplicate"),
-            Some(json!({})),
-        ),
-        (
-            "POST",
-            format!("/test_runs/{run}/test_suites"),
-            Some(json!({ "suiteId": suite })),
-        ),
-        (
-            "POST",
-            format!("/test_runs/{run}/test_cases"),
-            Some(json!({ "testCaseId": case })),
-        ),
-        ("POST", format!("/test_runs/{run}/results"), Some(json!({}))),
-        (
-            "POST",
-            format!("/test_runs/{run}/results/{case}/defects"),
-            Some(json!({})),
-        ),
-        (
-            "DELETE",
-            format!("/test_runs/{run}/results/{case}/defects/link-1"),
-            None,
-        ),
-        ("POST", format!("/test_runs/{run}/import/junit"), None),
-        ("POST", format!("/test_runs/{run}/import/json"), None),
-        (
-            "POST",
-            format!("/test_runs/{run}/configurations"),
-            Some(json!({})),
-        ),
-        (
-            "DELETE",
-            format!("/test_runs/{run}/configurations/config-1"),
-            None,
-        ),
-        ("PUT", format!("/milestones/{milestone}"), Some(json!({}))),
-        ("DELETE", format!("/milestones/{milestone}"), None),
-        (
-            "POST",
-            format!("/milestones/{milestone}/duplicate"),
-            Some(json!({})),
-        ),
-        (
-            "POST",
-            "/milestones".to_owned(),
-            Some(json!({ "name": "linked", "testRunIds": [run] })),
-        ),
-    ];
+    // The matrix is derived from the shared surface, so the routes this test
+    // proves answer `403` and the routes `service` proves document one can
+    // never drift apart.
+    let writes: Vec<(&str, String, Option<Value>)> = ROLE_CHECKED_WRITE_OPERATIONS
+        .iter()
+        .map(|label| {
+            role_checked_write(
+                label,
+                project.as_str(),
+                suite.as_str(),
+                case.as_str(),
+                run.as_str(),
+                milestone.as_str(),
+            )
+        })
+        .collect();
     assert_eq!(
         writes.len(),
         33,
