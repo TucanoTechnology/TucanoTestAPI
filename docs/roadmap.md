@@ -16,6 +16,7 @@ feature.
 3. [API #45](https://github.com/TucanoTechnology/TucanoTestAPI/issues/45) - Step-level uploads, paired with GUI #19
 4. [API #46](https://github.com/TucanoTechnology/TucanoTestAPI/issues/46) - Tags across projects, suites, cases, and runs, paired with GUI #20
 5. [API #47](https://github.com/TucanoTechnology/TucanoTestAPI/issues/47) - Duplication across projects, suites, cases, and runs, paired with GUI #21
+6. [API #130](https://github.com/TucanoTechnology/TucanoTestAPI/issues/130) - Authentication and authorization (project-scoped RBAC, short-lived JWT + refresh token)
 
 ## P2: Execution depth and integrations
 
