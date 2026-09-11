@@ -1020,6 +1020,94 @@ content are exactly what it now rejects), the response-component shapes and the 
 finds the write bodies that legitimately accept a `tags` array (`ProjectCreateRequest`, `ProjectUpdateRequest`,
 `TestCaseUpdateRequest`, `TestRunCreateRequest`, `TestRunUpdateRequest`, `TestSuiteUpdateRequest`).
 
+## Operation Metadata Plan (Issue #145)
+
+Issue: [#145](https://github.com/TucanoTechnology/TucanoTestAPI/issues/145) — the document named no operation
+(`operationId`) and grouped nothing by resource, so a generated client fell back to anonymous, path-derived
+method names (`postProjectsIdDuplicate`) and could not tell which call belonged to which resource. It also
+documented the five `POST … /duplicate` routes as `$ref`s to `components` fragments, which OpenAPI 3.0.3 has no
+`components.pathItems` section to resolve, and it published a single unspecified server. This plan adds a stable
+`operationId` and exactly one resource tag to every operation, inlines the duplicate path items, and replaces the
+server with a templated one. It is documentation-only: no status code, response body, validation rule, route or
+stored document changed. It is additive in the sense the client contract cares about — every route and every
+schema is the same — and is the last piece the generated-client work in
+[the GUI client boundary](../architecture/gui-client-boundary.md) needs to name its methods and group them.
+
+### Stable operation ids (G1)
+
+Every operation now carries an `operationId` derived from the route it documents, not from the path string.
+The rule is `<verb><Resource>` in lower camel case: the verb is the HTTP method (`get`, `list`, `create`,
+`update`, `delete`, `duplicate`, `add`, `remove`, `record`, `upload`, `download`, `import`, `link`, `unlink`), and
+the resource is the noun the route acts on, pluralised for a collection (`listProjects`, `getProject`,
+`createProject`, `duplicateProject`). Sub-resource routes keep the parent in the name so the grouping is legible
+without the path: `listProjectTestSuites`, `addProjectTestCase`, `removeProjectTestSuite`,
+`removeTestRunConfiguration`, `getMilestoneProgress`, `getCoverageReport`. The ids are unique across the
+document and every one is a client-safe identifier — they begin with an ASCII letter, which is what most
+generators require to derive a method name.
+
+There are 64 operations, named as follows:
+
+- **Service** — `getHealth`, `getOpenApiDocument`, `getApiDocs`.
+- **Projects** — `listProjects`, `createProject`, `getProject`, `updateProject`, `deleteProject`,
+  `duplicateProject`, `listProjectTestSuites`, `addProjectTestSuite`, `removeProjectTestSuite`,
+  `listProjectTestCases`, `addProjectTestCase`, `removeProjectTestCase`.
+- **TestSuites** — `getTestSuite`, `updateTestSuite`, `deleteTestSuite`, `duplicateTestSuite`,
+  `listTestSuiteCases`, `addTestSuiteCase`, `removeTestSuiteCase`.
+- **TestCases** — `getTestCase`, `updateTestCase`, `deleteTestCase`, `duplicateTestCase`,
+  `uploadTestCaseAttachment`, `downloadTestCaseAttachment`, `deleteTestCaseAttachment`, `listStepAttachments`,
+  `uploadStepAttachment`, `deleteStepAttachment`, `listTestCaseHistory`, `getTestCaseVersion`.
+- **TestRuns** — `listTestRuns`, `createTestRun`, `getTestRun`, `updateTestRun`, `deleteTestRun`,
+  `duplicateTestRun`, `addTestRunTestSuite`, `addTestRunTestCase`, `recordTestRunResult`, `listResultDefects`,
+  `linkResultDefect`, `unlinkResultDefect`, `importJUnitResults`, `importJsonResults`, `addTestRunConfiguration`,
+  `removeTestRunConfiguration`.
+- **Milestones** — `listMilestones`, `createMilestone`, `getMilestone`, `updateMilestone`, `deleteMilestone`,
+  `duplicateMilestone`, `getMilestoneProgress`.
+- **Configurations** — `listConfigurations`, `createConfiguration`, `getConfiguration`, `updateConfiguration`,
+  `deleteConfiguration`.
+- **Reports** — `getCoverageReport`, `getSummaryReport`.
+
+### Resource-family tags (G2)
+
+The document declares eight top-level tags in the order above, one per resource family, and every operation
+carries exactly one of them. A route is tagged by the resource it lives under, so the composition routes are
+tagged by their parent — `POST /projects/{id}/test_suites` is `Projects`, not `TestSuites` — which is the same
+rule the `operationId` prefix follows. The `Service` tag holds the three non-resource routes (`GET /health`,
+`GET /openapi.json`, `GET /api-docs`).
+
+### Duplicate operations inlined (G5)
+
+The five `POST … /duplicate` routes were documented as `{"$ref": "#/components/x-duplicate*"}`, a `$ref` that
+resolves to a *path item*. OpenAPI 3.0.3 has no `components.pathItems` section, so the reference was not
+portable; a tool that only implements 3.0 either ignored it or refused the document. The same fragments were
+reached by the `x-duplicate*` components, which the enumeration in `tests/service.rs` counted a second time,
+inflating the operation count. Both are fixed by inlining each fragment into its path item and deleting the
+five `x-duplicate*` components. The document now has 42 path keys — 37 concrete routes plus the five duplicates,
+which are still five distinct path keys because a duplicate answers its own path — and no `x-` key anywhere under
+`components`. Every one of the 428 `$ref`s in the document resolves.
+
+### Deployment servers (G6)
+
+The single server becomes a templated `{"url": "{scheme}://{host}:{port}"}` with three variables: `scheme`
+(default `http`, enumerated `http` / `https`), `host` (default `localhost`) and `port` (default `3000`). The
+defaults resolve to `http://localhost:3000`, the same origin the old server published, so a client generated
+without overriding the variables reaches the same place; a deployment behind a TLS terminator sets `scheme` to
+`https` and a client pointed at another environment overrides `host` and `port`. Each variable carries the
+`description` a caller needs to make that choice.
+
+### Deviation recorded
+
+Documentation-only, held by three new tests that fail against the untagged document.
+`tests/service.rs::openapi_operations_carry_stable_ids_and_resource_tags` asserts the eight declared tags, that
+every operation carries exactly one declared tag, that every `operationId` is unique and client-safe, and pins
+the count at 64. `tests/service.rs::openapi_inlines_the_duplicate_operations_and_drops_their_fragments` asserts
+each duplicate path item is concrete (no `$ref`, a named `post` operation) and that no `x-` component remains.
+`tests/service.rs::openapi_servers_describe_the_deployment_with_variables` asserts the single templated server
+uses each declared variable and gives it a string default, including `host` and `port`. The pre-existing
+`::openapi_document_matches_the_registered_routes`,
+`::openapi_documents_the_error_contract_of_every_operation` and
+`::openapi_schemas_are_strict_only_where_the_api_rejects_unknown_fields` stay green, and every `$ref` still
+resolves, so no schema or route changed.
+
 ## Breaking change accounting
 
 - **Request id propagated, echoed and published in the error envelope** (Issue #106, plan above). `X-Request-Id`
@@ -1182,6 +1270,16 @@ finds the write bodies that legitimately accept a `tags` array (`ProjectCreateRe
   generated a client from the old document may see narrower request types it previously treated as free-form,
   and the error envelope's `code` may now be modeled as an enum; no previously published success response
   changed. Deviation recorded with tests in `tests/service.rs` and `tests/tags.rs` as listed in the plan.
+- **Operation metadata added to `openapi.json`** (Issue #145, plan above). Documentation-only: all 64 operations
+  gain a stable `operationId` and exactly one resource-family tag from the eight now declared; the five
+  `POST … /duplicate` path items are inlined instead of `$ref`-ing `components` fragments, and the five
+  `x-duplicate*` components are removed; the single server becomes `{scheme}://{host}:{port}` with documented
+  defaults that resolve to the previous `http://localhost:3000`. No status code, response body, validation rule,
+  route or stored document changed, and every `$ref` still resolves. A consumer that generated a client from the
+  old document may see renamed methods (the path-derived names such as `postProjectsIdDuplicate` become
+  `duplicateProject`) and one client class per tag. The count is 64 operations — the issue text said 60, but the
+  five duplicates were being counted twice by the old `$ref` fragments; the new test pins the honest 64.
+  Deviation recorded with tests in `tests/service.rs` as listed in the plan.
 
 ## Required case matrix
 
