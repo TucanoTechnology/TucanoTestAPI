@@ -65,6 +65,12 @@ impl IntoResponse for DomainError {
                 "storage_error",
                 "Storage operation failed",
             ),
+            DomainError::Unauthenticated { code, message } => {
+                envelope(StatusCode::UNAUTHORIZED, code, &message)
+            }
+            DomainError::Forbidden(message) => {
+                envelope(StatusCode::FORBIDDEN, "forbidden", &message)
+            }
         }
     }
 }
@@ -92,5 +98,61 @@ mod tests {
 
         assert_eq!(value["error"]["code"], "conflict");
         assert_eq!(value["error"]["message"], "already there");
+    }
+
+    #[test]
+    fn auth_failures_render_401_and_403_with_their_own_codes() {
+        let runtime = tokio::runtime::Runtime::new().expect("runtime");
+        let cases = [
+            (
+                DomainError::missing_token(),
+                StatusCode::UNAUTHORIZED,
+                "missing_token",
+            ),
+            (
+                DomainError::invalid_token(),
+                StatusCode::UNAUTHORIZED,
+                "invalid_token",
+            ),
+            (
+                DomainError::token_expired(),
+                StatusCode::UNAUTHORIZED,
+                "token_expired",
+            ),
+            (
+                DomainError::invalid_credentials(),
+                StatusCode::UNAUTHORIZED,
+                "invalid_credentials",
+            ),
+            (
+                DomainError::invalid_refresh_token(),
+                StatusCode::UNAUTHORIZED,
+                "invalid_refresh_token",
+            ),
+            (
+                DomainError::forbidden("Viewer cannot edit this project"),
+                StatusCode::FORBIDDEN,
+                "forbidden",
+            ),
+        ];
+
+        for (error, expected_status, expected_code) in cases {
+            let response = error.into_response();
+            assert_eq!(response.status(), expected_status, "{expected_code}");
+            let body = runtime.block_on(async {
+                response
+                    .into_body()
+                    .collect()
+                    .await
+                    .expect("body")
+                    .to_bytes()
+            });
+            let value: serde_json::Value = serde_json::from_slice(&body).expect("json");
+            assert_eq!(value["error"]["code"], expected_code);
+            assert!(
+                value["error"]["message"].is_string(),
+                "{expected_code} carries a message"
+            );
+        }
     }
 }
