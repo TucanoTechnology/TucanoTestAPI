@@ -73,7 +73,7 @@ The GUI must use the same documented API as other clients. It should not read th
 
 The candidates below were validated and adopted: `axum` and `tower-http` for HTTP routing, limits and tracing; `serde` and `serde_json` for typed payloads; `tokio` for asynchronous I/O; `fs2` for advisory locking; `roxmltree` for parsing JUnit XML reports in the run importer; `tempfile` for test isolation.
 
-Still outstanding: a reviewed JSON Schema validator, `thiserror` domain errors, `tracing-subscriber` structured diagnostics, `cargo-deny` policy checks, and an SBOM in release CI.
+Still outstanding: a reviewed JSON Schema validator, `thiserror` domain errors, `tracing-subscriber` structured diagnostics, and `cargo-deny` policy checks.
 
 ## Non-goals for the first prototype
 
