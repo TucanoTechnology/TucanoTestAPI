@@ -15,6 +15,12 @@
 //! exists leaves its password alone and only fills in the grants that are
 //! missing, so re-running the seed against a volume it has already touched
 //! changes nothing instead of failing on a taken username.
+//!
+//! [`unseed_account`] is the exact inverse and obeys the teardown rule of
+//! `docs/testing/seed-dataset-spec.md` §4: it removes only the named account
+//! and only the named grants, refuses to touch a system administrator (the
+//! bootstrap account is the deployment's, not the seed's), and reports what it
+//! left in place rather than guessing.
 
 use std::error::Error;
 use std::fmt::{self, Display, Formatter};
@@ -159,6 +165,144 @@ fn now_seconds() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |since_epoch| since_epoch.as_secs())
+}
+
+/// One account to remove and the grants to forget with it.
+#[derive(Debug, Clone)]
+pub struct UnseedSpec {
+    /// Login name of the account the seed wrote; compared case-insensitively.
+    pub username: String,
+    /// Project identifiers whose grant for that account should be forgotten.
+    /// A project with no grant for the account is left untouched.
+    pub grants: Vec<String>,
+    /// Remove the account record itself as well as its grants.
+    pub remove_account: bool,
+}
+
+/// What a teardown left behind, so the caller can report it.
+///
+/// `account_kept` and `grants_kept` exist because the teardown is not allowed to
+/// remove what it cannot attribute to the seed: a system administrator, an
+/// account that was never there, or a grant held by somebody else is reported
+/// rather than deleted.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnseededAccount {
+    /// Username that was asked for, echoed back as it was stored.
+    pub username: String,
+    /// Identifier of the account, when one was found.
+    pub id: Option<String>,
+    /// Whether the account record was removed by this call.
+    pub account_removed: bool,
+    /// Why the account record was left in place, when it was.
+    pub account_kept: Option<String>,
+    /// `(project_id, role)` grants this call removed.
+    pub grants_removed: Vec<(String, String)>,
+    /// `(project_id, reason)` grants this call refused to remove.
+    pub grants_kept: Vec<(String, String)>,
+}
+
+/// [`SeedError`]'s inverse: the same store failures, none of the hashing.
+pub type UnseedError = SeedError;
+
+/// The reason [`unseed_account`] records when the account it was asked about was
+/// never there.
+///
+/// An already-clean deployment is a success, not a refusal, so callers that
+/// report what a teardown *kept* need to distinguish this reason from every
+/// other one. The recorded reason *starts with* this text and goes on to name
+/// the account, so compare with [`is_missing_account_reason`] rather than for
+/// equality.
+pub const NO_SUCH_ACCOUNT: &str = "no account named";
+
+/// Whether `reason` is the "never there" one [`unseed_account`] records.
+///
+/// An absent account is a settled teardown, not something left behind, so this
+/// is what tells the two apart without matching the whole message.
+pub fn is_missing_account_reason(reason: &str) -> bool {
+    reason.starts_with(NO_SUCH_ACCOUNT)
+}
+
+/// Removes the account `spec` names and the grants it holds, and nothing else.
+///
+/// Removal is by identifier and by project, never by pattern: an account the
+/// store does not hold is reported as kept rather than treated as an error, and
+/// a system administrator is refused outright because the bootstrap account
+/// belongs to the deployment — deleting it would lock out the next run.
+///
+/// # Errors
+///
+/// [`SeedError::Storage`] when the store cannot be read or written. Nothing is
+/// removed if the store cannot be read, so a failed teardown leaves the data as
+/// it found it.
+pub fn unseed_account(
+    store: &AuthStore,
+    spec: &UnseedSpec,
+) -> Result<UnseededAccount, UnseedError> {
+    let mut result = UnseededAccount {
+        username: spec.username.clone(),
+        id: None,
+        account_removed: false,
+        account_kept: None,
+        grants_removed: Vec::new(),
+        grants_kept: Vec::new(),
+    };
+
+    let Some(account) = store.user_by_username(&spec.username)? else {
+        result.account_kept = Some(format!(
+            "{NO_SUCH_ACCOUNT} {:?} exists, so nothing was removed",
+            spec.username
+        ));
+        return Ok(result);
+    };
+    result.username = account.username.clone();
+    result.id = Some(account.id.clone());
+
+    if account.system_admin && spec.remove_account {
+        return Err(SeedError::Storage(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!(
+                "account {:?} administers the server; teardown removes only the seed's own \
+                 accounts and leaves the bootstrap account alone",
+                account.username
+            ),
+        )));
+    }
+
+    for project_id in &spec.grants {
+        match store.role_of(project_id, &account.id)? {
+            Some(role) => {
+                store.remove_role(project_id, &account.id)?;
+                result
+                    .grants_removed
+                    .push((project_id.clone(), role_name(role).to_owned()));
+            }
+            None => result.grants_kept.push((
+                project_id.clone(),
+                "the account holds no grant on this project".to_owned(),
+            )),
+        }
+    }
+
+    if spec.remove_account {
+        result.account_removed = store.remove_user(&account.id)?;
+        if !result.account_removed {
+            result.account_kept =
+                Some("the account vanished while it was being removed".to_owned());
+        }
+    } else {
+        result.account_kept = Some("--keep-account was requested".to_owned());
+    }
+
+    Ok(result)
+}
+
+/// The wire spelling of a [`Role`], matching [`parse_role`]'s vocabulary.
+fn role_name(role: Role) -> &'static str {
+    match role {
+        Role::Viewer => "viewer",
+        Role::Editor => "editor",
+        Role::Owner => "owner",
+    }
 }
 
 #[cfg(test)]
@@ -335,5 +479,175 @@ mod tests {
                 .expect("present")
                 .system_admin
         );
+    }
+
+    fn unseed_spec() -> UnseedSpec {
+        UnseedSpec {
+            username: "viewer".to_owned(),
+            grants: vec!["checkout.json".to_owned(), "payments.json".to_owned()],
+            remove_account: true,
+        }
+    }
+
+    #[test]
+    fn unseeding_removes_only_the_named_account_and_its_grants() {
+        let (_directory, store) = store();
+        let seeded = seed_account(&store, &spec()).expect("seed");
+        let bystander = User {
+            id: "bystander".to_owned(),
+            username: "bystander".to_owned(),
+            password_hash: "not-a-real-hash".to_owned(),
+            system_admin: false,
+            created_at: 1,
+            refresh_tokens: Vec::new(),
+        };
+        store.insert_user(&bystander).expect("bystander");
+        store
+            .set_role("checkout.json", "bystander", Role::Viewer)
+            .expect("bystander grant");
+
+        let removed = unseed_account(&store, &unseed_spec()).expect("unseed");
+
+        assert!(removed.account_removed);
+        assert!(removed.account_kept.is_none());
+        assert_eq!(removed.id.as_deref(), Some(seeded.id.as_str()));
+        assert_eq!(
+            removed.grants_removed,
+            vec![
+                ("checkout.json".to_owned(), "owner".to_owned()),
+                ("payments.json".to_owned(), "owner".to_owned()),
+            ]
+        );
+        assert!(removed.grants_kept.is_empty());
+
+        assert!(store.user_by_username("viewer").expect("read").is_none());
+        // The grant file survives: it still records the account that owns it.
+        assert_eq!(
+            store
+                .role_of("checkout.json", "bystander")
+                .expect("role of bystander"),
+            Some(Role::Viewer)
+        );
+        assert!(
+            store
+                .projects_for_user(&seeded.id)
+                .expect("projects")
+                .is_empty(),
+            "the removed account keeps no grants"
+        );
+    }
+
+    #[test]
+    fn unseeding_an_account_that_does_not_exist_keeps_everything_and_says_so() {
+        let (_directory, store) = store();
+
+        let removed = unseed_account(&store, &unseed_spec()).expect("unseed");
+
+        assert!(!removed.account_removed);
+        assert!(removed.id.is_none());
+        assert!(removed.grants_removed.is_empty());
+        assert!(removed.grants_kept.is_empty());
+        let reason = removed
+            .account_kept
+            .as_deref()
+            .expect("the reason the account was kept");
+        assert!(
+            is_missing_account_reason(reason),
+            "an account that was never there is a settled teardown, not a refusal: {removed:?}"
+        );
+        assert!(
+            reason.contains("viewer"),
+            "the reason names the account it could not find: {removed:?}"
+        );
+    }
+
+    #[test]
+    fn only_the_missing_account_reason_counts_as_settled() {
+        assert!(is_missing_account_reason(
+            "no account named \"viewer\" exists, so nothing was removed"
+        ));
+        assert!(!is_missing_account_reason("--keep-account was requested"));
+        assert!(!is_missing_account_reason(
+            "the account holds no grant on this project"
+        ));
+        assert!(!is_missing_account_reason(""));
+    }
+
+    #[test]
+    fn unseeding_leaves_a_system_administrator_alone() {
+        let (_directory, store) = store();
+        let mut spec = spec();
+        spec.system_admin = true;
+        seed_account(&store, &spec).expect("seed");
+
+        let error =
+            unseed_account(&store, &unseed_spec()).expect_err("refuses the bootstrap account");
+        assert!(error.to_string().contains("administers the server"));
+        let account = store
+            .user_by_username("viewer")
+            .expect("read")
+            .expect("kept");
+        assert!(account.system_admin);
+        assert_eq!(
+            store.role_of("checkout.json", &account.id).expect("role"),
+            Some(Role::Owner),
+            "nothing was removed before the refusal"
+        );
+    }
+
+    #[test]
+    fn unseeding_can_forget_grants_but_keep_the_account() {
+        let (_directory, store) = store();
+        let seeded = seed_account(&store, &spec()).expect("seed");
+        let mut spec = unseed_spec();
+        spec.remove_account = false;
+
+        let removed = unseed_account(&store, &spec).expect("unseed");
+
+        assert!(!removed.account_removed);
+        assert_eq!(
+            removed.account_kept.as_deref(),
+            Some("--keep-account was requested")
+        );
+        assert_eq!(removed.grants_removed.len(), 2);
+        assert!(store.user_by_username("viewer").expect("read").is_some());
+        assert!(
+            store
+                .projects_for_user(&seeded.id)
+                .expect("projects")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn unseeding_reports_a_grant_the_account_never_held() {
+        let (_directory, store) = store();
+        seed_account(&store, &spec()).expect("seed");
+        let mut spec = unseed_spec();
+        spec.grants.push("unrelated.json".to_owned());
+
+        let removed = unseed_account(&store, &spec).expect("unseed");
+
+        assert_eq!(removed.grants_removed.len(), 2);
+        assert_eq!(
+            removed.grants_kept,
+            vec![(
+                "unrelated.json".to_owned(),
+                "the account holds no grant on this project".to_owned()
+            )]
+        );
+    }
+
+    #[test]
+    fn unseeding_twice_is_settled_the_second_time() {
+        let (_directory, store) = store();
+        seed_account(&store, &spec()).expect("seed");
+
+        let first = unseed_account(&store, &unseed_spec()).expect("first");
+        assert!(first.account_removed);
+        let second = unseed_account(&store, &unseed_spec()).expect("second");
+        assert!(!second.account_removed);
+        assert!(second.grants_removed.is_empty());
+        assert!(second.account_kept.is_some());
     }
 }

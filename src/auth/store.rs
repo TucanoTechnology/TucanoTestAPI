@@ -227,6 +227,26 @@ impl AuthStore {
         self.write_users_unlocked(&users)
     }
 
+    /// Forget the account with `id`, reporting whether there was one.
+    ///
+    /// The account's refresh tokens live inside its own record, so dropping it
+    /// drops them too and a token it already holds stops resolving. Its grants
+    /// are *not* touched: they live in the per-project files and are removed
+    /// with [`AuthStore::remove_role`] or [`AuthStore::remove_project_grants`],
+    /// which is what keeps "forget this account" and "forget this project"
+    /// separate decisions.
+    pub fn remove_user(&self, id: &str) -> io::Result<bool> {
+        let _lock = self.acquire_lock()?;
+        let mut users = self.read_users_unlocked()?;
+        let before = users.len();
+        users.retain(|user| user.id != id);
+        if users.len() == before {
+            return Ok(false);
+        }
+        self.write_users_unlocked(&users)?;
+        Ok(true)
+    }
+
     /// The account that owns the refresh token with digest `hash`.
     pub fn user_by_refresh_hash(
         &self,

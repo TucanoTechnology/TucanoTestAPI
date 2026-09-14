@@ -348,6 +348,35 @@ Environment:
 | `TUCANO_SEED_VIEWER_PASSWORD` | Password for the seeded non-administrator `viewer` account. |
 | `TUCANO_SEED_AUTH_CMD` | Command line that seeds the `viewer` account and its grants (see below). When unset, that step is skipped with a notice. |
 
+### Teardown
+
+`scripts/teardown.mjs` removes exactly what `scripts/seed.mjs` created — spec §4's ordered cleanup
+of milestones, runs, suites and their copies, cases and their placed copies, projects, the two
+configurations, and the seeded account and grants. It needs the same sign-in credentials the seed
+used:
+
+```sh
+TUCANO_BOOTSTRAP_USERNAME=admin \
+TUCANO_BOOTSTRAP_PASSWORD=admin-password \
+  node scripts/teardown.mjs http://localhost:3000
+```
+
+It is the opposite of `clear-data.mjs`: **removal is by the exact identifiers the seed created**,
+never by pattern or "clear the collection". Anything it finds that the seed did not create is named
+in the report and left in place, and the run exits non-zero so a deployment holding somebody else's
+data is never reported as a clean teardown. Re-running it over an already-clean volume exits 0:
+a missing entity is a settled teardown, not a failure.
+
+| Variable | Purpose |
+| --- | --- |
+| `TUCANO_BOOTSTRAP_USERNAME` / `TUCANO_BOOTSTRAP_PASSWORD` | The account teardown signs in as. Required. |
+| `TUCANO_API_URL` | Base URL, when no argument is given. Unlike `clear-data.mjs` this script never guesses: it fails when no candidate answers `/health`. |
+| `TUCANO_SEED_VIEWER_USERNAME` | The account to remove. Defaults to `viewer`. |
+| `TUCANO_UNSEED_AUTH_CMD` | Command line that removes the account and its grants (see below). When unset, that step is reported as not run and the run exits non-zero, because the account would otherwise survive. |
+
+It exits 0 when everything the seed created is gone or was never there, and 1 when something could
+not be resolved or removed — the report names each item it left in place and why.
+
 ### Accounts and grants
 
 The API publishes no route that creates an account or records a project grant, so spec §5's second
@@ -374,6 +403,27 @@ Afterwards the script signs in as `viewer` and asserts `GET /auth/me` reports no
 administrator flag and the `owner` role on both projects, which proves the files are honoured by the
 server rather than merely present.
 
+The inverse is `unseed-auth`, which forgets one named account and the grants that account holds on
+the named projects, and nothing else:
+
+```sh
+TUCANO_DATA_DIR=/data ./tucano-test unseed-auth \
+    --username viewer --grant checkout.json --grant payments.json
+```
+
+It requires at least one `--grant <project>`, because it removes only the grants it is told about
+rather than every grant an account happens to hold. It refuses the bootstrap account outright, and
+an account or grant it cannot find is reported as left in place rather than guessed at. It ends with
+a machine-readable summary line that `scripts/teardown.mjs` parses to tell an account that was
+already gone (`account=absent`, a settled teardown) from one it declined to touch (`account=kept`).
+Pass `--keep-account` to remove the grants but leave the account itself. Point teardown at it with
+`TUCANO_UNSEED_AUTH_CMD`, for example against the Compose volume:
+
+```sh
+TUCANO_UNSEED_AUTH_CMD='docker compose exec -T api tucano-test unseed-auth' \
+  node scripts/teardown.mjs http://localhost:3000
+```
+
 ### Repeated runs
 
 The seed is **not idempotent by design**: the spec fixes the identifiers it creates, and placing a
@@ -382,11 +432,13 @@ when its own identifiers are already present and tells you to clear first, rathe
 half-way through:
 
 ```sh
-node scripts/clear-data.mjs   # then re-run scripts/seed.mjs
+node scripts/teardown.mjs   # then re-run scripts/seed.mjs
 ```
 
-Configurations are not removed by `clear-data.mjs`, so delete `configurations/` from the volume
-before re-seeding if you want the configuration step to succeed again.
+`teardown.mjs` is the scoped option and is what this repository uses: it removes the seed's own
+entities and leaves anything else on the volume alone, reporting what it could not resolve. Use
+`clear-data.mjs` only when you deliberately want the whole volume emptied — it removes every
+milestone, run, suite, case and project, skips configurations entirely, and does not touch accounts.
 
 ### Scripts in `scripts/`
 
@@ -394,23 +446,45 @@ before re-seeding if you want the configuration step to succeed again.
 | --- | --- |
 | `smoke.sh` | Scratch CRUD round trip against a running API, for validating a candidate build |
 | `seed.mjs` | Builds the demo dataset of `docs/testing/seed-dataset-spec.md` over HTTP |
-| `clear-data.mjs` | Removes the sample data a run or seed left behind |
+| `teardown.mjs` | Removes exactly what `seed.mjs` created, by identifier, and reports anything it leaves in place |
+| `clear-data.mjs` | Unscoped wipe: empties every sample collection a run or seed left behind |
 | `fixtures/` | The small files the seed uploads: a case attachment, a step attachment, and the JUnit report it imports |
 
 ## Test Data Cleanup
 
-Helper scripts are provided in `scripts/` to wipe sample test data against a running API instance:
+Two helper scripts in `scripts/` remove sample data against a running API instance, and they are
+deliberately not interchangeable:
+
+- `teardown.mjs` removes exactly what `scripts/seed.mjs` created, by the identifiers the seed fixed.
+  Anything else on the volume is left alone and named in its report. Use this when you want the demo
+  environment gone and everything else preserved.
+- `clear-data.mjs` wipes the whole collections — every milestone, run, suite, case and project. Use
+  it when you want the volume emptied and do not care what else was in it.
 
 ### Prerequisites
 
-Node.js 18+ (uses native `fetch` and ES modules).
+Node.js 18+ (uses native `fetch` and ES modules). Teardown additionally needs the bootstrap
+credentials, because it signs in rather than calling anonymously.
+
+### Tearing down the seed
+
+```sh
+TUCANO_BOOTSTRAP_USERNAME=admin \
+TUCANO_BOOTSTRAP_PASSWORD=admin-password \
+  node scripts/teardown.mjs http://localhost:3000
+```
+
+It exits 0 when the seed's entities are gone or were never there, and 1 when something could not be
+resolved — naming every item it left in place and why. See [Teardown](#teardown) for the environment
+variables, including `TUCANO_UNSEED_AUTH_CMD`, which is needed for the seeded account to be removed
+as well.
 
 ### Clearing Data
 
 Wipes all milestones, test runs, test suites, projects, and test cases (with their attachments) from
 the API. With no argument the script probes `http://localhost:3100`, then `http://localhost:8080/api`,
 then `http://localhost:3000`, and uses the first base URL that answers `/health`, so a Compose stack
-is found without arguments. Configurations are not removed.
+is found without arguments. Configurations are not removed, and neither are accounts or grants.
 
 ```sh
 # From repository root:
