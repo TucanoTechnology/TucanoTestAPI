@@ -3,3 +3,10 @@
 !/data/.gitkeep
 /sbom.json
 .continue/
+
+# A real configuration file is deployment-specific and may hold secrets. The
+# service never creates one, so anything matching these is one an operator
+# wrote; it belongs on the deployment, not in a commit. The documented template
+# is docs/deployment/config.example.json, which is committed.
+/tucano-config.json
+/*.config.json
