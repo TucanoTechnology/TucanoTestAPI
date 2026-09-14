@@ -389,5 +389,6 @@ Repository contribution and agent workflow rules are documented in [AGENTS.md](A
 | [docs/security/configuration-decision.md](docs/security/configuration-decision.md) | The configuration and secrets decision (#187): environment variables versus a unified file, precedence, and key management |
 | [docs/security/scanning-policy.md](docs/security/scanning-policy.md) | The dependency-audit, secret-scan, container-scan, and SBOM policy CI enforces |
 | [docs/testing/seed-dataset-spec.md](docs/testing/seed-dataset-spec.md) | The demo/seed dataset: the feature coverage matrix, the target tree below `TUCANO_DATA_DIR`, the API calls that produce it, and the teardown scope |
+| [docs/wiki/README.md](docs/wiki/README.md) | **User wiki** — index of the user-facing guides: installation, feature how-to, API quickstart, and operations |
 | [docs/roadmap.md](docs/roadmap.md) | The roadmap ordered by delivery priority, with the tracking issue for each item |
 | [AgentRules/](AgentRules/) | Organisation-wide engineering and process rules |
