@@ -22,6 +22,8 @@ The service now exposes CRUD and attachment endpoints, so the controls below are
 | Resource ID or filename to filesystem | Traversal, absolute paths, separators, symlinks | Allow-list validation, canonical confinement, symlink checks |
 | Service to stored JSON | Corruption, partial writes, concurrent writers | Same-directory temp file, flush, atomic rename, locking policy |
 | Attachment upload to storage | Oversized or unexpected file | Streaming limits, type/size validation, safe permissions |
+| Configuration file to service startup | Malformed, unknown-keyed, tampered, or wrongly-encrypted file; a stray file on an implicit path | Strict schema with unknown keys refused, explicit path only, no plaintext fallback, fail-closed startup errors that name the setting and never the value |
+| Configuration key to service startup | A key that is absent, wrong, readable from the image, or disclosed in a log or error | Key supplied from outside the artifact by a read-only mount, authenticated encryption with a key identifier, refusal to boot rather than warn, no value ever logged |
 | Service logs and audit events | Secrets, paths, file contents | Structured redaction and bounded fields |
 | GUI to storage | Direct filesystem access | GUI uses the documented HTTP API only |
 
@@ -38,6 +40,8 @@ The service now exposes CRUD and attachment endpoints, so the controls below are
 | Denial of service | Bound body size, JSON depth, filesystem work, uploads, and request duration | Timeout, cancellation, and resource-limit tests |
 | Data disclosure | Never return internal paths, stack traces, raw filesystem errors, secrets, or file contents in logs | Error and log-redaction tests |
 | Unauthorized access | Authenticate before protected operations and authorize by resource/action | Auth matrix tests (`tests/auth.rs`; hand-marked public surface in `tests/service.rs`) |
+| Unusable configuration | Refuse to boot on a malformed, unknown-keyed, or tampered configuration file, or on a secret that is too short, from two conflicting sources, or unreadable; name the setting, never the value | Configuration loader unit tests and the startup-error redaction test (#188, #190) |
+| Secret disclosure through the file | Keep a secret supplied by file out of the image, out of `docker inspect`, out of logs, errors, and responses; never fall back to plaintext when a secret-bearing file has no usable key | Log-redaction and startup-refusal tests (#189, #190) |
 | Vulnerable dependency or image | Run advisory, secret, and container scans in CI | Security workflow and clean-baseline checks |
 
 ## Security invariants
@@ -50,6 +54,12 @@ The service now exposes CRUD and attachment endpoints, so the controls below are
 6. Security-sensitive events exclude credentials, tokens, raw payloads, attachment contents, and internal paths.
 7. Credentials are never stored or logged in the clear: passwords are persisted only as Argon2id PHC hashes
    and refresh tokens only as SHA-256 digests of an opaque value the client keeps.
+8. Configuration is resolved once, at startup, before the listener binds: environment first, then an
+   optional configuration file, then built-in defaults, per key. A configuration that cannot be
+   resolved is a startup refusal, never a warning and never a plaintext fallback.
+9. The running service never writes its configuration. The configuration file is read-only input, so
+   the container's read-only root filesystem stays intact and the key that protects an encrypted
+   file never lives beside the file it protects.
 
 ## Open decisions
 
@@ -59,6 +69,12 @@ The service now exposes CRUD and attachment endpoints, so the controls below are
 - Authorization roles and resource ownership model — **implemented**: project-scoped RBAC, a role
   (`viewer` < `editor` < `owner`) granted per project, with a `systemAdmin` global bypass
   ([authentication-decision.md](authentication-decision.md)).
+- Configuration model and the storage of secrets — **decided**: environment variables stay
+  authoritative and an optional single configuration file is added as a second source, resolved
+  per key in the order environment, file, default; secrets may live in the file but never *only* in
+  it, encryption is authenticated with an externally supplied key, and a configuration that cannot
+  be resolved refuses to boot ([configuration-decision.md](configuration-decision.md); #187). The
+  loader, the encryption, and the precedence rules are tracked in #188–#190.
 - Maximum request, JSON, attachment, and nesting sizes
 - Locking implementation and overwrite/conflict semantics
 - Whether to reject unknown JSON fields during the compatibility period
@@ -85,6 +101,16 @@ These decisions must be resolved before the HTTP compatibility layer is exposed 
   tokens, Argon2id password hashes, and project-scoped RBAC enforced in every guarded handler.
   Passwords and refresh tokens are stored only as hashes; the auth matrix is `tests/auth.rs`.
 
+### Decided (documented, not yet implemented)
+
+- ✅ Configuration model and the secrets model decided (#187) in
+  [configuration-decision.md](configuration-decision.md): environment variables stay authoritative,
+  an optional single configuration file is added as a second source, and the resolved order is
+  environment, then file, then default — per key. The two trust boundaries above (the configuration
+  file and its key) and invariants 8 and 9 were added with it. The implementation is tracked in
+  #188–#190; until those land, this repository reads its configuration from the environment only,
+  exactly as the *Current state* section of that decision records.
+
 ### Known limitations
 
 - **Run scope can be narrowed by the caller that holds the run.** A run's reachable projects are the
@@ -99,8 +125,18 @@ These decisions must be resolved before the HTTP compatibility layer is exposed 
 - **There is no grant-administration endpoint.** Accounts and grants are read from
   `TUCANO_DATA_DIR/auth/`, which must be provisioned out of band; creating a project does not grant
   its creator a role, so a project can exist with no grant-holder until an administrator adds one.
+- **File encryption protects against accidents, not against an actor who can read the volume.** Once
+  the encrypted configuration file exists, its key is supplied from outside it, so an attacker who
+  can read the mounted volume cannot read the key from the same place — but an attacker who can read
+  the *environment* of the container, or the secret mount, still can. Encryption of the file raises
+  the cost of a leaked backup or an accidental commit; it is not a control against host compromise,
+  and it must not be described as one.
 
 ### Pending
 
 - ⏳ Grant-administration endpoints (create accounts, grant roles) — no API surface yet
 - ⏳ Contract tests against Node reference implementation
+- ⏳ The configuration file: schema and loader (#188), encrypted secrets at rest (#189), and
+  precedence and validation across file, environment, and defaults (#190). The decision is recorded
+  in [configuration-decision.md](configuration-decision.md); the boundary rows, invariants, and
+  abuse cases above are the requirements those tickets must satisfy.

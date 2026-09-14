@@ -88,3 +88,11 @@ Implementation landed on `feat/p2-130-auth`. What it publishes:
 
 Known gaps are recorded in the [threat model](threat-model.md) under "Known limitations": there is no
 grant-administration endpoint yet, so accounts and grants are provisioned out of band.
+
+## Related decision
+
+This decision's settings arrive as environment variables. Where those settings *come from* — and how a
+secret is stored at rest once a unified configuration file exists — is decided separately in
+[configuration-decision.md](configuration-decision.md) (#187). Nothing here changes: environment
+variables stay authoritative, and `TUCANO_JWT_SECRET` / `TUCANO_JWT_SECRET_FILE` remain first-class
+sources under the precedence that document defines.
