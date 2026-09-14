@@ -246,7 +246,7 @@ handler:
 The full reconciliation of the documented error contract and schema strictness is recorded in
 [docs/contracts/api-compatibility.md](docs/contracts/api-compatibility.md).
 
-The API process is stateless: replicas do not keep sessions or in-memory records. Horizontal scaling requires a shared persistent POSIX volume mounted at the same `TUCANO_DATA_DIR` for every replica. Repository mutations use an advisory lock file and atomic same-directory renames. A local Docker volume is suitable for one node; multi-node deployments must provide shared storage with working advisory locks. Do not use separate per-replica local volumes, or data will diverge.
+The API process is stateless: replicas do not keep sessions or in-memory records. Horizontal scaling requires a shared persistent POSIX volume mounted at the same `TUCANO_DATA_DIR` for every replica. Repository mutations use an advisory lock file and atomic same-directory renames. A local Docker volume is suitable for one node; multi-node deployments must provide shared storage with working advisory locks. Do not use separate per-replica local volumes, or data will diverge. Object storage (S3) is not a supported backend: see [docs/architecture/adr-object-storage.md](docs/architecture/adr-object-storage.md) for the decision and the terms under which a bucket may be used as an out-of-process mirror.
 
 To validate a candidate build before it serves traffic, and to roll back to a previous build safely, follow [docs/deployment/canary-validation-and-rollback.md](docs/deployment/canary-validation-and-rollback.md).
 
@@ -377,6 +377,8 @@ Repository contribution and agent workflow rules are documented in [AGENTS.md](A
 | --- | --- |
 | [docs/architecture/rust-service-core.md](docs/architecture/rust-service-core.md) | Why Rust, the layered service design, and delivery status |
 | [docs/architecture/gui-client-boundary.md](docs/architecture/gui-client-boundary.md) | The GUI client boundary and the generated-client strategy driven by `openapi.json` |
+| [docs/architecture/adr-object-storage.md](docs/architecture/adr-object-storage.md) | ADR: why object storage (S3) is declined as a persistence backend and the file-based invariant is upheld (#181) |
+| [docs/architecture/wiki-structure-and-publication.md](docs/architecture/wiki-structure-and-publication.md) | The wiki decision: source of truth, publication mechanism, page inventory, and the drift-prevention rule |
 | [docs/contracts/api-compatibility.md](docs/contracts/api-compatibility.md) | File-format and endpoint compatibility rules against the legacy implementation |
 | [docs/contracts/test-case-versioning-plan.md](docs/contracts/test-case-versioning-plan.md) | Field names, snapshot shape, trigger rules, and addressing for test-case versioning and revision history |
 | [docs/contracts/file-format-versioning-plan.md](docs/contracts/file-format-versioning-plan.md) | The `formatVersion` storage marker: field, reader and writer rules, migration rules, and the rollback drill matrix |
