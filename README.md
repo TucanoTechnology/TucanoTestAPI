@@ -599,6 +599,7 @@ Repository contribution and agent workflow rules are documented in [AGENTS.md](A
 | [docs/security/configuration-decision.md](docs/security/configuration-decision.md) | The configuration and secrets decision (#187): environment variables versus a unified file, precedence, and key management |
 | [docs/security/scanning-policy.md](docs/security/scanning-policy.md) | The dependency-audit, secret-scan, container-scan, and SBOM policy CI enforces |
 | [docs/security/audit-scope.md](docs/security/audit-scope.md) | The security audit's scope, methodology, finding template, and severity rubric (#175) |
+| [docs/security/audit-s4-dependencies-and-supply-chain.md](docs/security/audit-s4-dependencies-and-supply-chain.md) | The S4 supply-chain audit report — dependency advisories, CI controls, action and image pinning, the SBOM, and the workflow permissions model (#179) |
 | [docs/testing/seed-dataset-spec.md](docs/testing/seed-dataset-spec.md) | The demo/seed dataset: the feature coverage matrix, the target tree below `TUCANO_DATA_DIR`, the API calls that produce it, and the teardown scope |
 | [docs/wiki/README.md](docs/wiki/README.md) | **User wiki** — index of the user-facing guides: installation, feature how-to, API quickstart, and operations |
 | [docs/wiki/getting-started.md](docs/wiki/getting-started.md) | Install the Compose stack, verify it is up, turn authentication on, and create a first project, suite and case (#171) |
