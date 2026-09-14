@@ -63,13 +63,16 @@ and the page is a bug.
 
 ## Keeping this wiki current
 
-The wiki is hand-written Markdown under `docs/wiki/`. There is no generator and no publish step: a
-page is edited in the same pull request as the change that makes it wrong, and every page names the
-engineering records it derives from. Feature pages never reproduce schemas — they name the operation
-exactly as `openapi.json` does and link to `/api-docs` for the details.
+The wiki is hand-written Markdown under `docs/wiki/`. A page is edited in the same pull request as
+the change that makes it wrong, and every page names the engineering records it derives from.
+Feature pages never reproduce schemas — they name the operation exactly as `openapi.json` names it
+and link to `/api-docs` for the details.
 
-The full rule is recorded in
-[docs/architecture/documentation-strategy.md](../architecture/documentation-strategy.md).
+This index is exhaustive: a page that is not listed here does not exist for a reader, so a pull
+request that adds a page also adds it to the index. The structure, the source-of-truth rules, and
+the drift-prevention rule are the decision recorded in
+[docs/architecture/wiki-structure-and-publication.md](../architecture/wiki-structure-and-publication.md);
+where this section and that record differ, the record is authoritative.
 
 If you find a page that contradicts `openapi.json`, the behaviour of the running service, or one of
 the engineering records above, that is a documentation defect — please
