@@ -230,7 +230,24 @@ The ticket asks that the decision be re-checked against the code by the ticket o
   deployment guide describes.
 - `AgentRules/security/secret-protection.md` says what this document quotes it as saying.
 
-Nothing in this document contradicts the current implementation; it constrains the ones that follow.
+The snapshot above describes the tree before the first implementation child landed, and is kept as
+the "before" baseline. What has changed since:
+
+- **#188 landed the unencrypted half.** `src/config.rs` holds the versioned strict schema
+  (`ConfigFile`, `deny_unknown_fields`, mandatory `version: 1`), the loader that reads only the file
+  `TUCANO_CONFIG_FILE` names, and the `resolve` precedence helper; `AuthConfig::from_env_and_file`
+  layers the file under the environment per key; `src/main.rs` loads it once before the listener
+  binds; the template is [`docs/deployment/config.example.json`](../deployment/config.example.json),
+  kept honest by a unit test that parses it. Two consequences of the decision were relaxed in
+  implementation and are recorded here so the deltas are visible: the "no secret may exist *only* in
+  the file" rule is enforced by keeping the environment authoritative (the file can supply a secret
+  that the environment also reaches), and the shipped example documents `jwt_secret_file` rather
+  than an inline secret, so the template itself carries no secret.
+- **Still open.** #189 (AEAD-encrypted secrets and the key file) is not implemented:
+  `ConfigFile` reads secrets in the clear. #190's per-key precedence matrix is partly covered by
+  #188's tests, but its reference table is not yet published. #191 has not started.
+- Everything in the *Current state* table remains true for the settings it lists, because the
+  environment still supplies every one of them when no file is named.
 
 ## Consequences for the sibling tickets
 

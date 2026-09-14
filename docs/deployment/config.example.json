@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "auth_required": false,
+  "jwt_secret": null,
+  "jwt_secret_file": null,
+  "access_token_ttl": "15m",
+  "refresh_token_ttl": "14d",
+  "bootstrap_username": null,
+  "bootstrap_password": null
+}
