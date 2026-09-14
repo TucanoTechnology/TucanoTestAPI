@@ -467,6 +467,37 @@ A teardown that cannot resolve whether it created an entity must leave it in
 place and report it, rather than remove it. A missed deletion is recoverable; a
 deleted project is not.
 
+This is implemented by `scripts/teardown.mjs` (issue #194). It signs in as the
+bootstrap account exactly as the seed does, walks the table above in order, and
+scopes every removal to the identifiers the seed fixed:
+
+- **Each removal is guarded.** A project, suite, run, milestone or configuration
+  is read back from its collection route (or, for cases, its recorded parent's
+  listing) before its `DELETE` is issued; anything that is not there is skipped,
+  and anything that is there but is not one of the seed's is reported as kept.
+- **Suites are enumerated, not assumed.** The duplicate step's identifier is
+  derived by the API, so step 3 lists a project's suites and removes only the
+  seed's named suite or an id carrying the copy prefix; any other suite is named
+  as kept. Projects and configurations are listed for the same reason: a foreign
+  project or configuration is named as kept rather than silently walked past.
+- **It reports and exits non-zero.** Every item left in place is printed with
+  the reason, and the run exits `1`; a run that removed or confirmed the absence
+  of everything exits `0`. A missing entity is a settled teardown, not a failure,
+  so re-running over an already-clean volume is successful.
+- **It never guesses its target.** `clear-data.mjs` falls back to the first
+  candidate URL; teardown fails outright when no candidate answers `/health`,
+  because a script that deletes must be sure where it is deleting from.
+
+Step 7 runs the server binary's `unseed-auth` subcommand (the inverse of the
+`seed-auth` of [§5](#5-known-gap-auth-accounts-and-role-grants)) over the volume
+the server reads, because the API publishes no route for accounts or grants. It
+removes one named account and the grants that account holds on the named
+projects, refuses the bootstrap account, and requires at least one `--grant`
+so it can never clear every grant an account holds. It ends with a summary line
+— `unseed-auth: account=removed|absent|kept grants_removed=<n> grants_kept=<n>`
+— which the teardown parses, so an account that was already gone reads as a
+settled teardown rather than as a refusal.
+
 ## 5. Known gap: auth accounts and role grants
 
 Rows 25–27 of the matrix cover auth accounts and role grants, but the HTTP
@@ -528,8 +559,8 @@ deliberately **not idempotent**: the identifiers in [§2](#2-target-tree-below-t
 are fixed, and placing a case onto an identifier its target parent already holds
 is a `409`, so a second run onto the same volume cannot complete. Instead the
 script refuses up front when its own identifiers are already present and points
-at `scripts/clear-data.mjs`, which is the "refuse to run over existing data and
-require an explicit clear first" the issue allows in place of idempotence.
+at `scripts/teardown.mjs`, which is the scoped "clear first" and leaves anything
+on the volume it did not create.
 
 The one exception is [§5](#5-known-gap-accounts-and-grants-have-no-http-route)'s
 accounts and grants: the API publishes no route for either, so the server binary
@@ -539,6 +570,15 @@ idempotent — an existing account keeps its password and only missing grants ar
 added. The script invokes it through `TUCANO_SEED_AUTH_CMD`, skips the step with
 a notice when that is unset, and then performs the `GET /auth/me` assertion that
 closes the loop.
+
+Teardown ([§4](#4-teardown-scope)) is implemented by `scripts/teardown.mjs`
+(#194). Its auth half is the `unseed-auth` subcommand, the inverse of
+`seed-auth`: it removes one named account and the grants that account holds on
+the named projects, refuses the bootstrap account, and reports anything it could
+not resolve instead of guessing. The subcommand ends with a summary line
+(`unseed-auth: account=removed|absent|kept grants_removed=<n> grants_kept=<n>`)
+that the JS half parses, which is what makes a second teardown over an
+already-clean volume exit `0` rather than reporting a false refusal.
 
 [§3 step 12](#step-12--validation-of-the-seeded-environment) is out of scope
 here by design and belongs to #195.
