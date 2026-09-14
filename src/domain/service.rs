@@ -475,10 +475,13 @@ impl<R: Repository> TestService<R> {
     /// Links a defect to the result a run records for `case_id`.
     ///
     /// The client names where the defect lives; the API derives the link's own
-    /// identifier and the moment it was made, and returns the built link so the
-    /// caller learns the identifier it must use to unlink it. The URL is checked
-    /// against the tracker it claims to belong to, and a defect the result
-    /// already links is a conflict.
+    /// identifier and the moment it was made, and returns the built link. The
+    /// link is returned for the caller to address rather than to serialise: the
+    /// HTTP handler responds with the `CreateResponse` shape (`message` plus the
+    /// derived `id`), not with this document, so a client learns the value it
+    /// must use to unlink from `id` and reads the rest from the listing route.
+    /// The URL is checked against the tracker it claims to belong to, and a
+    /// defect the result already links is a conflict.
     pub fn link_defect_to_result(
         &self,
         run_id: &str,
