@@ -61,7 +61,7 @@ example is a gap, not a deferral.
 | 19 | JSON result import | `nightly-import.json`, importing `Passed` and `Failed` entries | `POST /test_runs/{id}/import/json` | `results` array in `test_runs/nightly-import.json` |
 | 20 | Milestones and derived progress | `v1.0.json` referencing `nightly.json` | `POST /milestones`, then `GET /milestones/v1.0.json/progress` | `milestones/v1.0.json` |
 | 21 | Duplication | a suite duplicate kept under a project | `POST /test_suites/smoke.checkout.json/duplicate` | `projects/checkout.json/<copy>/suite.json` |
-| 22 | Copy vs. move composition | a case copied into `payments.json` while the source stays in `checkout.json` | `POST /projects/{id}/test_cases` with `suiteId`/`testCaseId` (copy is the default) | both folders exist |
+| 22 | Copy vs. move composition | `TC-LOGIN-1` copied into `payments.json` while the source stays in `smoke.checkout.json`; `TC-PROJECT-1` moved from `checkout.json` into the copy — the same route with `"mode":"move"` | `POST /projects/{id}/test_cases` with `testCaseId` (copy is the default; `mode` selects move) | `payments.json/TC-LOGIN-1/` beside the source; `TC-PROJECT-1/` gone from `checkout.json` |
 | 23 | Coverage report | `GET /reports/coverage`, global and `?projectId=checkout.json` | the report routes | n/a (read-only — no new files) |
 | 24 | Summary report | `GET /reports/summary` and `?configurationId=chrome-linux.json` | the report routes | n/a (read-only — no new files) |
 | 25 | Auth users: system administrator | `admin` — the bootstrap account | `TUCANO_BOOTSTRAP_USERNAME`/`TUCANO_BOOTSTRAP_PASSWORD` at startup; `POST /auth/login` | `auth/users.json` (**not** produced by an API call — see [§5](#5-known-gap-auth-accounts-and-role-grants)) |
@@ -106,28 +106,27 @@ $TUCANO_DATA_DIR/
 │   │   │   ├── suite.json
 │   │   │   ├── TC-LOGIN-1/
 │   │   │   │   ├── test-case.json
-│   │   │   │   └── login-flow.txt            # case attachment
+│   │   │   │   └── 1789393055091247267-login-flow.txt   # case attachment
 │   │   │   ├── TC-LOGIN-2/
 │   │   │   │   ├── test-case.json            # carries ordered steps
 │   │   │   │   ├── revisions/
 │   │   │   │   │   └── v1.json               # snapshot written by the update
 │   │   │   │   └── steps/
 │   │   │   │       └── 0/
-│   │   │   │           └── step-1.txt        # step attachment
+│   │   │   │           └── 1789393055103254926-step-1.txt  # step attachment
 │   │   │   ├── TC-CART-1/
 │   │   │   │   └── test-case.json
-│   │   │   └── <copy>/                       # the duplicate suite, id from the response
-│   │   │       └── suite.json
-│   │   ├── TC-PROJECT-1/                     # a case owned directly by the project
-│   │   │   └── test-case.json
-│   │   └── TC-LOGIN-1/                       # the copy of TC-LOGIN-1 placed here (§3, step 22)
-│   │       └── test-case.json
+│   │   ├── smoke.checkout-copy-<suffix>/     # the duplicate suite, id from the response
+│   │   │   └── suite.json
+│   │   ├── TC-PROJECT-1/                     # a case owned directly by the project;
+│   │   │   └── test-case.json                # the move in §3, step 11 leaves it here
 │   └── payments.json/
 │       ├── project.json
-│       └── smoke.payments.json/
-│           ├── suite.json
-│           └── TC-LOGIN-1/                   # the copy placed into this project
-│               └── test-case.json
+│       ├── smoke.payments.json/
+│       │   └── suite.json
+│       └── TC-LOGIN-1/                       # the copy placed into this project
+│           ├── test-case.json
+│           └── 1789393055091247267-login-flow.txt   # the case's attachment travels with it
 ├── test_runs/
 │   ├── nightly.json                          # projects, suites, cases, results, defects, config link
 │   └── nightly-import.json                   # results arrived by import
@@ -154,6 +153,23 @@ Every step is an HTTP call with the token from step 0. Steps 1–4 must run in
 order; the later steps depend only on the resources named in them.
 
 ### Step 0 — session
+
+Auth is optional at runtime and off by default. The seed needs it on, because
+the whole sequence below carries a token and step 2 creates a project, which
+only a system administrator may do. The deployment must therefore be started
+with the four settings this step depends on:
+
+| Variable | Value the seed needs |
+| --- | --- |
+| `TUCANO_AUTH_REQUIRED` | `true`, so every guarded route enforces a token. |
+| `TUCANO_JWT_SECRET` (or `TUCANO_JWT_SECRET_FILE`) | A signing secret of at least 32 bytes. |
+| `TUCANO_BOOTSTRAP_USERNAME` | Together, the account created once on a store that already holds no accounts. |
+| `TUCANO_BOOTSTRAP_PASSWORD` | The password for that account. |
+
+With `TUCANO_AUTH_REQUIRED` off, a server starts with no signing secret at all
+and every `POST /auth/login` answers `storage_error` ("auth is not configured
+with a signing secret") instead of a session, so step 0 must run first and fail
+loudly.
 
 ```sh
 curl -sS -X POST "$API/auth/login" \
@@ -244,7 +260,7 @@ fixtures are small text files committed beside it.
 ```sh
 curl -sS -X POST "$API/test_runs" -H "Authorization: Bearer $TOKEN" \
   -H 'Content-Type: application/json' \
-  -d '{"testRunId":"nightly.json","name":"nightly","timestamp":"1757800000","tags":["nightly"],"projects":[{"projectId":"checkout.json","name":"checkout"}]}'
+  -d '{"testRunId":"nightly.json","name":"nightly","timestamp":"1757800000","tags":["nightly"],"projects":[{"projectId":"checkout.json","name":"checkout","testSuites":[]}]}'
 
 curl -sS -X POST "$API/test_runs/nightly.json/test_suites" -H "Authorization: Bearer $TOKEN" \
   -H 'Content-Type: application/json' -d '{"suiteId":"smoke.checkout.json"}'
@@ -306,9 +322,10 @@ curl -sS -X POST "$API/test_runs/nightly.json/results/TC-LOGIN-2/defects" -H "Au
   -d '{"defectId":"OPS-7","defectUrl":"https://tracker.example/OPS-7","trackerType":"custom"}'
 
 # The GitHub link above is then unlinked, so the tree keeps three of the four
-# tracker types plus evidence that removal works. The link id is the `linkId`
-# the create response returned, never a value invented by the generator.
-curl -sS -X DELETE "$API/test_runs/nightly.json/results/TC-LOGIN-2/defects/<github linkId>" \
+# tracker types plus evidence that removal works. The create response body is
+# {"message":"Defect linked to test result","id":"<link id>"}, so the generator
+# reads the link id from the `id` key — never a value it invented.
+curl -sS -X DELETE "$API/test_runs/nightly.json/results/TC-LOGIN-2/defects/<link id>" \
   -H "Authorization: Bearer $TOKEN"
 ```
 
@@ -322,7 +339,7 @@ generator's negative checks, not by the seed itself.
 ```sh
 curl -sS -X POST "$API/test_runs" -H "Authorization: Bearer $TOKEN" \
   -H 'Content-Type: application/json' \
-  -d '{"testRunId":"nightly-import.json","name":"nightly-import","tags":["nightly"],"projects":[{"projectId":"checkout.json","name":"checkout"}]}'
+  -d '{"testRunId":"nightly-import.json","name":"nightly-import","tags":["nightly"],"projects":[{"projectId":"checkout.json","name":"checkout","testSuites":[]}]}'
 curl -sS -X POST "$API/test_runs/nightly-import.json/test_cases" -H "Authorization: Bearer $TOKEN" \
   -H 'Content-Type: application/json' -d '{"testCaseId":"TC-LOGIN-1"}'
 curl -sS -X POST "$API/test_runs/nightly-import.json/test_cases" -H "Authorization: Bearer $TOKEN" \
@@ -363,14 +380,29 @@ from the listing call.
 curl -sS -X POST "$API/projects/payments.json/test_cases" -H "Authorization: Bearer $TOKEN" \
   -H 'Content-Type: application/json' -d '{"testCaseId":"TC-LOGIN-1"}'
 curl -sS -X POST "$API/projects/checkout.json/test_cases" -H "Authorization: Bearer $TOKEN" \
-  -H 'Content-Type: application/json' -d '{"testCaseId":"TC-LOGIN-1"}'
+  -H 'Content-Type: application/json' -d '{"testCaseId":"TC-PROJECT-1","mode":"move"}'
 ```
 
-Each call copies the existing case into the named project and leaves the source
-in place, which is why `TC-LOGIN-1` appears in three places in the target tree —
-inside `smoke.checkout.json` where it was created, under `payments.json`, and
-directly under `checkout.json`. `mode` is spelled out only when a test needs
-`move`, which relocates the entity instead.
+The first call copies the existing case into the named project and leaves the
+source in place, which is why `TC-LOGIN-1` appears in exactly two places in the
+target tree — inside `smoke.checkout.json` where it was created, and under
+`payments.json`.
+
+[`mode`](#conventions-used-in-this-document) is spelled out only when a test
+needs `move`, which relocates the entity instead of duplicating it. Note the two
+constraints the placement routes carry, both of which the generator must respect:
+
+- A placement addresses the entity by its bare identifier, so it must resolve to
+  **exactly one** home. Copying `TC-LOGIN-1` a second time — into
+  `checkout.json` after the copy above already gave it a second home — answers
+  `409` (`This identifier is used by 2 parents …`), not `201`. Placement is
+  therefore a one-way operation from the case's original home; the generator
+  records where each entity lives and never re-addresses an ambiguous identifier.
+- Placing **onto** an identifier the target parent already holds also answers
+  `409` (`The target parent already holds a child with this identifier`), because
+  the case folder is named by the `testCaseId` verbatim and a second copy would
+  collide with the first. Running the seed twice onto one volume fails here by
+  design; teardown runs first.
 
 ### Step 12 — validation of the seeded environment
 
