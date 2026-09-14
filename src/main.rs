@@ -8,10 +8,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if command.as_deref() == Some("seed-auth") {
         return seed_auth(args.collect());
     }
+    if command.as_deref() == Some("unseed-auth") {
+        return unseed_auth(args.collect());
+    }
     if command.is_some() {
         return Err(format!(
-            "unknown command {:?}: the binary serves the API with no arguments, or seeds the \
-             demo accounts with `seed-auth`",
+            "unknown command {:?}: the binary serves the API with no arguments, seeds the demo \
+             accounts with `seed-auth`, or removes them again with `unseed-auth`",
             command.unwrap_or_default()
         )
         .into());
@@ -123,6 +126,105 @@ fn seed_auth(args: Vec<String>) -> Result<(), Box<dyn std::error::Error>> {
     for (project, role) in &seeded.grants_added {
         println!("seed-auth: granted {role} on {project}");
     }
+    Ok(())
+}
+
+/// `unseed-auth` — the inverse of `seed-auth`, and the auth half of the
+/// teardown of `docs/testing/seed-dataset-spec.md` §4.
+///
+/// It forgets one named account and the grants that account holds on the named
+/// projects, and nothing else: removal is by identifier and by project, never
+/// by pattern. The bootstrap account is refused outright, and an account or
+/// grant it cannot find is reported as left in place rather than guessed at —
+/// "a missed deletion is recoverable; a deleted project is not".
+///
+/// It reports what it removed and what it kept, and exits non-zero only when
+/// something it was asked to remove could not be resolved to an account it is
+/// allowed to touch.
+///
+/// ```text
+/// tucano-test unseed-auth --username viewer \
+///     --grant checkout.json --grant payments.json
+/// ```
+fn unseed_auth(args: Vec<String>) -> Result<(), Box<dyn std::error::Error>> {
+    let mut username: Option<String> = None;
+    let mut grants: Vec<String> = Vec::new();
+    let mut remove_account = true;
+
+    let mut args = args.into_iter();
+    while let Some(flag) = args.next() {
+        if flag == "--keep-account" {
+            remove_account = false;
+            continue;
+        }
+        let value = args.next().ok_or_else(|| format!("{flag} needs a value"))?;
+        match flag.as_str() {
+            "--username" => username = Some(value),
+            "--grant" => {
+                if value.is_empty() {
+                    return Err("--grant names no project".into());
+                }
+                grants.push(value);
+            }
+            other => {
+                return Err(format!(
+                    "unknown option {other:?}; expected --username, --grant or --keep-account"
+                )
+                .into());
+            }
+        }
+    }
+
+    let username = username.ok_or("unseed-auth needs --username")?;
+    if grants.is_empty() {
+        return Err(
+            "unseed-auth needs at least one --grant <project>: it removes only the grants it is \
+             told about, never every grant an account holds"
+                .into(),
+        );
+    }
+
+    let store = auth::AuthStore::new(data_dir())?;
+    let removed = auth::unseed_account(
+        &store,
+        &auth::UnseedSpec {
+            username,
+            grants,
+            remove_account,
+        },
+    )?;
+
+    if removed.account_removed {
+        println!("unseed-auth: removed account {}", removed.username);
+    } else if let Some(reason) = &removed.account_kept {
+        println!("unseed-auth: kept account {} ({reason})", removed.username);
+    }
+    for (project, role) in &removed.grants_removed {
+        println!("unseed-auth: removed the {role} grant on {project}");
+    }
+    for (project, reason) in &removed.grants_kept {
+        println!("unseed-auth: kept the grant on {project} ({reason})");
+    }
+    // A stable summary line for `scripts/teardown.mjs`, which drives this
+    // subcommand and has to tell "already gone, nothing to do" from "there is
+    // something here I am not allowed to touch". Matching the prose above would
+    // conflate the two; this says which it is outright.
+    println!(
+        "unseed-auth: account={} grants_removed={} grants_kept={}",
+        if removed.account_removed {
+            "removed"
+        } else if removed
+            .account_kept
+            .as_deref()
+            .is_some_and(auth::is_missing_account_reason)
+        {
+            "absent"
+        } else {
+            "kept"
+        },
+        removed.grants_removed.len(),
+        removed.grants_kept.len(),
+    );
     Ok(())
 }
 

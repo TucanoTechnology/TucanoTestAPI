@@ -18,7 +18,8 @@
 //! - [`bootstrap`] gives a fresh deployment its first account, and refuses to
 //!   let a server that enforces auth start with none.
 //! - [`seed`] creates the demo accounts and grants the seed dataset needs when
-//!   the API publishes no route for either.
+//!   the API publishes no route for either, and removes them again for the
+//!   teardown.
 //!
 //! Nothing outside [`store`] reaches the network or the disk, except the one
 //! secret file [`config`] may read, and nothing reads the clock on its own: the
@@ -38,7 +39,10 @@ pub use config::{
     AuthConfig, ConfigError, DEFAULT_ACCESS_TTL, DEFAULT_REFRESH_TTL, MIN_SECRET_BYTES,
 };
 pub use password::{HashError, hash_password, verify_password};
-pub use seed::{AccountSpec, SeedError, SeededAccount, parse_role, seed_account};
+pub use seed::{
+    AccountSpec, NO_SUCH_ACCOUNT, SeedError, SeededAccount, UnseedError, UnseedSpec,
+    UnseededAccount, is_missing_account_reason, parse_role, seed_account, unseed_account,
+};
 pub use session::{Principal, SessionTokens, authenticate, login, logout, refresh};
 pub use store::{AuthStore, Grants, Role, StoredRefreshToken, User};
 pub use token::{
