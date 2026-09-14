@@ -264,6 +264,85 @@ scripts/smoke.sh http://localhost:3101 # any replica, for example a canary
 
 Use it to validate a candidate build before promotion; the surrounding procedure is in [docs/deployment/canary-validation-and-rollback.md](docs/deployment/canary-validation-and-rollback.md).
 
+## Seed dataset
+
+`scripts/seed.mjs` builds the full demo environment described by
+[docs/testing/seed-dataset-spec.md](docs/testing/seed-dataset-spec.md) against a running deployment.
+Every project, suite, case, attachment, run, result, defect, milestone, configuration and import is
+produced by an HTTP call, so the resulting tree is always a shape the API itself would write — which
+makes the dataset a reference for the storage layout rather than a checked-in fixture that can drift.
+
+It needs Node.js 18+ (native `fetch` and ES modules) and a deployment started **with auth enforced**,
+because the sequence signs in as the bootstrap account and creates projects:
+
+```sh
+TUCANO_AUTH_REQUIRED=true \
+TUCANO_JWT_SECRET='<at least 32 bytes>' \
+TUCANO_BOOTSTRAP_USERNAME=admin \
+TUCANO_BOOTSTRAP_PASSWORD=admin-password \
+  docker compose up -d --build
+
+node scripts/seed.mjs http://localhost:3000
+```
+
+Environment:
+
+| Variable | Purpose |
+| --- | --- |
+| `TUCANO_BOOTSTRAP_USERNAME` / `TUCANO_BOOTSTRAP_PASSWORD` | The account the seed signs in as. Required. |
+| `TUCANO_API_URL` | Base URL, when no argument is given. The script otherwise probes `http://localhost:3100`, `http://localhost:8080/api`, then `http://localhost:3000`. |
+| `TUCANO_SEED_VIEWER_PASSWORD` | Password for the seeded non-administrator `viewer` account. |
+| `TUCANO_SEED_AUTH_CMD` | Command line that seeds the `viewer` account and its grants (see below). When unset, that step is skipped with a notice. |
+
+### Accounts and grants
+
+The API publishes no route that creates an account or records a project grant, so spec §5's second
+account cannot be created over HTTP like everything else. Instead the server binary exposes a
+subcommand that writes through the very `AuthStore` the running server reads:
+
+```sh
+TUCANO_DATA_DIR=/data ./tucano-test seed-auth \
+    --username viewer --password viewer-password \
+    --grant checkout.json=owner --grant payments.json=owner
+```
+
+It is idempotent — an account that already exists keeps its password and only the grants it is
+missing are added — and it validates each role name before writing anything. Point the seed at it
+with `TUCANO_SEED_AUTH_CMD`, for example against the Compose volume:
+
+```sh
+TUCANO_SEED_AUTH_CMD='docker compose exec -T api tucano-test seed-auth' \
+TUCANO_SEED_VIEWER_PASSWORD=viewer-password \
+  node scripts/seed.mjs http://localhost:3000
+```
+
+Afterwards the script signs in as `viewer` and asserts `GET /auth/me` reports no system
+administrator flag and the `owner` role on both projects, which proves the files are honoured by the
+server rather than merely present.
+
+### Repeated runs
+
+The seed is **not idempotent by design**: the spec fixes the identifiers it creates, and placing a
+case onto an identifier the target parent already holds is a conflict. It therefore refuses up front
+when its own identifiers are already present and tells you to clear first, rather than failing
+half-way through:
+
+```sh
+node scripts/clear-data.mjs   # then re-run scripts/seed.mjs
+```
+
+Configurations are not removed by `clear-data.mjs`, so delete `configurations/` from the volume
+before re-seeding if you want the configuration step to succeed again.
+
+### Scripts in `scripts/`
+
+| Path | Role |
+| --- | --- |
+| `smoke.sh` | Scratch CRUD round trip against a running API, for validating a candidate build |
+| `seed.mjs` | Builds the demo dataset of `docs/testing/seed-dataset-spec.md` over HTTP |
+| `clear-data.mjs` | Removes the sample data a run or seed left behind |
+| `fixtures/` | The small files the seed uploads: a case attachment, a step attachment, and the JUnit report it imports |
+
 ## Test Data Cleanup
 
 Helper scripts are provided in `scripts/` to wipe sample test data against a running API instance:
@@ -307,6 +386,7 @@ beneath it, and nothing below the HTTP layer knows about Axum:
 | `src/storage/` | The only code that touches the filesystem: the `Repository` trait, its `FileRepository` implementation (`fs.rs`), and the path layout and confinement rules (`layout.rs`) |
 | `src/domain/` | The business rules behind `TestService<R: Repository>`: validation, identifier derivation and required fields, composition, duplication, milestone progress, result import, defect links, coverage aggregation, and error translation |
 | `src/api/` | The HTTP layer: one module per resource (`projects`, `suites`, `cases`, `runs`, `milestones`, `configurations`), plus `reports.rs` for the coverage endpoint, `crud.rs` (the shared handler macros) and `error.rs` (the error envelope) |
+| `src/auth/` | Authentication: `config.rs` (the environment contract), `password.rs`, `token.rs`, `store.rs` (accounts, refresh tokens and grants below `auth/`), `session.rs` (the sign-in/refresh/sign-out rules), `bootstrap.rs` (the first account), and `seed.rs` (the demo accounts the seed dataset needs) |
 | `src/repository.rs` | Compatibility re-export of the storage types so existing imports keep resolving |
 
 `src/api.rs` no longer exists as a monolith: the HTTP surface lives in `src/api/`. The domain layer
