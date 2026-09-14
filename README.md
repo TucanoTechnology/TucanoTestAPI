@@ -377,6 +377,7 @@ Repository contribution and agent workflow rules are documented in [AGENTS.md](A
 | --- | --- |
 | [docs/architecture/rust-service-core.md](docs/architecture/rust-service-core.md) | Why Rust, the layered service design, and delivery status |
 | [docs/architecture/gui-client-boundary.md](docs/architecture/gui-client-boundary.md) | The GUI client boundary and the generated-client strategy driven by `openapi.json` |
+| [docs/architecture/wiki-structure-and-publication.md](docs/architecture/wiki-structure-and-publication.md) | The wiki decision: source of truth, publication mechanism, page inventory, and the drift-prevention rule |
 | [docs/contracts/api-compatibility.md](docs/contracts/api-compatibility.md) | File-format and endpoint compatibility rules against the legacy implementation |
 | [docs/contracts/test-case-versioning-plan.md](docs/contracts/test-case-versioning-plan.md) | Field names, snapshot shape, trigger rules, and addressing for test-case versioning and revision history |
 | [docs/contracts/file-format-versioning-plan.md](docs/contracts/file-format-versioning-plan.md) | The `formatVersion` storage marker: field, reader and writer rules, migration rules, and the rollback drill matrix |
