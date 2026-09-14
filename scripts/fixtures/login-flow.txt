@@ -1,0 +1,6 @@
+Sign-in flow notes (seeded fixture)
+
+1. Open /login.
+2. Enter a valid account.
+3. Submit the form.
+4. Expect the session cookie and a redirect to the dashboard.

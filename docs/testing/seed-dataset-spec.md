@@ -520,3 +520,25 @@ Both the seed order and the teardown order are dependency orders, not
 preferences: the tracking issues for the generator (#193), the teardown (#194),
 and the Compose wiring plus freshness check (#195) implement the sequences
 above.
+
+## 7. Implementation status
+
+`scripts/seed.mjs` implements [§3 steps 0–11](#3-generating-api-calls). It is
+deliberately **not idempotent**: the identifiers in [§2](#2-target-tree-below-tucano_data_dir)
+are fixed, and placing a case onto an identifier its target parent already holds
+is a `409`, so a second run onto the same volume cannot complete. Instead the
+script refuses up front when its own identifiers are already present and points
+at `scripts/clear-data.mjs`, which is the "refuse to run over existing data and
+require an explicit clear first" the issue allows in place of idempotence.
+
+The one exception is [§5](#5-known-gap-accounts-and-grants-have-no-http-route)'s
+accounts and grants: the API publishes no route for either, so the server binary
+grows a `seed-auth` subcommand (`src/auth/seed.rs`) that writes them through the
+same `AuthStore` the running server reads. Unlike the dataset itself it *is*
+idempotent — an existing account keeps its password and only missing grants are
+added. The script invokes it through `TUCANO_SEED_AUTH_CMD`, skips the step with
+a notice when that is unset, and then performs the `GET /auth/me` assertion that
+closes the loop.
+
+[§3 step 12](#step-12--validation-of-the-seeded-environment) is out of scope
+here by design and belongs to #195.

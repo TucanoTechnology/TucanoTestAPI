@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- JUnit fixture for the seeded nightly-import run.
+
+     The importer names a case by its `classname` and `name`, joined with a dot
+     when a classname is present, so the two testcases here use no classname and
+     are named exactly by the seeded test case identifiers. The first passes and
+     the second fails, so the imported results agree with the run's own. -->
+<testsuites>
+  <testsuite name="checkout" tests="2" failures="1" timestamp="1757800000">
+    <testcase name="TC-LOGIN-1" time="1.2"/>
+    <testcase name="TC-CART-1" time="0.4">
+      <failure message="item missing">Cart shows zero items</failure>
+    </testcase>
+  </testsuite>
+</testsuites>
