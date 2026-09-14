@@ -602,5 +602,13 @@ Repository contribution and agent workflow rules are documented in [AGENTS.md](A
 | [docs/testing/seed-dataset-spec.md](docs/testing/seed-dataset-spec.md) | The demo/seed dataset: the feature coverage matrix, the target tree below `TUCANO_DATA_DIR`, the API calls that produce it, and the teardown scope |
 | [docs/wiki/README.md](docs/wiki/README.md) | **User wiki** — index of the user-facing guides: installation, feature how-to, API quickstart, and operations |
 | [docs/wiki/getting-started.md](docs/wiki/getting-started.md) | Install the Compose stack, verify it is up, turn authentication on, and create a first project, suite and case (#171) |
+| [docs/wiki/projects-suites-and-cases.md](docs/wiki/projects-suites-and-cases.md) | The container hierarchy, parent-scoped creation, and how membership is stored as folders (#172) |
+| [docs/wiki/steps-and-attachments.md](docs/wiki/steps-and-attachments.md) | Structured test steps, case attachments, and per-step attachments (#172) |
+| [docs/wiki/composing-and-duplicating.md](docs/wiki/composing-and-duplicating.md) | `copy` versus `move` inclusion semantics and duplication (#172) |
+| [docs/wiki/tags-and-configurations.md](docs/wiki/tags-and-configurations.md) | Tagging projects, suites, cases, and runs; the shared `?tags=` filter; environment configurations (#172) |
+| [docs/wiki/test-runs-and-results.md](docs/wiki/test-runs-and-results.md) | Point-in-time runs, recording results, and defect links (#172) |
+| [docs/wiki/imports-and-reports.md](docs/wiki/imports-and-reports.md) | JUnit XML and JSON import, plus the coverage and summary reports (#172) |
+| [docs/wiki/milestones.md](docs/wiki/milestones.md) | Milestone progress derived from referenced runs (#172) |
+| [docs/wiki/case-versioning-and-history.md](docs/wiki/case-versioning-and-history.md) | The `version` stamp, `revisions/` snapshots, and the history endpoints (#172) |
 | [docs/roadmap.md](docs/roadmap.md) | The roadmap ordered by delivery priority, with the tracking issue for each item |
 | [AgentRules/](AgentRules/) | Organisation-wide engineering and process rules |
