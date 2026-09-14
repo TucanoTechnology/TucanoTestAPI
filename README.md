@@ -387,5 +387,6 @@ Repository contribution and agent workflow rules are documented in [AGENTS.md](A
 | [docs/security/threat-model.md](docs/security/threat-model.md) | Trust boundaries, abuse cases, and security invariants |
 | [docs/security/authentication-decision.md](docs/security/authentication-decision.md) | The authentication decision and its implemented tracking ticket (#130) |
 | [docs/security/scanning-policy.md](docs/security/scanning-policy.md) | The dependency-audit, secret-scan, container-scan, and SBOM policy CI enforces |
+| [docs/testing/seed-dataset-spec.md](docs/testing/seed-dataset-spec.md) | The demo/seed dataset: the feature coverage matrix, the target tree below `TUCANO_DATA_DIR`, the API calls that produce it, and the teardown scope |
 | [docs/roadmap.md](docs/roadmap.md) | The roadmap ordered by delivery priority, with the tracking issue for each item |
 | [AgentRules/](AgentRules/) | Organisation-wide engineering and process rules |
