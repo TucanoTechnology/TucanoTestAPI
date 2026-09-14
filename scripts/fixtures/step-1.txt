@@ -1,0 +1,3 @@
+Step 0 expectation for the locked-account case (seeded fixture)
+
+The sign-in form is shown with an empty username and password field.
