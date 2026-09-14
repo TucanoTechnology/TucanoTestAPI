@@ -375,8 +375,6 @@ Repository contribution and agent workflow rules are documented in [AGENTS.md](A
 
 | Document | Purpose |
 | --- | --- |
-| [docs/wiki/README.md](docs/wiki/README.md) | **User wiki** — installation, feature guides, API quickstart, and operations |
-| [docs/architecture/documentation-strategy.md](docs/architecture/documentation-strategy.md) | Where user documentation lives, how it is published, and the rule that keeps it current |
 | [docs/architecture/rust-service-core.md](docs/architecture/rust-service-core.md) | Why Rust, the layered service design, and delivery status |
 | [docs/architecture/gui-client-boundary.md](docs/architecture/gui-client-boundary.md) | The GUI client boundary and the generated-client strategy driven by `openapi.json` |
 | [docs/architecture/adr-object-storage.md](docs/architecture/adr-object-storage.md) | ADR: why object storage (S3) is declined as a persistence backend and the file-based invariant is upheld (#181) |
@@ -391,5 +389,6 @@ Repository contribution and agent workflow rules are documented in [AGENTS.md](A
 | [docs/security/configuration-decision.md](docs/security/configuration-decision.md) | The configuration and secrets decision (#187): environment variables versus a unified file, precedence, and key management |
 | [docs/security/scanning-policy.md](docs/security/scanning-policy.md) | The dependency-audit, secret-scan, container-scan, and SBOM policy CI enforces |
 | [docs/testing/seed-dataset-spec.md](docs/testing/seed-dataset-spec.md) | The demo/seed dataset: the feature coverage matrix, the target tree below `TUCANO_DATA_DIR`, the API calls that produce it, and the teardown scope |
+| [docs/wiki/README.md](docs/wiki/README.md) | **User wiki** — index of the user-facing guides: installation, feature how-to, API quickstart, and operations |
 | [docs/roadmap.md](docs/roadmap.md) | The roadmap ordered by delivery priority, with the tracking issue for each item |
 | [AgentRules/](AgentRules/) | Organisation-wide engineering and process rules |
