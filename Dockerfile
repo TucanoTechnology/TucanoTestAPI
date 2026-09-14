@@ -8,9 +8,19 @@ COPY src ./src
 COPY openapi.json swagger.html ./
 RUN cargo build --release
 
-FROM debian:trixie-slim
+# The base image is pulled by digest rather than by tag so the cache key is the
+# published image instead of whatever happens to be cached locally.
+FROM debian:trixie-slim@sha256:abc9cb88a5587630d7f915f47b23b0668fe250fbfc6457aa4d52b534c1bbf73f
 
 ARG BUILD_NUMBER=local
+
+# CACHE_BUSTER is deliberately bumped whenever the scan reports a fixed CVE.
+# The apt index is fetched inside this layer, so without a change to this
+# argument Docker reuses the cached layer, `apt-get upgrade` never sees patch
+# releases published after the layer was written, and the image keeps reporting
+# fixes it cannot reach. Changing it guarantees a fresh index, which is what
+# makes "rebuild to pick up security updates" actually work.
+ARG CACHE_BUSTER=2026-09-14
 
 RUN apt-get update \
     && apt-get upgrade --yes \
