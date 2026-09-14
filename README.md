@@ -375,6 +375,8 @@ Repository contribution and agent workflow rules are documented in [AGENTS.md](A
 
 | Document | Purpose |
 | --- | --- |
+| [docs/wiki/README.md](docs/wiki/README.md) | **User wiki** — installation, feature guides, API quickstart, and operations |
+| [docs/architecture/documentation-strategy.md](docs/architecture/documentation-strategy.md) | Where user documentation lives, how it is published, and the rule that keeps it current |
 | [docs/architecture/rust-service-core.md](docs/architecture/rust-service-core.md) | Why Rust, the layered service design, and delivery status |
 | [docs/architecture/gui-client-boundary.md](docs/architecture/gui-client-boundary.md) | The GUI client boundary and the generated-client strategy driven by `openapi.json` |
 | [docs/contracts/api-compatibility.md](docs/contracts/api-compatibility.md) | File-format and endpoint compatibility rules against the legacy implementation |
