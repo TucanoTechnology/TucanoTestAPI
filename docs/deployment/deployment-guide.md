@@ -136,6 +136,36 @@ With `read_only: true` the secret file must be mounted read-only, for example
 band. See [docs/security/authentication-decision.md](../security/authentication-decision.md) and the
 threat model's "Known limitations" before exposing the service beyond a trusted network.
 
+### The configuration file
+
+Every setting the table above names can also come from an optional JSON file, named by the
+environment-only `TUCANO_CONFIG_FILE`. The model and its rationale are the decision of record,
+[docs/security/configuration-decision.md](../security/configuration-decision.md); the shipped
+template is [`config.example.json`](config.example.json), and a unit test parses it so the example
+cannot drift from the schema the server implements.
+
+```sh
+--env TUCANO_CONFIG_FILE=/etc/tucano-test/config.json \
+--mount type=bind,src=/etc/tucano-test/config.json,dst=/etc/tucano-test/config.json,readonly
+```
+
+| Property | Rule |
+| --- | --- |
+| When it is read | Once at startup, before the listener binds. A bad or unreadable file stops startup; it never becomes a request failure. |
+| Precedence | Resolved **per key**: environment, then file, then the built-in default. A file may supply one setting while the environment supplies another. |
+| Version marker | `version` is mandatory and must be `1`. Any other value is refused by number rather than half-read. |
+| Unknown keys | Refused. A typo'd key name is a startup error instead of a setting that silently never applies. |
+| Absence | No `TUCANO_CONFIG_FILE` means no file is consulted at all: the pre-file behaviour, unchanged. There is no implicit default path. |
+| Writes | None, ever. The file is read-only for the process and the service never creates one, which keeps `read_only: true` intact. |
+| Secrets | Permitted in the file, but no secret may exist *only* there — it must also be reachable from the environment. Inline and file forms of the secret together are a conflict, and fewer than 32 bytes is refused. |
+| Error text | Names the setting, never the value: no secret, no raw file path and no file contents appear in a log line, an error envelope or a response. |
+
+`TUCANO_DATA_DIR`, `PORT` and `TUCANO_CONFIG_FILE` itself stay environment-only: all three must be
+readable *before* the file can be located, and the orchestrator owns them. Mounting the file
+read-only matches the secret-file pattern above; a deployment that keeps all settings in the
+environment simply leaves `TUCANO_CONFIG_FILE` unset. Encrypted configuration files are decided but
+deferred — see the decision document.
+
 ## Container hardening
 
 The Compose service and the standalone `docker run` examples in the promotion runbook both use the
@@ -235,6 +265,8 @@ makes the failure recoverable. The decision table and the snapshot command live 
 - [ ] Multi-node deployments: shared storage with working advisory locks; no per-replica volumes.
 - [ ] Authentication decided: either the historic `TUCANO_AUTH_REQUIRED`-unset shape, or a signing
       secret plus a provisioned `$TUCANO_DATA_DIR/auth/` tree.
+- [ ] Configuration decided: environment-only (no `TUCANO_CONFIG_FILE`), or a `version: 1` file
+      mounted read-only, with every secret it names also reachable from the environment.
 - [ ] Rollback target (`PREVIOUS` tag) recorded, and a volume snapshot taken if the release changes a
       stored document's shape, strictness or validation.
 
@@ -242,6 +274,8 @@ makes the failure recoverable. The decision table and the snapshot command live 
 | --- | --- |
 | [`docker-compose.yml`](../../docker-compose.yml) | The `api` and `gui` service definitions, volume mount, hardening and resource limits. |
 | [`Dockerfile`](../../Dockerfile) | Image build, `TUCANO_DATA_DIR=/data`, `PORT=3000`, unprivileged uid 10001, `VOLUME ["/data"]`. |
+| [`config.example.json`](config.example.json) | The optional configuration-file template, kept valid against the loader's schema by a unit test. |
+| [`docs/security/configuration-decision.md`](../security/configuration-decision.md) | The configuration and secrets decision: precedence, key management, and the deferred encrypted format. |
 | [`.github/workflows/release.yml`](../../.github/workflows/release.yml) | Publishes the immutable SemVer and `build-<run number>` tags to GHCR. |
 | [`docs/deployment/canary-validation-and-rollback.md`](canary-validation-and-rollback.md) | Canary promotion, the scratch-CRUD smoke check, and the rollback procedure. |
 | [`docs/contracts/api-compatibility.md`](../contracts/api-compatibility.md) | The file-format and compatibility rules a rollback depends on. |

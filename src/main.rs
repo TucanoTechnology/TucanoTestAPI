@@ -1,4 +1,4 @@
-use tucano_test::{api, auth, repository};
+use tucano_test::{api, auth, config, repository};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -17,14 +17,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .into());
     }
 
+    // The optional file is read once, here, before the listener binds: the ADR
+    // puts it in the same class as the environment, resolved at startup into an
+    // immutable value, so a bad one is a startup failure rather than a request
+    // failure. No `TUCANO_CONFIG_FILE` means no file, which is the pre-file
+    // behaviour of every deployment that predates this module.
+    let file = config::load_from_env()?;
+
     let data_dir = data_dir();
-    let port = std::env::var("PORT").unwrap_or_else(|_| "3000".to_owned());
+    let port = port();
     let repository = repository::FileRepository::new(data_dir.clone())?;
 
-    let config = auth::AuthConfig::from_env()?;
+    let auth_config = auth::AuthConfig::from_env_and_file(file.as_ref())?;
     let store = auth::AuthStore::new(&data_dir)?;
-    auth::ensure_bootstrap_user(&store, &config, now_seconds())?;
-    let authentication = api::auth::AuthState::new(store, config);
+    auth::ensure_bootstrap_user(&store, &auth_config, now_seconds())?;
+    let authentication = api::auth::AuthState::new(store, auth_config);
 
     let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{port}")).await?;
     axum::serve(listener, api::router(repository, authentication)).await?;
@@ -33,10 +40,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 /// The data directory the server would use, so `seed-auth` writes where the
 /// server reads.
+///
+/// `TUCANO_DATA_DIR` stays environment-only: it decides where the data volume
+/// is, and the orchestrator must be able to set it before anything else —
+/// including the configuration file — can be located.
 fn data_dir() -> std::path::PathBuf {
     std::env::var_os("TUCANO_DATA_DIR")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| std::path::PathBuf::from("data"))
+}
+
+/// The port the listener binds, environment-only for the same reason as
+/// [`data_dir`]: the orchestrator owns it, and it must be known before a file
+/// could be read.
+fn port() -> String {
+    std::env::var("PORT").unwrap_or_else(|_| "3000".to_owned())
 }
 
 /// `seed-auth` — creates the demo account and grants of `docs/testing/seed-dataset-spec.md` §5.

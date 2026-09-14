@@ -16,6 +16,8 @@ use std::error::Error;
 use std::fmt::{self, Display, Formatter};
 use std::time::Duration;
 
+use crate::config::ConfigFile;
+
 /// The smallest HS256 signing secret the server will start with, in bytes.
 ///
 /// A key shorter than the digest it feeds weakens the signature below what the
@@ -54,6 +56,16 @@ pub struct AuthConfig {
 }
 
 impl AuthConfig {
+    /// Resolves the configuration from the process environment layered over the
+    /// optional configuration file.
+    ///
+    /// # Errors
+    ///
+    /// Any [`ConfigError`]; the caller is expected to abort startup.
+    pub fn from_env_and_file(file: Option<&ConfigFile>) -> Result<Self, ConfigError> {
+        Self::from_lookup_and_file(|key| env::var(key).ok(), file)
+    }
+
     /// Resolves the configuration from the process environment.
     ///
     /// # Errors
@@ -70,6 +82,51 @@ impl AuthConfig {
     ///
     /// Any [`ConfigError`].
     pub fn from_lookup(lookup: impl Fn(&str) -> Option<String>) -> Result<Self, ConfigError> {
+        Self::from_lookup_and_file(lookup, None)
+    }
+
+    /// Resolves the configuration from `lookup` layered over `file`, applying
+    /// the ADR's precedence **per key**: the environment wins, the file is
+    /// consulted next, and the built-in default applies last.
+    ///
+    /// Both sources arrive as parameters, so this stays a pure function and the
+    /// whole precedence matrix is testable without touching the process
+    /// environment — which edition 2024 and the crate's `unsafe_code` ban make
+    /// impossible anyway.
+    ///
+    /// # Errors
+    ///
+    /// Any [`ConfigError`].
+    pub fn from_lookup_and_file(
+        lookup: impl Fn(&str) -> Option<String>,
+        file: Option<&ConfigFile>,
+    ) -> Result<Self, ConfigError> {
+        // A file value is already typed where the schema could type it, and
+        // carried as text where the environment's spelling is text; the two are
+        // reconciled by rendering the file's value into the same form the
+        // environment would have supplied, so every branch below parses exactly
+        // one way.
+        let file_lookup = |key: &str| -> Option<String> {
+            let file = file?;
+            match key {
+                "TUCANO_AUTH_REQUIRED" => file.auth_required.map(|flag| flag.to_string()),
+                "TUCANO_JWT_SECRET" => file.jwt_secret.clone(),
+                "TUCANO_JWT_SECRET_FILE" => file.jwt_secret_file.clone(),
+                "TUCANO_ACCESS_TOKEN_TTL" => file.access_token_ttl.clone(),
+                "TUCANO_REFRESH_TOKEN_TTL" => file.refresh_token_ttl.clone(),
+                "TUCANO_BOOTSTRAP_USERNAME" => file.bootstrap_username.clone(),
+                "TUCANO_BOOTSTRAP_PASSWORD" => file.bootstrap_password.clone(),
+                _ => None,
+            }
+        };
+        let lookup = |key: &str| lookup(key).or_else(|| file_lookup(key));
+
+        Self::from_single_lookup(lookup)
+    }
+
+    /// The body of the resolver: one lookup, already layered, read in the
+    /// documented order — the flag, then the lifetimes, then the secret.
+    fn from_single_lookup(lookup: impl Fn(&str) -> Option<String>) -> Result<Self, ConfigError> {
         let required = match lookup("TUCANO_AUTH_REQUIRED") {
             Some(raw) => parse_bool(&raw)?,
             None => false,
@@ -446,5 +503,164 @@ mod tests {
                 "{lone:?}: {error:?}"
             );
         }
+    }
+
+    /// A configuration file holding every auth setting, parsed from text so the
+    /// schema is exercised rather than bypassed by struct literals.
+    fn file(json: &str) -> ConfigFile {
+        ConfigFile::parse(json).expect("configuration file")
+    }
+
+    /// Resolves the environment `pairs` layered over `file`, the way the binary
+    /// does.
+    fn layered(
+        pairs: &[(&str, &str)],
+        file: Option<&ConfigFile>,
+    ) -> Result<AuthConfig, ConfigError> {
+        AuthConfig::from_lookup_and_file(
+            |key| {
+                pairs
+                    .iter()
+                    .find(|(name, _)| *name == key)
+                    .map(|(_, value)| (*value).to_owned())
+            },
+            file,
+        )
+    }
+
+    #[test]
+    fn an_absent_file_behaves_exactly_like_the_environment_alone() {
+        // The DoD's "absence of the file preserves current behaviour": the
+        // pre-file resolver and the layered one must agree on every branch.
+        for pairs in [
+            vec![],
+            vec![
+                ("TUCANO_AUTH_REQUIRED", "true"),
+                ("TUCANO_JWT_SECRET", SECRET_OK),
+            ],
+            vec![("TUCANO_JWT_SECRET", "too-short")],
+            vec![("TUCANO_BOOTSTRAP_USERNAME", "admin")],
+        ] {
+            let before = config(&pairs);
+            let after = layered(&pairs, None);
+            match (before, after) {
+                (Ok(before), Ok(after)) => {
+                    assert_eq!(before.required, after.required, "{pairs:?}");
+                    assert_eq!(before.jwt_secret, after.jwt_secret, "{pairs:?}");
+                    assert_eq!(before.access_ttl, after.access_ttl, "{pairs:?}");
+                    assert_eq!(
+                        before.bootstrap_username, after.bootstrap_username,
+                        "{pairs:?}"
+                    );
+                }
+                (Err(_), Err(_)) => {}
+                (before, after) => {
+                    panic!("{pairs:?}: an absent file changed the outcome: {before:?} / {after:?}")
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn the_file_supplies_a_setting_the_environment_omits() {
+        let file = file(
+            r#"{"version": 1, "auth_required": true, "jwt_secret":
+                "a-test-secret-long-enough-for-hs256", "access_token_ttl": "30m"}"#,
+        );
+        let config = layered(&[], Some(&file)).expect("config");
+        assert!(config.required);
+        assert_eq!(config.access_ttl, Duration::from_secs(1_800));
+    }
+
+    #[test]
+    fn precedence_is_resolved_per_key_not_per_source() {
+        // The ADR's worked example: one value from the file, another from the
+        // environment, and both take effect.
+        let file = file(r#"{"version": 1, "access_token_ttl": "30m"}"#);
+        let config = layered(&[("TUCANO_JWT_SECRET", SECRET_OK)], Some(&file)).expect("config");
+        assert_eq!(
+            config.jwt_secret.as_deref(),
+            Some(SECRET_OK.as_bytes()),
+            "the environment supplies the secret"
+        );
+        assert_eq!(
+            config.access_ttl,
+            Duration::from_secs(1_800),
+            "the file supplies the lifetime"
+        );
+    }
+
+    #[test]
+    fn the_environment_wins_over_the_file_for_the_same_key() {
+        let file = file(r#"{"version": 1, "access_token_ttl": "1h"}"#);
+        let config = layered(&[("TUCANO_ACCESS_TOKEN_TTL", "5m")], Some(&file)).expect("config");
+        assert_eq!(config.access_ttl, Duration::from_secs(300));
+    }
+
+    #[test]
+    fn the_environment_supplies_the_secret_even_when_the_file_holds_one() {
+        // "No secret may exist *only* in the file": where both sources carry a
+        // secret, the environment's is the one that is used.
+        let file = file(r#"{"version": 1, "jwt_secret": "a-file-secret-value-here-32-bytes"}"#);
+        let config = layered(&[("TUCANO_JWT_SECRET", SECRET_OK)], Some(&file)).expect("config");
+        assert_eq!(config.jwt_secret.as_deref(), Some(SECRET_OK.as_bytes()));
+    }
+
+    #[test]
+    fn a_secret_split_across_the_two_sources_still_conflicts() {
+        // The both-sources refusal must not be defeatable by putting one half
+        // in the file and the other in the environment.
+        let file = file(r#"{"version": 1, "jwt_secret": "a-file-secret-value-here-32-bytes"}"#);
+        let error = layered(
+            &[("TUCANO_JWT_SECRET_FILE", "/tmp/never-read")],
+            Some(&file),
+        )
+        .expect_err("both sources");
+        assert!(
+            matches!(error, ConfigError::SecretSourcesConflict),
+            "{error:?}"
+        );
+    }
+
+    #[test]
+    fn a_file_secret_short_of_the_floor_refuses_to_start() {
+        let file = file(r#"{"version": 1, "jwt_secret": "too-short"}"#);
+        let error = layered(&[], Some(&file)).expect_err("short file secret");
+        match error {
+            ConfigError::ShortSecret { length } => assert_eq!(length, "too-short".len()),
+            other => panic!("expected a short-secret error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_bad_lifetime_in_the_file_refuses_to_start() {
+        let file = file(r#"{"version": 1, "access_token_ttl": "0"}"#);
+        let error = layered(&[], Some(&file)).expect_err("zero lifetime");
+        match error {
+            ConfigError::InvalidTtl { key, .. } => assert_eq!(key, "TUCANO_ACCESS_TOKEN_TTL"),
+            other => panic!("expected a lifetime error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_bootstrap_pair_may_be_completed_across_the_two_sources() {
+        let file = file(r#"{"version": 1, "bootstrap_username": "admin"}"#);
+        let config =
+            layered(&[("TUCANO_BOOTSTRAP_PASSWORD", "hunter2")], Some(&file)).expect("config");
+        assert_eq!(config.bootstrap_username.as_deref(), Some("admin"));
+        assert_eq!(config.bootstrap_password.as_deref(), Some("hunter2"));
+    }
+
+    #[test]
+    fn no_startup_error_from_the_file_layer_carries_a_secret_value() {
+        // The other half of the ADR's non-negotiable rule: the message names
+        // the setting, never the value, no matter which source supplied it.
+        let file = file(r#"{"version": 1, "jwt_secret": "too-short"}"#);
+        let error = layered(&[], Some(&file)).expect_err("short secret");
+        let rendered = error.to_string();
+        assert!(
+            !rendered.contains("too-short"),
+            "a startup error must not echo a secret value: {rendered}"
+        );
     }
 }
