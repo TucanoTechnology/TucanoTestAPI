@@ -384,6 +384,7 @@ Repository contribution and agent workflow rules are documented in [AGENTS.md](A
 | [docs/deployment/canary-validation-and-rollback.md](docs/deployment/canary-validation-and-rollback.md) | Canary validation, the scratch-CRUD smoke check, and safe rollback |
 | [docs/security/threat-model.md](docs/security/threat-model.md) | Trust boundaries, abuse cases, and security invariants |
 | [docs/security/authentication-decision.md](docs/security/authentication-decision.md) | The authentication decision and its implemented tracking ticket (#130) |
+| [docs/security/configuration-decision.md](docs/security/configuration-decision.md) | The configuration and secrets decision (#187): environment variables versus a unified file, precedence, and key management |
 | [docs/security/scanning-policy.md](docs/security/scanning-policy.md) | The dependency-audit, secret-scan, container-scan, and SBOM policy CI enforces |
 | [docs/roadmap.md](docs/roadmap.md) | The roadmap ordered by delivery priority, with the tracking issue for each item |
 | [AgentRules/](AgentRules/) | Organisation-wide engineering and process rules |
