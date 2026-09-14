@@ -209,6 +209,9 @@ writable by any authenticated caller.
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
+| `TUCANO_DATA_DIR` | `./data` | The only state: where projects, cases, runs and the `auth/` store live. Environment-only. |
+| `PORT` | `3000` | The port the API binds. Environment-only. |
+| `TUCANO_CONFIG_FILE` | — | Path to the optional configuration file described below. Environment-only; unset means no file. |
 | `TUCANO_AUTH_REQUIRED` | `false` | Require and enforce a bearer token on every guarded route. When off, every guard returns and the API is anonymous. |
 | `TUCANO_JWT_SECRET` | — | The HS256 signing secret. Required when auth is on; at least 32 bytes. |
 | `TUCANO_JWT_SECRET_FILE` | — | A file to read the secret from. Set this **or** `TUCANO_JWT_SECRET`, never both. |
@@ -221,6 +224,57 @@ Accounts and grants live beside the data, under `TUCANO_DATA_DIR/auth/`; the dep
 database-free. The decision of record is
 [docs/security/authentication-decision.md](docs/security/authentication-decision.md) and the
 enforcement matrix lives in `tests/auth.rs`.
+
+### Configuration file
+
+Every setting above can also be supplied by an optional JSON file named by `TUCANO_CONFIG_FILE`.
+The file is read **once at startup**, before the listener binds, into an immutable value: a file the
+server cannot read, cannot parse, or does not recognise is a startup failure, never a request
+failure and never a silent fallback. The model and its rationale are in
+[docs/security/configuration-decision.md](docs/security/configuration-decision.md); the template is
+[docs/deployment/config.example.json](docs/deployment/config.example.json):
+
+```json
+{
+  "version": 1,
+  "auth_required": true,
+  "jwt_secret": null,
+  "jwt_secret_file": "/run/secrets/jwt",
+  "access_token_ttl": "15m",
+  "refresh_token_ttl": "14d",
+  "bootstrap_username": null,
+  "bootstrap_password": null
+}
+```
+
+```sh
+TUCANO_CONFIG_FILE=/etc/tucano-test/config.json \
+  ./tucano-test
+```
+
+- **Precedence is resolved per key, not per source: environment, then file, then the built-in
+  default.** A file that sets `access_token_ttl` while the environment sets `TUCANO_JWT_SECRET`
+  applies both; the environment wins only where the two name the same setting.
+- **`version` is mandatory and must be `1`.** A file declaring another version is refused by number
+  rather than half-read.
+- **Unknown keys are refused.** A typo in a key name is a startup error instead of a setting that
+  silently never applies.
+- **Absence changes nothing.** With `TUCANO_CONFIG_FILE` unset no file is consulted at all, so an
+  existing environment-only deployment behaves exactly as before. There is deliberately no implicit
+  default path — a stray file in a writable directory must not be able to change a deployment
+  silently.
+- **Nothing is ever written back.** The file is read-only for the process, which keeps the container's
+  `read_only: true` root filesystem intact, and the service never creates a configuration file.
+- **A secret may appear in the file, but never *only* there** — it must still be reachable from the
+  environment, so key material can always come from an orchestrator-managed secret. A secret given
+  both inline and by file is refused as a conflict, and one shorter than 32 bytes is refused.
+- **Startup errors name the setting and never the value.** No error line, log record, or response
+  contains a secret's value, the configuration file's raw path, or its contents.
+
+`TUCANO_DATA_DIR`, `PORT` and `TUCANO_CONFIG_FILE` itself stay environment-only: all three must be
+readable *before* the file can be located, and the orchestrator owns all three. Encrypted
+configuration files are decided but deferred, and are tracked in
+[docs/security/configuration-decision.md](docs/security/configuration-decision.md).
 
 The run scope of a caller is the set of projects a run's `projects` array names, so a caller that may
 write a run could narrow its own later scope by editing that array. Tracked as a known weakness in
@@ -386,7 +440,8 @@ beneath it, and nothing below the HTTP layer knows about Axum:
 | `src/storage/` | The only code that touches the filesystem: the `Repository` trait, its `FileRepository` implementation (`fs.rs`), and the path layout and confinement rules (`layout.rs`) |
 | `src/domain/` | The business rules behind `TestService<R: Repository>`: validation, identifier derivation and required fields, composition, duplication, milestone progress, result import, defect links, coverage aggregation, and error translation |
 | `src/api/` | The HTTP layer: one module per resource (`projects`, `suites`, `cases`, `runs`, `milestones`, `configurations`), plus `reports.rs` for the coverage endpoint, `crud.rs` (the shared handler macros) and `error.rs` (the error envelope) |
-| `src/auth/` | Authentication: `config.rs` (the environment contract), `password.rs`, `token.rs`, `store.rs` (accounts, refresh tokens and grants below `auth/`), `session.rs` (the sign-in/refresh/sign-out rules), `bootstrap.rs` (the first account), and `seed.rs` (the demo accounts the seed dataset needs) |
+| `src/auth/` | Authentication: `config.rs` (the settings contract and the environment-over-file precedence), `password.rs`, `token.rs`, `store.rs` (accounts, refresh tokens and grants below `auth/`), `session.rs` (the sign-in/refresh/sign-out rules), `bootstrap.rs` (the first account), and `seed.rs` (the demo accounts the seed dataset needs) |
+| `src/config.rs` | The optional startup configuration file: its versioned strict schema, the loader, and the environment-over-file precedence rule |
 | `src/repository.rs` | Compatibility re-export of the storage types so existing imports keep resolving |
 
 `src/api.rs` no longer exists as a monolith: the HTTP surface lives in `src/api/`. The domain layer
@@ -462,7 +517,8 @@ Repository contribution and agent workflow rules are documented in [AGENTS.md](A
 | [docs/contracts/api-compatibility.md](docs/contracts/api-compatibility.md) | File-format and endpoint compatibility rules against the legacy implementation |
 | [docs/contracts/test-case-versioning-plan.md](docs/contracts/test-case-versioning-plan.md) | Field names, snapshot shape, trigger rules, and addressing for test-case versioning and revision history |
 | [docs/contracts/file-format-versioning-plan.md](docs/contracts/file-format-versioning-plan.md) | The `formatVersion` storage marker: field, reader and writer rules, migration rules, and the rollback drill matrix |
-| [docs/deployment/deployment-guide.md](docs/deployment/deployment-guide.md) | The deployment model: the JSON volume mount, Compose configuration, container hardening, scaling, and rollback to an immutable release tag |
+| [docs/deployment/deployment-guide.md](docs/deployment/deployment-guide.md) | The deployment model: the JSON volume mount, Compose configuration, the optional configuration file, container hardening, scaling, and rollback to an immutable release tag |
+| [docs/deployment/config.example.json](docs/deployment/config.example.json) | The configuration-file template, kept valid against the loader's schema by a unit test |
 | [docs/deployment/canary-validation-and-rollback.md](docs/deployment/canary-validation-and-rollback.md) | Canary validation, the scratch-CRUD smoke check, and safe rollback |
 | [docs/security/threat-model.md](docs/security/threat-model.md) | Trust boundaries, abuse cases, and security invariants |
 | [docs/security/authentication-decision.md](docs/security/authentication-decision.md) | The authentication decision and its implemented tracking ticket (#130) |

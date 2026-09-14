@@ -110,6 +110,15 @@ These decisions must be resolved before the HTTP compatibility layer is exposed 
   file and its key) and invariants 8 and 9 were added with it. The implementation is tracked in
   #188–#190; until those land, this repository reads its configuration from the environment only,
   exactly as the *Current state* section of that decision records.
+- ✅ The configuration file's schema and loader landed (#188): `src/config.rs` reads only the file
+  named by the environment-only `TUCANO_CONFIG_FILE`, refuses an unknown key, an unsupported
+  `version`, a malformed document and an unreadable (including missing) file at startup, and none of
+  its error text carries a secret value or a raw path. Precedence is per key — environment, then
+  file, then default — and no `TUCANO_CONFIG_FILE` means no file is consulted at all, so the
+  env-only behaviour is unchanged. Invariant 8 is therefore now enforced in code rather than only
+  decided. **The file has no encryption yet**: #189's AEAD envelope and externally supplied key are
+  still pending, so a secret held in the file is in the clear and the *Configuration key* boundary
+  above is not yet exercised.
 
 ### Known limitations
 
@@ -136,7 +145,8 @@ These decisions must be resolved before the HTTP compatibility layer is exposed 
 
 - ⏳ Grant-administration endpoints (create accounts, grant roles) — no API surface yet
 - ⏳ Contract tests against Node reference implementation
-- ⏳ The configuration file: schema and loader (#188), encrypted secrets at rest (#189), and
-  precedence and validation across file, environment, and defaults (#190). The decision is recorded
-  in [configuration-decision.md](configuration-decision.md); the boundary rows, invariants, and
-  abuse cases above are the requirements those tickets must satisfy.
+- ⏳ Encrypted secrets at rest (#189) and the full precedence-and-validation matrix across file,
+  environment, and defaults (#190). The schema and loader half of the configuration file (#188) has
+  landed; the decision is recorded in [configuration-decision.md](configuration-decision.md), and
+  the boundary rows, invariants, and abuse cases above are the requirements those remaining tickets
+  must satisfy.
