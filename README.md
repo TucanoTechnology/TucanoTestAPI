@@ -527,5 +527,6 @@ Repository contribution and agent workflow rules are documented in [AGENTS.md](A
 | [docs/security/audit-scope.md](docs/security/audit-scope.md) | The security audit's scope, methodology, finding template, and severity rubric (#175) |
 | [docs/testing/seed-dataset-spec.md](docs/testing/seed-dataset-spec.md) | The demo/seed dataset: the feature coverage matrix, the target tree below `TUCANO_DATA_DIR`, the API calls that produce it, and the teardown scope |
 | [docs/wiki/README.md](docs/wiki/README.md) | **User wiki** — index of the user-facing guides: installation, feature how-to, API quickstart, and operations |
+| [docs/wiki/getting-started.md](docs/wiki/getting-started.md) | Install the Compose stack, verify it is up, turn authentication on, and create a first project, suite and case (#171) |
 | [docs/roadmap.md](docs/roadmap.md) | The roadmap ordered by delivery priority, with the tracking issue for each item |
 | [AgentRules/](AgentRules/) | Organisation-wide engineering and process rules |
