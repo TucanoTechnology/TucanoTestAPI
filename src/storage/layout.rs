@@ -5,13 +5,22 @@
 //! rules live here exactly once.
 //!
 //! Projects, suites, and cases are stored as folders that mirror their real
-//! homes; every other resource is one flat JSON document below the data root.
+//! homes. Runs, milestones and configurations are single documents stored in a
+//! collection inside the project folder that owns them, so nothing hangs below
+//! the data root except `projects/`.
 
 use std::ffi::OsString;
 use std::fs::{self, File};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
+
+/// Folder names a project reserves for its own collections.
+///
+/// A suite or a case folder taking one of these names would be created inside
+/// that collection, where its marker would be listed as a document of a
+/// resource it is not, so the name is refused instead.
+pub const RESERVED_PROJECT_CHILDREN: [&str; 3] = ["test_runs", "milestones", "configurations"];
 
 /// A resource collection known to the storage layout.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -35,24 +44,26 @@ impl Resource {
         Resource::Configurations,
     ];
 
-    /// Collections stored directly below the data root. Suites and cases are
-    /// organised inside a project folder instead, so they have no directory of
-    /// their own.
-    pub const ROOT_DIRS: [Resource; 4] = [
-        Resource::Projects,
-        Resource::Runs,
-        Resource::Milestones,
-        Resource::Configurations,
-    ];
+    /// Collections stored directly below the data root. Every other resource
+    /// lives inside a project folder, so it has no directory of its own.
+    pub const ROOT_DIRS: [Resource; 1] = [Resource::Projects];
 
     /// Directory name below the data root, for resources held there.
     pub const fn dir_name(self) -> Option<&'static str> {
         match self {
             Resource::Projects => Some("projects"),
+            _ => None,
+        }
+    }
+
+    /// Collection directory name inside the project folder that owns the
+    /// document, for the resources stored there.
+    pub const fn project_dir_name(self) -> Option<&'static str> {
+        match self {
             Resource::Runs => Some("test_runs"),
             Resource::Milestones => Some("milestones"),
             Resource::Configurations => Some("configurations"),
-            Resource::Cases | Resource::Suites => None,
+            Resource::Projects | Resource::Suites | Resource::Cases => None,
         }
     }
 
@@ -74,23 +85,35 @@ impl Resource {
         )
     }
 
-    /// Whether the resource is one flat document below the data root.
+    /// Whether the resource is stored inside the project that owns it.
+    ///
+    /// The project folder is the only home: nothing is stored on the document,
+    /// and its identifier is unique within that project rather than globally.
+    pub const fn is_project_scoped(self) -> bool {
+        self.project_dir_name().is_some()
+    }
+
+    /// Whether the resource is one flat document rather than a folder.
     pub const fn is_flat(self) -> bool {
-        self.dir_name().is_some() && !self.is_hierarchical()
+        self.is_project_scoped()
     }
 
     /// Whether an identifier of this resource ends in `.json`.
     ///
     /// Test cases are the single exception: they are addressed by a bare
     /// identifier. Every other resource is reached through a path builder that
-    /// insists on the suffix — flat documents through [`document_path`], project
-    /// and suite folders through [`node_folder`].
+    /// insists on the suffix — project-scoped documents through
+    /// [`project_document_path`], project and suite folders through
+    /// [`node_folder`].
     pub const fn id_requires_json_suffix(self) -> bool {
         !matches!(self, Resource::Cases)
     }
 }
 
-/// The parent that owns a hierarchy node: a project, or a suite inside one.
+/// The parent that owns a stored entity: a project, or a suite inside one.
+///
+/// A project owns its suites, the cases it holds directly, and every run,
+/// milestone and configuration stored in it; a suite owns only cases.
 ///
 /// Identifiers are wire ids, so `checkout.json` names the folder `checkout`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -172,20 +195,6 @@ pub fn root_dir(root: &Path, resource: Resource) -> io::Result<PathBuf> {
     Ok(path)
 }
 
-/// Path of a flat resource document addressed by `id`.
-pub fn document_path(root: &Path, resource: Resource, id: &str) -> io::Result<PathBuf> {
-    validate_component(id)?;
-    if !id.ends_with(".json") {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "resource id must end in .json",
-        ));
-    }
-    let path = root_dir(root, resource)?.join(id);
-    ensure_within(root, &path)?;
-    Ok(path)
-}
-
 /// Folder holding a single project.
 pub fn project_dir(root: &Path, project_id: &str) -> io::Result<PathBuf> {
     let path =
@@ -197,6 +206,55 @@ pub fn project_dir(root: &Path, project_id: &str) -> io::Result<PathBuf> {
 /// Marker document of a project.
 pub fn project_marker(root: &Path, project_id: &str) -> io::Result<PathBuf> {
     Ok(project_dir(root, project_id)?.join("project.json"))
+}
+
+/// Directory holding one project-scoped collection inside its project folder.
+///
+/// The directory is not created here: a write makes it on demand, and a read of
+/// a project that holds none of these documents answers with an empty listing.
+pub fn project_collection_dir(
+    root: &Path,
+    project_id: &str,
+    resource: Resource,
+) -> io::Result<PathBuf> {
+    let name = resource.project_dir_name().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "resource is not stored inside a project folder",
+        )
+    })?;
+    let path = project_dir(root, project_id)?.join(name);
+    ensure_within(root, &path)?;
+    Ok(path)
+}
+
+/// Whether `id` is usable as the name of a stored document of `resource`.
+///
+/// Every path builder insists on this, so a caller that walks the tree instead
+/// of building one path — `Repository::locate` — can refuse a hostile or
+/// unsuffixed identifier even when no project exists that could hold it.
+pub fn validate_document_id(resource: Resource, id: &str) -> io::Result<()> {
+    validate_component(id)?;
+    if resource.id_requires_json_suffix() && !id.ends_with(".json") {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "resource id must end in .json",
+        ));
+    }
+    Ok(())
+}
+
+/// Path of a project-scoped document addressed by `id`.
+pub fn project_document_path(
+    root: &Path,
+    project_id: &str,
+    resource: Resource,
+    id: &str,
+) -> io::Result<PathBuf> {
+    validate_document_id(resource, id)?;
+    let path = project_collection_dir(root, project_id, resource)?.join(id);
+    ensure_within(root, &path)?;
+    Ok(path)
 }
 
 /// Folder holding a single suite inside its project.
@@ -412,7 +470,8 @@ mod tests {
     }
 
     #[test]
-    fn every_root_directory_has_a_unique_name() {
+    fn only_projects_are_stored_below_the_data_root() {
+        assert_eq!(Resource::ROOT_DIRS, [Resource::Projects]);
         let mut names = Resource::ROOT_DIRS
             .map(|resource| resource.dir_name().expect("root dir"))
             .to_vec();
@@ -421,6 +480,13 @@ mod tests {
         names.dedup();
         assert_eq!(names.len(), count);
         assert!(names.iter().all(|name| !name.is_empty()));
+        for resource in Resource::ALL {
+            assert_eq!(
+                resource.dir_name().is_some(),
+                resource == Resource::Projects,
+                "{resource:?}"
+            );
+        }
     }
 
     #[test]
@@ -432,11 +498,28 @@ mod tests {
             );
             assert_eq!(resource.is_hierarchical(), hierarchical, "{resource:?}");
             assert_eq!(resource.is_flat(), !hierarchical, "{resource:?}");
+            assert_eq!(resource.is_project_scoped(), !hierarchical, "{resource:?}");
             assert_eq!(
                 resource.marker_name().is_some(),
                 hierarchical,
                 "{resource:?}"
             );
+        }
+    }
+
+    #[test]
+    fn project_scoped_resources_name_their_collection_directory() {
+        for (resource, name) in [
+            (Resource::Runs, "test_runs"),
+            (Resource::Milestones, "milestones"),
+            (Resource::Configurations, "configurations"),
+        ] {
+            assert_eq!(resource.project_dir_name(), Some(name), "{resource:?}");
+            assert_eq!(resource.marker_name(), None, "{resource:?}");
+            assert!(resource.id_requires_json_suffix(), "{resource:?}");
+        }
+        for resource in [Resource::Projects, Resource::Suites, Resource::Cases] {
+            assert_eq!(resource.project_dir_name(), None, "{resource:?}");
         }
     }
 
@@ -561,14 +644,112 @@ mod tests {
     }
 
     #[test]
-    fn flat_resources_are_addressed_with_a_json_suffix() {
+    fn project_scoped_documents_hang_off_their_project_folder() {
         let directory = TempDir::new().expect("temp dir");
-        let error = document_path(directory.path(), Resource::Milestones, "v1").expect_err("bare");
-        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+        let root = directory.path();
+
         assert_eq!(
-            document_path(directory.path(), Resource::Runs, "nightly.json").expect("path"),
-            directory.path().join("test_runs/nightly.json")
+            project_collection_dir(root, "checkout.json", Resource::Runs).expect("runs"),
+            root.join("projects/checkout/test_runs")
         );
+        assert_eq!(
+            project_document_path(root, "checkout.json", Resource::Runs, "nightly.json")
+                .expect("run"),
+            root.join("projects/checkout/test_runs/nightly.json")
+        );
+        assert_eq!(
+            project_document_path(root, "checkout.json", Resource::Milestones, "v1.0.json")
+                .expect("milestone"),
+            root.join("projects/checkout/milestones/v1.0.json")
+        );
+        assert_eq!(
+            project_document_path(
+                root,
+                "checkout.json",
+                Resource::Configurations,
+                "chrome.json"
+            )
+            .expect("configuration"),
+            root.join("projects/checkout/configurations/chrome.json")
+        );
+    }
+
+    #[test]
+    fn project_scoped_documents_are_addressed_with_a_json_suffix() {
+        let directory = TempDir::new().expect("temp dir");
+        let root = directory.path();
+
+        for resource in [
+            Resource::Runs,
+            Resource::Milestones,
+            Resource::Configurations,
+        ] {
+            let error =
+                project_document_path(root, "checkout.json", resource, "v1").expect_err("bare");
+            assert_eq!(error.kind(), io::ErrorKind::InvalidInput, "{resource:?}");
+        }
+    }
+
+    #[test]
+    fn a_document_identifier_is_validated_before_any_path_is_built() {
+        for resource in [
+            Resource::Runs,
+            Resource::Milestones,
+            Resource::Configurations,
+        ] {
+            assert!(
+                validate_document_id(resource, "nightly.json").is_ok(),
+                "{resource:?}"
+            );
+            for id in [
+                "nightly",
+                "",
+                ".",
+                "..",
+                "../escape.json",
+                "nested/child.json",
+            ] {
+                let error = validate_document_id(resource, id).expect_err("refused");
+                assert_eq!(
+                    error.kind(),
+                    io::ErrorKind::InvalidInput,
+                    "{resource:?} {id:?}"
+                );
+            }
+        }
+        // A test case keeps its bare identifier, and still may not traverse.
+        assert!(validate_document_id(Resource::Cases, "TC-001").is_ok());
+        assert!(validate_document_id(Resource::Cases, "../escape").is_err());
+    }
+
+    #[test]
+    fn only_project_scoped_resources_have_a_collection_directory() {
+        let directory = TempDir::new().expect("temp dir");
+        let root = directory.path();
+
+        for resource in [Resource::Projects, Resource::Suites, Resource::Cases] {
+            let error =
+                project_collection_dir(root, "checkout.json", resource).expect_err("refused");
+            assert_eq!(error.kind(), io::ErrorKind::InvalidInput, "{resource:?}");
+        }
+    }
+
+    #[test]
+    fn a_project_reserves_the_names_of_its_collections() {
+        assert_eq!(
+            RESERVED_PROJECT_CHILDREN,
+            ["test_runs", "milestones", "configurations"]
+        );
+        // Every reserved name is a collection directory of one resource, so the
+        // two lists can never drift apart.
+        let mut named = Resource::ALL
+            .iter()
+            .filter_map(|resource| resource.project_dir_name())
+            .collect::<Vec<_>>();
+        named.sort_unstable();
+        let mut reserved = RESERVED_PROJECT_CHILDREN.to_vec();
+        reserved.sort_unstable();
+        assert_eq!(named, reserved);
     }
 
     #[test]
@@ -608,6 +789,27 @@ mod tests {
                 );
             }
         }
+
+        let directory = TempDir::new().expect("temp dir");
+        let root = directory.path();
+        for resource in [
+            Resource::Runs,
+            Resource::Milestones,
+            Resource::Configurations,
+        ] {
+            for hostile in ["..", "../escape.json", "nested/child.json", "nightly"] {
+                assert!(
+                    project_document_path(root, "checkout.json", resource, hostile).is_err(),
+                    "{resource:?} {hostile:?}"
+                );
+            }
+            for hostile in ["..", "../escape.json", "nested/child.json", "checkout"] {
+                assert!(
+                    project_collection_dir(root, hostile, resource).is_err(),
+                    "{resource:?} {hostile:?}"
+                );
+            }
+        }
     }
 
     #[test]
@@ -625,10 +827,27 @@ mod tests {
 
         let directory = TempDir::new().expect("temp dir");
         let root = directory.path();
-        let runs = root.join("test_runs");
+        let runs = root.join("projects/checkout/test_runs");
         fs::create_dir_all(&runs).expect("runs dir");
         symlink("/etc/passwd", runs.join("evil.json")).expect("symlink");
-        let error = document_path(root, Resource::Runs, "evil.json").expect_err("escape");
+        let error = project_document_path(root, "checkout.json", Resource::Runs, "evil.json")
+            .expect_err("escape");
+        assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_symlinked_collection_directory_that_escapes_the_root_is_rejected() {
+        use std::os::unix::fs::symlink;
+
+        let directory = TempDir::new().expect("temp dir");
+        let root = directory.path();
+        let project = root.join("projects/checkout");
+        fs::create_dir_all(&project).expect("project dir");
+        symlink("/etc", project.join("test_runs")).expect("symlink");
+
+        let error = project_document_path(root, "checkout.json", Resource::Runs, "passwd.json")
+            .expect_err("escape");
         assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
     }
 
