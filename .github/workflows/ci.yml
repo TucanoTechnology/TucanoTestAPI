@@ -18,6 +18,20 @@ jobs:
       - name: Validate GitHub Actions workflows
         run: docker run --rm -v "$PWD:/repo:ro" --workdir /repo rhysd/actionlint:1.7.12 -color
 
+  # The seed dataset is a fixture, and this is what keeps it a fixture instead
+  # of a stale claim: every operation openapi.json publishes has to reach a row
+  # in the coverage matrix of docs/testing/seed-dataset-spec.md, or be exempted
+  # there with a reason, and every route a row names has to exist. It reads two
+  # files and starts nothing, so it is cheap enough to run on every pull
+  # request. The seeded half of the freshness check needs a running stack and
+  # stays on the local one-command path (scripts/demo.sh) — see the spec's §1.
+  matrix-integrity:
+    runs-on: [self-hosted, Linux, X64]
+    steps:
+      - uses: actions/checkout@v5
+      - name: Check the coverage matrix against the API contract
+        run: node scripts/check-matrix.mjs
+
   checks:
     runs-on: [self-hosted, Linux, X64]
     container:

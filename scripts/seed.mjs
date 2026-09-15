@@ -169,7 +169,7 @@ async function assertClear() {
   if (present.length > 0) {
     throw new Error(
       `the seed's identifiers already exist (${present.join(', ')}); ` +
-        'the seed is not idempotent — clear the data first (scripts/clear-data.mjs)',
+        'the seed is not idempotent — tear the environment down first (scripts/teardown.mjs)',
     );
   }
 }

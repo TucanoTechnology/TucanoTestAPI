@@ -816,6 +816,34 @@ project section/suite". This child introduces the shared reports module the summ
   `::a_global_report_sums_every_project_and_keeps_their_suites`), and with
   `tests/service.rs::openapi_document_matches_the_registered_routes` holding the path to the registered route.
 
+### Milestone progress: `totalCases` and the buckets need not agree (Issue #195)
+
+`GET /milestones/{id}/progress` reports `totalCases` alongside five status buckets
+(`passed`, `failed`, `blocked`, `untested`, `retest`). The two count different things, and a client that adds
+up the buckets can therefore read the payload as inconsistent. The semantics are legacy-exact and are recorded
+here so the shape is not mistaken for a defect:
+
+- **`totalCases` counts the cases the referenced runs declare, not the results they record.** `progress.rs`
+  adds `run.test_cases.len()` for every linked run that carries a declared array, so a run that declares two
+  cases and records four results contributes 2 to `totalCases` while the buckets count all four. The inverse
+  is the same rule: a declared case with no recorded result yet is counted as not-yet-passed, which is what
+  `totalCases` buys.
+- **An absent or explicitly-empty `testCases` array falls back to the counters.** When no linked run declares
+  any case, `totalCases` becomes the sum of the five buckets, so the two agree. This is the shape
+  `tests/milestones.rs::milestone_progress_aggregates_linked_test_runs` covers — it records its run through
+  the `results` array alone — and the fallback is why a run recorded that way reports coherently.
+- **`passPercentage` divides by `totalCases`.** It is `passed / totalCases * 100` (or `0.0` when `totalCases`
+  is `0`), unrounded, matching the exact-fraction figure the summary report above also publishes
+  (`33.33333333333333` rather than `33.3`). When a run's results outnumber its declared cases the percentage
+  is therefore computed from the smaller declared count.
+- **This is frozen legacy arithmetic, not new behaviour.** The computation is byte-for-byte the pre-layering
+  handler: `git show a1bf7ba^:src/api.rs` lines 677-735 carry the identical `total_cases += cases.len()` and
+  the same `if total_cases == 0 { … }` fallback, and `a1bf7ba` (the #71 split) only re-homed it.
+  `record_run_result` never touches `run.test_cases`, so the API has no path that would reconcile the two
+  counts after the fact. [#195](https://github.com/TucanoTechnology/TucanoTestAPI/issues/195) recorded it and
+  the maintainer's decision was to keep the behaviour — hence no entry here claims they must agree, and
+  `src/domain/progress.rs::compute` is unchanged.
+
 ## Summary Report Plan (Issue #95)
 
 Issue: [#95](https://github.com/TucanoTechnology/TucanoTestAPI/issues/95) — the second child of
