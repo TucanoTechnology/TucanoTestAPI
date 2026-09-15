@@ -29,6 +29,7 @@ impl FileRepository {
                 fs::create_dir_all(root.join(name))?;
             }
         }
+        refuse_legacy_layout(&root)?;
         Ok(Self { root })
     }
 
@@ -822,6 +823,61 @@ fn revision_number(name: &str) -> Option<u64> {
     digits.parse::<u64>().ok()
 }
 
+/// Refuse a data root that still holds the pre-v3 flat collections.
+///
+/// Layout v3 stores runs, milestones and configurations inside the project
+/// folder that owns them, so a root-level collection is never read or listed.
+/// Refusing to open such a root is what keeps that from being a silent `[]`.
+///
+/// The check is read-only: it counts the `*.json` documents directly inside
+/// each former root collection and reports the ones that hold any. A name
+/// beginning with `.` is skipped, which is the atomic-write temporary pattern
+/// `write_json` uses (`.tucano-<suffix>.tmp`); a subdirectory, a symlink and
+/// any other file are not documents and are left alone. An absent directory is
+/// a fresh volume and an empty one is every volume that predates the change,
+/// so neither is an error.
+fn refuse_legacy_layout(root: &Path) -> io::Result<()> {
+    let mut offenders: Vec<(&str, usize)> = Vec::new();
+    for collection in RESERVED_PROJECT_CHILDREN {
+        let directory = root.join(collection);
+        let entries = match fs::read_dir(&directory) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(error),
+        };
+        let documents = entries
+            .filter_map(Result::ok)
+            .filter(|entry| {
+                entry
+                    .file_type()
+                    .map(|kind| kind.is_file())
+                    .unwrap_or(false)
+            })
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .filter(|name| name.ends_with(".json") && !name.starts_with('.'))
+            .count();
+        if documents > 0 {
+            offenders.push((collection, documents));
+        }
+    }
+    if offenders.is_empty() {
+        return Ok(());
+    }
+    let held = offenders
+        .iter()
+        .map(|(collection, count)| format!("{collection}/ holds {count} document(s)"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    Err(io::Error::new(
+        io::ErrorKind::InvalidData,
+        format!(
+            "legacy flat storage layout detected: {held}; layout v3 stores runs, milestones and \
+             configurations inside their project folder — move each document into \
+             projects/<project>/<collection>/ and restart (docs/deployment/deployment-guide.md)"
+        ),
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -866,6 +922,137 @@ mod tests {
                 "{name} is a project collection, not a root collection"
             );
         }
+    }
+
+    #[test]
+    fn a_fresh_root_holds_only_projects() {
+        let (directory, _repository) = repository();
+
+        let mut created = fs::read_dir(directory.path())
+            .expect("root")
+            .filter_map(Result::ok)
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        created.sort();
+        assert_eq!(created, vec!["projects".to_owned()]);
+    }
+
+    #[test]
+    fn empty_legacy_collections_do_not_refuse_the_root() {
+        let directory = TempDir::new().expect("temp dir");
+        for name in RESERVED_PROJECT_CHILDREN {
+            fs::create_dir_all(directory.path().join(name)).expect("legacy collection");
+        }
+
+        FileRepository::new(directory.path()).expect("an empty legacy collection is not an error");
+    }
+
+    #[test]
+    fn a_legacy_document_refuses_the_root_and_names_only_its_collection() {
+        let directory = TempDir::new().expect("temp dir");
+        let legacy = directory.path().join("test_runs");
+        fs::create_dir_all(&legacy).expect("legacy collection");
+        fs::write(
+            legacy.join("nightly.json"),
+            b"{\"testRunId\": \"nightly.json\"}\n",
+        )
+        .expect("legacy document");
+
+        let error = FileRepository::new(directory.path())
+            .err()
+            .expect("refused");
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        let message = error.to_string();
+        assert_eq!(
+            message,
+            "legacy flat storage layout detected: test_runs/ holds 1 document(s); layout v3 \
+             stores runs, milestones and configurations inside their project folder — move each \
+             document into projects/<project>/<collection>/ and restart \
+             (docs/deployment/deployment-guide.md)"
+        );
+        assert!(!message.contains("milestones/"), "{message}");
+        assert!(!message.contains("configurations/"), "{message}");
+    }
+
+    #[test]
+    fn a_legacy_document_in_two_collections_names_both_in_layout_order() {
+        let directory = TempDir::new().expect("temp dir");
+        fs::create_dir_all(directory.path().join("test_runs")).expect("legacy collection");
+        fs::create_dir_all(directory.path().join("milestones")).expect("legacy collection");
+        fs::write(
+            directory.path().join("test_runs/nightly.json"),
+            b"{\"testRunId\": \"nightly.json\"}\n",
+        )
+        .expect("legacy document");
+        fs::write(
+            directory.path().join("test_runs/weekly.json"),
+            b"{\"testRunId\": \"weekly.json\"}\n",
+        )
+        .expect("legacy document");
+        fs::write(
+            directory.path().join("milestones/v1.0.json"),
+            b"{\"milestoneId\": \"v1.0.json\"}\n",
+        )
+        .expect("legacy document");
+
+        let error = FileRepository::new(directory.path())
+            .err()
+            .expect("refused");
+        let message = error.to_string();
+        assert!(
+            message.contains("test_runs/ holds 2 document(s), milestones/ holds 1 document(s)"),
+            "{message}"
+        );
+        assert!(!message.contains("configurations/"), "{message}");
+    }
+
+    #[test]
+    fn a_refused_root_leaves_the_legacy_document_untouched() {
+        let directory = TempDir::new().expect("temp dir");
+        let document = directory.path().join("test_runs/nightly.json");
+        let contents = b"{\n  \"testRunId\": \"nightly.json\"\n}\n";
+        fs::create_dir_all(document.parent().expect("parent")).expect("legacy collection");
+        fs::write(&document, contents).expect("legacy document");
+
+        FileRepository::new(directory.path())
+            .err()
+            .expect("refused");
+
+        assert_eq!(
+            fs::read(&document).expect("still on disk"),
+            contents,
+            "the refusal is read-only"
+        );
+    }
+
+    #[test]
+    fn a_legacy_temporary_file_does_not_refuse_the_root() {
+        let directory = TempDir::new().expect("temp dir");
+        fs::create_dir_all(directory.path().join("test_runs")).expect("legacy collection");
+        fs::write(
+            directory
+                .path()
+                .join("test_runs/.tucano-1700000000000000000.tmp"),
+            b"{\"testRunId\": \"half-written.json\"}\n",
+        )
+        .expect("temporary file");
+
+        FileRepository::new(directory.path())
+            .expect("an atomic-write temporary file is not a document");
+    }
+
+    #[test]
+    fn a_subdirectory_in_a_legacy_collection_does_not_refuse_the_root() {
+        let directory = TempDir::new().expect("temp dir");
+        let nested = directory.path().join("test_runs/nested");
+        fs::create_dir_all(&nested).expect("nested directory");
+        fs::write(
+            nested.join("nightly.json"),
+            b"{\"testRunId\": \"nightly.json\"}\n",
+        )
+        .expect("nested document");
+
+        FileRepository::new(directory.path()).expect("a directory is not a document");
     }
 
     #[test]
