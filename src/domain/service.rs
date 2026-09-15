@@ -852,6 +852,24 @@ impl<R: Repository> TestService<R> {
             .map_err(|error| error::load_error(error, entity_missing_message(resource)))
     }
 
+    /// Reads the occurrence stored in `parent`, without resolving globally.
+    ///
+    /// The caller named the home, so nothing about the request is ambiguous: an
+    /// identifier two projects hold is read from this one and never answers a
+    /// conflict, and one this parent does not hold is simply absent, reported
+    /// under `missing`. This is the home branch of the rule [`Self::document`]
+    /// applies globally, exposed for the authorization guard, which knows the
+    /// acting document's home before it dereferences a reference inside it.
+    pub fn document_in(
+        &self,
+        resource: Resource,
+        parent: &Parent,
+        id: &str,
+        missing: &str,
+    ) -> Result<Value, DomainError> {
+        self.read_document(resource, Some(parent), id, missing)
+    }
+
     // --- attachments ---------------------------------------------------
 
     /// Resolves the single test case named by `id`, so an attachment request
@@ -2892,5 +2910,63 @@ mod tests {
 
         let run = service.get(Resource::Runs, "nightly.json").expect("run");
         assert_eq!(run["results"].as_array().map(Vec::len), Some(2));
+    }
+
+    #[test]
+    fn a_parent_addressed_read_never_answers_a_conflict() {
+        let (service, _directory) = service();
+        let checkout = project(&service);
+        let billing = another_project(&service, "billing");
+        for (home, marker) in [(&checkout, "in-checkout"), (&billing, "in-billing")] {
+            service
+                .create_in(
+                    Resource::Runs,
+                    home,
+                    &json!({
+                        "name": "nightly",
+                        "testRunId": marker,
+                        "timestamp": "1"
+                    }),
+                )
+                .expect("run");
+        }
+
+        // The global read cannot choose, but a named home can.
+        assert!(matches!(
+            service
+                .document(Resource::Runs, "nightly.json")
+                .expect_err("two homes"),
+            DomainError::Conflict(_)
+        ));
+        for (home, marker) in [(&checkout, "in-checkout"), (&billing, "in-billing")] {
+            let document = service
+                .document_in(Resource::Runs, home, "nightly.json", "Test run not found")
+                .expect("the named home's occurrence");
+            assert_eq!(document["testRunId"], marker, "{home:?}");
+        }
+
+        // A home that does not hold the identifier reports the caller's own
+        // missing message, and never a conflict.
+        let platform = another_project(&service, "platform");
+        let error = service
+            .document_in(
+                Resource::Runs,
+                &platform,
+                "nightly.json",
+                "Test run not found",
+            )
+            .expect_err("this home does not hold it");
+        assert!(
+            matches!(&error, DomainError::NotFound(message) if message == "Test run not found"),
+            "{error:?}"
+        );
+
+        // So does an identifier nothing holds anywhere.
+        assert!(matches!(
+            service
+                .document_in(Resource::Runs, &billing, "ghost.json", "Test run not found")
+                .expect_err("absent"),
+            DomainError::NotFound(_)
+        ));
     }
 }
