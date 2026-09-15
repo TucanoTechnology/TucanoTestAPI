@@ -13,6 +13,15 @@
 # first deviation and always tries to remove whatever it created, so a failing
 # candidate is never left holding scratch data.
 #
+# Authentication (issue #195): on a deployment running with
+# TUCANO_AUTH_REQUIRED=true every call below needs a caller, and creating a
+# project needs a system administrator. Set SMOKE_USERNAME and SMOKE_PASSWORD
+# to the bootstrap account's credentials and the script signs in through
+# POST /auth/login and presents the access token on every request. Set
+# SMOKE_TOKEN instead to present a ready-made bearer token. With none of them
+# set the script calls the API unauthenticated, which is what a deployment with
+# authentication switched off expects.
+#
 # Requires: curl, python3.
 
 set -euo pipefail
@@ -36,6 +45,7 @@ CASE_EXPECTED="Recorded by scripts/smoke.sh"
 
 HTTP_STATUS=""
 HTTP_BODY=""
+TOKEN="${SMOKE_TOKEN:-}"
 
 fail() {
   echo "smoke: FAIL — $*" >&2
@@ -89,20 +99,42 @@ json_array_count() {
 # http <METHOD> <PATH> [JSON_BODY]; sets HTTP_STATUS and HTTP_BODY.
 http() {
   local method="$1" path="$2" body="${3:-}" output status
+  local -a auth=()
+  [ -n "$TOKEN" ] && auth=(--header "Authorization: Bearer ${TOKEN}")
   output="$(mktemp)"
   if [ -n "$body" ]; then
     status="$(curl --silent --show-error --connect-timeout 10 --max-time 30 \
       --output "$output" --write-out '%{http_code}' \
       --request "$method" --header 'Content-Type: application/json' \
+      "${auth[@]}" \
       --data "$body" "${BASE_URL}${path}")"
   else
     status="$(curl --silent --show-error --connect-timeout 10 --max-time 30 \
       --output "$output" --write-out '%{http_code}' \
-      --request "$method" "${BASE_URL}${path}")"
+      --request "$method" "${auth[@]}" "${BASE_URL}${path}")"
   fi
   HTTP_STATUS="$status"
   HTTP_BODY="$(<"$output")"
   rm -f "$output"
+}
+
+# Signs in as SMOKE_USERNAME/SMOKE_PASSWORD when SMOKE_TOKEN was not supplied.
+# Reads accessToken out of the session response; the response is the only place
+# a fresh token comes from, so a missing one is a hard failure rather than a
+# silently unauthenticated run.
+sign_in() {
+  [ -n "$TOKEN" ] && return 0
+  [ -n "${SMOKE_USERNAME:-}" ] || return 0
+  [ -n "${SMOKE_PASSWORD:-}" ] ||
+    fail "SMOKE_USERNAME is set but SMOKE_PASSWORD is not"
+
+  local body
+  body="$(printf '{"username":"%s","password":"%s"}' "$SMOKE_USERNAME" "$SMOKE_PASSWORD")"
+  http POST /auth/login "$body"
+  expect_status 200 "POST /auth/login"
+  TOKEN="$(printf '%s' "$HTTP_BODY" | json_field accessToken)"
+  [ -n "$TOKEN" ] || fail "POST /auth/login answered without an accessToken — ${HTTP_BODY}"
+  echo "smoke: signed in as ${SMOKE_USERNAME}"
 }
 
 expect_status() {
@@ -123,9 +155,11 @@ expect_json_field() {
 cleanup() {
   # Best effort: a failure above may have left the scratch case or project
   # behind. Every error is ignored so the original exit code survives.
-  curl --silent --connect-timeout 10 --max-time 30 \
+  local -a auth=()
+  [ -n "$TOKEN" ] && auth=(--header "Authorization: Bearer ${TOKEN}")
+  curl --silent --connect-timeout 10 --max-time 30 "${auth[@]}" \
     --request DELETE "${BASE_URL}/test_cases/${CASE_ID}" >/dev/null 2>&1 || true
-  curl --silent --connect-timeout 10 --max-time 30 \
+  curl --silent --connect-timeout 10 --max-time 30 "${auth[@]}" \
     --request DELETE "${BASE_URL}/projects/${PROJECT_ID}" >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
@@ -133,6 +167,8 @@ trap cleanup EXIT
 # --- Sequence ---------------------------------------------------------------
 
 echo "smoke: target ${BASE_URL}"
+
+sign_in
 
 http GET /health
 expect_status 200 "GET /health"
