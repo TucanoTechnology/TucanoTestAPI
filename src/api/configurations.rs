@@ -63,9 +63,7 @@ async fn delete_project_configuration<R: Repository>(
 ) -> Result<Json<Value>, DomainError> {
     access::require(&service, &principal, &id, Role::Editor)?;
     service.delete_in(Resource::Configurations, &Parent::Project(id), &config_id)?;
-    Ok(Json(
-        json!({ "message": "Test configuration deleted" }),
-    ))
+    Ok(Json(json!({ "message": "Test configuration deleted" })))
 }
 
 pub(crate) fn routes<R: Repository + 'static>() -> Router<AppState<R>> {
