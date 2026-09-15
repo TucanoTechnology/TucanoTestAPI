@@ -136,6 +136,11 @@ pub fn summary(results: &[TestCaseResult]) -> SummaryReport {
 
 /// Whether a run belongs in a summary report.
 ///
+/// `home` is the project the run is stored in, which counts as a match for a
+/// `?projectId=` filter even when the run's own `projects` snapshot omits it:
+/// the folder is the ownership fact, and a run executed against a project it
+/// did not record is still that project's run.
+///
 /// `milestone_runs` is the set of run identifiers the milestone filter
 /// references, resolved by the service from the milestone document before the
 /// walk, so the matching here stays free of storage. The other filters come
@@ -143,11 +148,13 @@ pub fn summary(results: &[TestCaseResult]) -> SummaryReport {
 /// to `YYYY-MM-DD`.
 pub fn run_is_in_scope(
     run: &TestRun,
+    home: &str,
     run_id: &str,
     filters: &SummaryFilters,
     milestone_runs: Option<&[String]>,
 ) -> bool {
     if let Some(project_id) = filters.project_id.as_deref()
+        && project_id != home
         && !run.projects.as_ref().is_some_and(|projects| {
             projects
                 .iter()
@@ -192,20 +199,22 @@ pub fn run_is_in_scope(
     true
 }
 
-/// Whether every project a run names is one the caller can reach.
+/// Whether every project a run belongs to is one the caller can reach.
 ///
-/// A run that names no project is out of reach: the caller's reachable set is
-/// only ever narrowed from below, so a run whose own scope is unstated cannot be
-/// shown to lie inside it. [`run_is_in_scope`] is the caller's own filter and
-/// this one is the authorization filter; they compose, and the more restrictive
-/// answer wins.
-pub fn run_reachable(run: &TestRun, reachable: &[String]) -> bool {
-    run.projects.as_ref().is_some_and(|projects| {
-        !projects.is_empty()
-            && projects
+/// The home anchors a run, so one whose `projects` snapshot is empty or absent
+/// is reachable exactly when its home is; the old "must name at least one
+/// project" condition is gone with it. Every project the snapshot does name
+/// still has to be reachable, because a run embeds those projects' structure
+/// and serving it to a caller who cannot reach them would disclose it.
+/// [`run_is_in_scope`] is the caller's own filter and this one is the
+/// authorization filter; they compose, and the more restrictive answer wins.
+pub fn run_reachable(run: &TestRun, home: &str, reachable: &[String]) -> bool {
+    reachable.iter().any(|id| id == home)
+        && run.projects.as_ref().is_none_or(|projects| {
+            projects
                 .iter()
                 .all(|project| reachable.iter().any(|id| id == &project.project_id))
-    })
+        })
 }
 
 /// Normalises a caller-supplied date filter to `YYYY-MM-DD`.
@@ -371,6 +380,10 @@ mod tests {
         }
     }
 
+    /// A home distinct from every project the filters below name, so a test
+    /// that is not about the home cannot be satisfied by it.
+    const HOME: &str = "platform.json";
+
     #[test]
     fn an_empty_result_set_reports_zeroes() {
         assert_eq!(
@@ -460,14 +473,51 @@ mod tests {
             ..run("1")
         };
 
-        assert!(run_is_in_scope(&linked, "R-1", &filters, None));
-        assert!(!run_is_in_scope(&other, "R-1", &filters, None));
+        // A run stored in a third project is judged by what it embeds.
+        assert!(run_is_in_scope(&linked, HOME, "R-1", &filters, None));
+        assert!(!run_is_in_scope(&other, HOME, "R-1", &filters, None));
 
-        // A run that embeds no project is left out too.
-        assert!(!run_is_in_scope(&run("1"), "R-1", &filters, None));
+        // A run that embeds no project is left out too …
+        assert!(!run_is_in_scope(&run("1"), HOME, "R-1", &filters, None));
+        // … unless the filtered project is its home, which is now a match on
+        // its own: the folder is the ownership fact the snapshot may omit.
+        assert!(run_is_in_scope(
+            &run("1"),
+            "checkout.json",
+            "R-1",
+            &filters,
+            None
+        ));
 
         filters.project_id = None;
-        assert!(run_is_in_scope(&run("1"), "R-1", &filters, None));
+        assert!(run_is_in_scope(&run("1"), HOME, "R-1", &filters, None));
+    }
+
+    #[test]
+    fn a_run_is_reachable_when_its_home_and_every_project_it_names_are() {
+        let reachable = ["checkout.json".to_owned(), "billing.json".to_owned()];
+
+        // The home alone anchors a run that names no project, which the old
+        // "must name at least one project" rule left out.
+        assert!(run_reachable(&run("1"), "checkout.json", &reachable));
+        assert!(!run_reachable(&run("1"), HOME, &reachable));
+
+        // A run naming projects needs every one of them, not just its home.
+        let covered = TestRun {
+            projects: Some(vec![project("checkout.json"), project("billing.json")]),
+            ..run("1")
+        };
+        assert!(run_reachable(&covered, "checkout.json", &reachable));
+        assert!(!run_reachable(&covered, HOME, &reachable));
+
+        let crossing = TestRun {
+            projects: Some(vec![project("checkout.json"), project(HOME)]),
+            ..run("1")
+        };
+        assert!(
+            !run_reachable(&crossing, "checkout.json", &reachable),
+            "an unreachable covered project hides the run"
+        );
     }
 
     #[test]
@@ -480,12 +530,14 @@ mod tests {
 
         assert!(run_is_in_scope(
             &run("1"),
+            HOME,
             "nightly.json",
             &filters,
             Some(&referenced)
         ));
         assert!(!run_is_in_scope(
             &run("1"),
+            HOME,
             "daily.json",
             &filters,
             Some(&referenced)
@@ -507,9 +559,9 @@ mod tests {
             ..run("1")
         };
 
-        assert!(run_is_in_scope(&linked, "R-1", &filters, None));
-        assert!(!run_is_in_scope(&other, "R-1", &filters, None));
-        assert!(!run_is_in_scope(&run("1"), "R-1", &filters, None));
+        assert!(run_is_in_scope(&linked, HOME, "R-1", &filters, None));
+        assert!(!run_is_in_scope(&other, HOME, "R-1", &filters, None));
+        assert!(!run_is_in_scope(&run("1"), HOME, "R-1", &filters, None));
     }
 
     #[test]
@@ -521,22 +573,31 @@ mod tests {
         };
 
         // A Unix-seconds timestamp on the lower bound day.
-        assert!(run_is_in_scope(&run("1788998400"), "R-1", &filters, None));
+        assert!(run_is_in_scope(
+            &run("1788998400"),
+            HOME,
+            "R-1",
+            &filters,
+            None
+        ));
         // An ISO-8601 timestamp on the upper bound day.
         assert!(run_is_in_scope(
             &run("2026-09-12T23:59:59Z"),
+            HOME,
             "R-1",
             &filters,
             None
         ));
         assert!(!run_is_in_scope(
             &run("2026-09-09T23:59:59Z"),
+            HOME,
             "R-1",
             &filters,
             None
         ));
         assert!(!run_is_in_scope(
             &run("2026-09-13T00:00:00Z"),
+            HOME,
             "R-1",
             &filters,
             None
@@ -550,10 +611,17 @@ mod tests {
             ..SummaryFilters::default()
         };
 
-        assert!(!run_is_in_scope(&run("not a date"), "R-1", &filters, None));
+        assert!(!run_is_in_scope(
+            &run("not a date"),
+            HOME,
+            "R-1",
+            &filters,
+            None
+        ));
         // Without a date filter the same run is in scope.
         assert!(run_is_in_scope(
             &run("not a date"),
+            HOME,
             "R-1",
             &SummaryFilters::default(),
             None

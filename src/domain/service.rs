@@ -154,8 +154,13 @@ impl<R: Repository> TestService<R> {
             .map_err(error::read_error)
     }
 
-    /// Validates, names and stores a new document in a collection that has no
-    /// parent of its own — projects and the flat resources.
+    /// Validates, names and stores a new document in the collection that has no
+    /// parent of its own — projects.
+    ///
+    /// A run, a milestone and a configuration are stored inside a project, so
+    /// they are created through [`Self::create_in`] with the project that owns
+    /// them. The retired flat routes stay registered to name their replacement,
+    /// exactly as the suite and case ones do since Issue #66.
     pub fn create(&self, resource: Resource, value: &Value) -> Result<Created, DomainError> {
         match resource {
             Resource::Suites => Err(DomainError::invalid_request(
@@ -164,7 +169,16 @@ impl<R: Repository> TestService<R> {
             Resource::Cases => Err(DomainError::invalid_request(
                 "Test cases are created inside a project or a suite: POST /projects/{id}/test_cases or POST /test_suites/{id}/test_cases",
             )),
-            _ => self.create_at(resource, None, value),
+            Resource::Runs => Err(DomainError::invalid_request(
+                "Test runs are created inside a project: POST /projects/{id}/test_runs",
+            )),
+            Resource::Milestones => Err(DomainError::invalid_request(
+                "Milestones are created inside a project: POST /projects/{id}/milestones",
+            )),
+            Resource::Configurations => Err(DomainError::invalid_request(
+                "Configurations are created inside a project: POST /projects/{id}/configurations",
+            )),
+            Resource::Projects => self.create_at(resource, None, value),
         }
     }
 
@@ -269,10 +283,12 @@ impl<R: Repository> TestService<R> {
         let suite_id = required_string(body, "suiteId")
             .ok_or_else(|| DomainError::invalid_request("Required field suiteId is missing"))?;
 
-        let mut run = self.load::<TestRun>(Resource::Runs, run_id, "Test run not found")?;
+        let home = self.run_home(run_id)?;
+        let mut run =
+            self.load::<TestRun>(Resource::Runs, run_id, Some(&home), "Test run not found")?;
         let suite = self.load_entity::<TestSuite>(Resource::Suites, &suite_id)?;
         composition::attach_suite_to_run(&mut run, &suite, &suite_id)?;
-        self.save(Resource::Runs, run_id, &run)
+        self.save(Resource::Runs, run_id, Some(&home), &run)
     }
 
     /// Adds the case named in `body` to a run, embedding a snapshot copy.
@@ -280,11 +296,13 @@ impl<R: Repository> TestService<R> {
         let test_case_id = required_string(body, "testCaseId")
             .ok_or_else(|| DomainError::invalid_request("Required field testCaseId is missing"))?;
 
-        let mut run = self.load::<TestRun>(Resource::Runs, run_id, "Test run not found")?;
+        let home = self.run_home(run_id)?;
+        let mut run =
+            self.load::<TestRun>(Resource::Runs, run_id, Some(&home), "Test run not found")?;
         let test_case = self.load_entity::<TestCase>(Resource::Cases, &test_case_id)?;
         composition::attach_case_to_run(&mut run, &test_case, &test_case_id)?;
         composition::capture_case_version(&mut run, &test_case.test_case_id, test_case.version);
-        self.save(Resource::Runs, run_id, &run)
+        self.save(Resource::Runs, run_id, Some(&home), &run)
     }
 
     /// Records, or replaces, the result of a case within a run.
@@ -297,7 +315,9 @@ impl<R: Repository> TestService<R> {
             return Err(DomainError::invalid_status());
         }
 
-        let mut run = self.load::<TestRun>(Resource::Runs, run_id, "Test run not found")?;
+        let home = self.run_home(run_id)?;
+        let mut run =
+            self.load::<TestRun>(Resource::Runs, run_id, Some(&home), "Test run not found")?;
         // The result may name a case the store does not hold — the API has
         // always accepted that — so the case is looked up best-effort: its
         // version is pinned when it can be read and the run falls back to
@@ -321,7 +341,7 @@ impl<R: Repository> TestService<R> {
             defect_links: None,
         };
         composition::upsert_result(&mut run, result);
-        self.save(Resource::Runs, run_id, &run)
+        self.save(Resource::Runs, run_id, Some(&home), &run)
     }
 
     /// Lists the defects linked to one case's result in a run.
@@ -334,7 +354,7 @@ impl<R: Repository> TestService<R> {
         run_id: &str,
         case_id: &str,
     ) -> Result<Vec<DefectLink>, DomainError> {
-        let run = self.load::<TestRun>(Resource::Runs, run_id, "Test run not found")?;
+        let run = self.load::<TestRun>(Resource::Runs, run_id, None, "Test run not found")?;
         let result = run
             .results
             .as_ref()
@@ -387,7 +407,9 @@ impl<R: Repository> TestService<R> {
         cases: Vec<ParsedCase>,
         errors: usize,
     ) -> Result<ImportSummary, DomainError> {
-        let mut run = self.load::<TestRun>(Resource::Runs, run_id, "Test run not found")?;
+        let home = self.run_home(run_id)?;
+        let mut run =
+            self.load::<TestRun>(Resource::Runs, run_id, Some(&home), "Test run not found")?;
         let mut seen: HashSet<String> = run
             .results
             .as_ref()
@@ -441,7 +463,7 @@ impl<R: Repository> TestService<R> {
             duplicates,
             summary,
         };
-        self.save(Resource::Runs, run_id, &run)?;
+        self.save(Resource::Runs, run_id, Some(&home), &run)?;
         Ok(outcome)
     }
 
@@ -450,26 +472,46 @@ impl<R: Repository> TestService<R> {
     ///
     /// A configuration owns its storage, so the run keeps a reference to it
     /// rather than a copy; the referenced configuration is verified to exist.
+    /// A run may link a configuration from any project, and the run's own home
+    /// is preferred, so the reference means that project's configuration first.
     pub fn link_configuration_to_run(&self, run_id: &str, body: &Value) -> Result<(), DomainError> {
         let config_id = required_string(body, "configId")
             .ok_or_else(|| DomainError::invalid_request("Required field configId is missing"))?;
 
-        let mut run = self.load::<TestRun>(Resource::Runs, run_id, "Test run not found")?;
-        let configuration =
-            self.load_entity::<TestConfiguration>(Resource::Configurations, &config_id)?;
+        let home = self.run_home(run_id)?;
+        let mut run =
+            self.load::<TestRun>(Resource::Runs, run_id, Some(&home), "Test run not found")?;
+        let configuration = self.load::<TestConfiguration>(
+            Resource::Configurations,
+            &config_id,
+            Some(&home),
+            entity_missing_message(Resource::Configurations),
+        )?;
         composition::attach_configuration_to_run(&mut run, &configuration, &config_id)?;
-        self.save(Resource::Runs, run_id, &run)
+        self.save(Resource::Runs, run_id, Some(&home), &run)
     }
 
     /// Removes a configuration reference from a run.
+    ///
+    /// The reference names a configuration, so it resolves the same way a link
+    /// does: the run's home is preferred, one no project holds is absent, and
+    /// one two projects hold is refused rather than guessed at.
     pub fn unlink_configuration_from_run(
         &self,
         run_id: &str,
         config_id: &str,
     ) -> Result<(), DomainError> {
-        let mut run = self.load::<TestRun>(Resource::Runs, run_id, "Test run not found")?;
+        let home = self.run_home(run_id)?;
+        let mut run =
+            self.load::<TestRun>(Resource::Runs, run_id, Some(&home), "Test run not found")?;
+        self.resolve(
+            Resource::Configurations,
+            config_id,
+            Some(&home),
+            entity_missing_message(Resource::Configurations),
+        )?;
         composition::detach_configuration_from_run(&mut run, config_id)?;
-        self.save(Resource::Runs, run_id, &run)
+        self.save(Resource::Runs, run_id, Some(&home), &run)
     }
 
     /// Links a defect to the result a run records for `case_id`.
@@ -495,9 +537,11 @@ impl<R: Repository> TestService<R> {
             current_timestamp_string(),
         );
 
-        let mut run = self.load::<TestRun>(Resource::Runs, run_id, "Test run not found")?;
+        let home = self.run_home(run_id)?;
+        let mut run =
+            self.load::<TestRun>(Resource::Runs, run_id, Some(&home), "Test run not found")?;
         composition::attach_defect_to_result(&mut run, case_id, link.clone())?;
-        self.save(Resource::Runs, run_id, &run)?;
+        self.save(Resource::Runs, run_id, Some(&home), &run)?;
         Ok(link)
     }
 
@@ -509,9 +553,11 @@ impl<R: Repository> TestService<R> {
         case_id: &str,
         link_id: &str,
     ) -> Result<(), DomainError> {
-        let mut run = self.load::<TestRun>(Resource::Runs, run_id, "Test run not found")?;
+        let home = self.run_home(run_id)?;
+        let mut run =
+            self.load::<TestRun>(Resource::Runs, run_id, Some(&home), "Test run not found")?;
         composition::detach_defect_from_result(&mut run, case_id, link_id)?;
-        self.save(Resource::Runs, run_id, &run)
+        self.save(Resource::Runs, run_id, Some(&home), &run)
     }
 
     // --- duplication ---------------------------------------------------
@@ -519,9 +565,9 @@ impl<R: Repository> TestService<R> {
     /// Copies a document, applying the request-body overrides, and returns the
     /// identifier of the copy.
     ///
-    /// A copied suite or case lands in the parent the source belongs to, so the
-    /// copy stays where the original is; only projects and the flat resources
-    /// live at the top level.
+    /// A copy lands in the home the source belongs to, so it stays where the
+    /// original is; only a project lives at the top level. Neither a duplicate
+    /// nor a `PUT` can therefore move a document into another project.
     pub fn duplicate(
         &self,
         spec: &DuplicateSpec,
@@ -551,19 +597,39 @@ impl<R: Repository> TestService<R> {
     // --- reporting -----------------------------------------------------
 
     /// Reports a milestone's progress from the runs it references.
+    ///
+    /// A reference means the milestone's own project first, so a run identifier
+    /// another project happens to use too still names the intended run. One
+    /// that no project holds is skipped and progress recomputes over the runs
+    /// that remain; one that two or more hold outside the home is refused,
+    /// because an arbitrary pick would report a wrong number.
     pub fn milestone_progress(&self, id: &str) -> Result<MilestoneProgress, DomainError> {
+        let home = self.resolve(Resource::Milestones, id, None, "Milestone not found")?;
         let value = self
             .repository
-            .read_at(Resource::Milestones, None, id)
+            .read_at(Resource::Milestones, Some(&home), id)
             .map_err(error::milestone_error)?;
         let milestone: Milestone = serde_json::from_value(value)
             .map_err(|_| DomainError::Internal("Stored milestone JSON is invalid".to_owned()))?;
 
         let mut runs = Vec::new();
         for run_id in milestone.test_run_ids.as_deref().unwrap_or_default() {
-            let Ok(run_value) = self.repository.read_at(Resource::Runs, None, run_id) else {
+            let run_home =
+                match self.resolve(Resource::Runs, run_id, Some(&home), "Test run not found") {
+                    Ok(run_home) => run_home,
+                    Err(DomainError::NotFound(_)) => continue,
+                    Err(error) => return Err(error),
+                };
+            let Ok(run_value) = self.read_document(
+                Resource::Runs,
+                Some(&run_home),
+                run_id,
+                "Test run not found",
+            ) else {
                 continue;
             };
+            // A run that cannot be decoded is skipped rather than failing the
+            // whole report; the format-version reader check is #98's.
             let Ok(run) = serde_json::from_value::<TestRun>(run_value) else {
                 continue;
             };
@@ -666,9 +732,12 @@ impl<R: Repository> TestService<R> {
 
         let milestone_runs = match filters.milestone_id.as_deref() {
             Some(id) => {
+                // A filter names no home to prefer, so the milestone resolves
+                // globally exactly as the route that reads it does.
+                let home = self.resolve(Resource::Milestones, id, None, "Milestone not found")?;
                 let value = self
                     .repository
-                    .read_at(Resource::Milestones, None, id)
+                    .read_at(Resource::Milestones, Some(&home), id)
                     .map_err(error::milestone_error)?;
                 let milestone: Milestone = serde_json::from_value(value).map_err(|_| {
                     DomainError::Internal("Stored milestone JSON is invalid".to_owned())
@@ -679,12 +748,11 @@ impl<R: Repository> TestService<R> {
         };
 
         if let Some(config_id) = filters.configuration_id.as_deref() {
-            match self
-                .repository
-                .exists_at(Resource::Configurations, None, config_id)
-            {
-                Ok(true) => {}
-                Ok(false) => {
+            // A filter value is not a dereference, so an identifier two projects
+            // hold is not a conflict here; one none holds is still absent.
+            match self.repository.locate(Resource::Configurations, config_id) {
+                Ok(homes) if !homes.is_empty() => {}
+                Ok(_) => {
                     return Err(DomainError::NotFound(
                         entity_missing_message(Resource::Configurations).to_owned(),
                     ));
@@ -701,26 +769,45 @@ impl<R: Repository> TestService<R> {
         }
 
         let mut results = Vec::new();
-        for run_id in self
+        // A global listing de-duplicates, so two runs sharing an identifier
+        // would be counted once and the report would under-report. The walk is
+        // per project instead, reading each run from the home that owns it.
+        for project in self
             .repository
-            .list(Resource::Runs)
+            .list(Resource::Projects)
             .map_err(error::read_error)?
         {
-            let Ok(value) = self.repository.read_at(Resource::Runs, None, &run_id) else {
-                continue;
-            };
-            let Ok(run) = serde_json::from_value::<TestRun>(value) else {
-                continue;
-            };
-            if let Some(reachable) = reachable
-                && !reports::run_reachable(&run, reachable)
-            {
-                continue;
+            let home = Parent::Project(project);
+            let run_ids = self
+                .repository
+                .list_children(&home, Resource::Runs)
+                .map_err(error::read_error)?;
+            for run_id in run_ids {
+                let Ok(value) = self
+                    .repository
+                    .read_at(Resource::Runs, Some(&home), &run_id)
+                else {
+                    continue;
+                };
+                let Ok(run) = serde_json::from_value::<TestRun>(value) else {
+                    continue;
+                };
+                if let Some(reachable) = reachable
+                    && !reports::run_reachable(&run, home.project(), reachable)
+                {
+                    continue;
+                }
+                if !reports::run_is_in_scope(
+                    &run,
+                    home.project(),
+                    &run_id,
+                    &filters,
+                    milestone_runs.as_deref(),
+                ) {
+                    continue;
+                }
+                results.extend(run.results.unwrap_or_default());
             }
-            if !reports::run_is_in_scope(&run, &run_id, &filters, milestone_runs.as_deref()) {
-                continue;
-            }
-            results.extend(run.results.unwrap_or_default());
         }
 
         Ok(reports::summary(&results))
@@ -728,7 +815,10 @@ impl<R: Repository> TestService<R> {
 
     // --- authorization scope -------------------------------------------
 
-    /// The project a suite or a case addressed by `id` belongs to.
+    /// The project an entity addressed by `id` belongs to.
+    ///
+    /// Every resource but a project lives inside one, so this names the home of
+    /// a suite, a case, a run, a milestone or a configuration alike.
     ///
     /// The authorization guard runs before the handler acts, so it must be able
     /// to name the project without reading the document the request will read
@@ -749,14 +839,35 @@ impl<R: Repository> TestService<R> {
         Ok(self.parent_of(resource, id, missing)?.project().to_owned())
     }
 
-    /// Reads a flat document as stored, without assembling its children.
+    /// Reads a document as stored, without assembling its children.
     ///
     /// Used where a route needs a resource's own fields — the projects a run or
-    /// a milestone references — and not the tree below it.
+    /// a milestone references — and not the tree below it. The home is resolved
+    /// the same way a `GET` resolves it, so an identifier two projects hold is
+    /// a conflict here too.
     pub fn document(&self, resource: Resource, id: &str) -> Result<Value, DomainError> {
+        let parent = self.owner_for_write(resource, id, entity_missing_message(resource))?;
         self.repository
-            .read_at(resource, None, id)
+            .read_at(resource, parent.as_ref(), id)
             .map_err(|error| error::load_error(error, entity_missing_message(resource)))
+    }
+
+    /// Reads the occurrence stored in `parent`, without resolving globally.
+    ///
+    /// The caller named the home, so nothing about the request is ambiguous: an
+    /// identifier two projects hold is read from this one and never answers a
+    /// conflict, and one this parent does not hold is simply absent, reported
+    /// under `missing`. This is the home branch of the rule [`Self::document`]
+    /// applies globally, exposed for the authorization guard, which knows the
+    /// acting document's home before it dereferences a reference inside it.
+    pub fn document_in(
+        &self,
+        resource: Resource,
+        parent: &Parent,
+        id: &str,
+        missing: &str,
+    ) -> Result<Value, DomainError> {
+        self.read_document(resource, Some(parent), id, missing)
     }
 
     // --- attachments ---------------------------------------------------
@@ -1119,7 +1230,14 @@ impl<R: Repository> TestService<R> {
                 let parent = self.parent_of(Resource::Cases, id, missing)?;
                 self.read_document(resource, Some(&parent), id, missing)
             }
-            _ => self.read_document(resource, None, id, missing),
+            // A run, a milestone and a configuration are read from the project
+            // that owns them, so a bare identifier two projects hold is
+            // ambiguous exactly as it already is for a suite or a case. A `GET`
+            // names no home to prefer, so the identifier resolves globally.
+            Resource::Runs | Resource::Milestones | Resource::Configurations => {
+                let parent = self.parent_of(resource, id, missing)?;
+                self.read_document(resource, Some(&parent), id, missing)
+            }
         }
     }
 
@@ -1184,7 +1302,8 @@ impl<R: Repository> TestService<R> {
     /// that need the stored fields of an identifier several parents may own.
     fn first_document(&self, resource: Resource, id: &str) -> io::Result<Value> {
         match resource {
-            Resource::Suites | Resource::Cases => {
+            Resource::Projects => self.repository.read_at(resource, None, id),
+            _ => {
                 let home = self
                     .repository
                     .locate(resource, id)?
@@ -1193,19 +1312,32 @@ impl<R: Repository> TestService<R> {
                     .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "resource not found"))?;
                 self.repository.read_at(resource, Some(&home), id)
             }
-            _ => self.repository.read_at(resource, None, id),
         }
     }
 
-    /// The parent that owns the single occurrence of `id`, for the globally
-    /// addressed routes. Zero occurrences is a 404; several is a conflict,
-    /// because a bare identifier cannot say which parent was meant.
-    fn parent_of(
+    /// The home an identifier names, preferring the one `home` points at.
+    ///
+    /// One rule resolves every reference and every bare identifier, so a
+    /// document that names another means its own project first: a home holding
+    /// the identifier wins, and otherwise the identifier resolves globally.
+    /// Nothing owns it is a 404; one owner is that occurrence; two or more is a
+    /// conflict, because a bare identifier cannot say which parent was meant
+    /// and guessing would silently act on the wrong document.
+    fn resolve(
         &self,
         resource: Resource,
         id: &str,
+        home: Option<&Parent>,
         missing: &str,
     ) -> Result<Parent, DomainError> {
+        if let Some(home) = home
+            && self
+                .repository
+                .exists_at(resource, Some(home), id)
+                .map_err(error::read_error)?
+        {
+            return Ok(home.clone());
+        }
         let homes = self
             .repository
             .locate(resource, id)
@@ -1217,7 +1349,31 @@ impl<R: Repository> TestService<R> {
         }
     }
 
+    /// The parent that owns the single occurrence of `id`, for the globally
+    /// addressed routes, which name no home to prefer.
+    fn parent_of(
+        &self,
+        resource: Resource,
+        id: &str,
+        missing: &str,
+    ) -> Result<Parent, DomainError> {
+        self.resolve(resource, id, None, missing)
+    }
+
+    /// The project a run addressed by a bare identifier lives in.
+    ///
+    /// Every run sub-route resolves the home once, before it reads, and passes
+    /// it to both the read and the write: the sub-route's own references prefer
+    /// that home, and the write goes back to the occurrence the read came from.
+    fn run_home(&self, run_id: &str) -> Result<Parent, DomainError> {
+        self.resolve(Resource::Runs, run_id, None, "Test run not found")
+    }
+
     /// The parent a write addresses, for resources that live inside one.
+    ///
+    /// Only projects are addressed without a parent; every other resource is
+    /// stored in the parent that owns it, and an identifier several parents own
+    /// is refused by the endpoint hint [`ambiguous`] answers with.
     fn owner_for_write(
         &self,
         resource: Resource,
@@ -1225,8 +1381,8 @@ impl<R: Repository> TestService<R> {
         missing: &str,
     ) -> Result<Option<Parent>, DomainError> {
         match resource {
-            Resource::Suites | Resource::Cases => self.parent_of(resource, id, missing).map(Some),
-            _ => Ok(None),
+            Resource::Projects => Ok(None),
+            _ => self.parent_of(resource, id, missing).map(Some),
         }
     }
 
@@ -1266,27 +1422,42 @@ impl<R: Repository> TestService<R> {
             .map_err(|_| DomainError::Internal("Stored JSON is invalid".to_owned()))
     }
 
+    /// Loads a stored document as its typed model, resolving its home the way a
+    /// `GET` would and preferring `home` when the caller already knows it.
     fn load<T: DeserializeOwned>(
         &self,
         resource: Resource,
         id: &str,
+        home: Option<&Parent>,
         missing_message: &str,
     ) -> Result<T, DomainError> {
-        let value = self.read_document(resource, None, id, missing_message)?;
+        let parent = self.resolve(resource, id, home, missing_message)?;
+        let value = self.read_document(resource, Some(&parent), id, missing_message)?;
         serde_json::from_value(value)
             .map_err(|_| DomainError::Internal("Stored JSON is invalid".to_owned()))
     }
 
+    /// Writes a document back to `parent`, the home its caller resolved.
+    ///
+    /// A write never moves a document: `parent` is the home the matching read
+    /// resolved, so an update addresses the same occurrence it loaded.
     fn save<T: Serialize>(
         &self,
         resource: Resource,
         id: &str,
+        parent: Option<&Parent>,
         value: &T,
     ) -> Result<(), DomainError> {
         let document = serde_json::to_value(value)
             .map_err(|_| DomainError::Internal("Failed to serialize document".to_owned()))?;
+        // A document is written back to the parent that owns it, which for a
+        // run is the project it was created in.
+        let parent = match parent {
+            Some(parent) => Some(parent.clone()),
+            None => self.owner_for_write(resource, id, entity_missing_message(resource))?,
+        };
         self.repository
-            .write_at(resource, None, id, &document)
+            .write_at(resource, parent.as_ref(), id, &document)
             .map_err(DomainError::from)
     }
 }
@@ -1436,10 +1607,20 @@ fn attachment_write_error(error: io::Error) -> DomainError {
 }
 
 /// The conflict reported when a bare identifier names several occurrences.
+///
+/// The message names the parent-scoped routes that address one occurrence
+/// directly, so the caller learns how to say which parent it meant.
 fn ambiguous(resource: Resource, homes: &[Parent]) -> DomainError {
     let endpoints = match resource {
         Resource::Cases => {
             "POST /projects/{id}/test_cases, POST /test_suites/{id}/test_cases, or the matching /{case_id} delete"
+        }
+        Resource::Runs => "POST /projects/{id}/test_runs, or the matching /{run_id} delete",
+        Resource::Milestones => {
+            "POST /projects/{id}/milestones, or the matching /{milestone_id} delete"
+        }
+        Resource::Configurations => {
+            "POST /projects/{id}/configurations, or the matching /{config_id} delete"
         }
         _ => "POST /projects/{id}/test_suites, or the matching /{suite_id} delete",
     };
@@ -1679,17 +1860,19 @@ mod tests {
     #[test]
     fn runs_are_listed_by_the_configuration_they_link() {
         let (service, _directory) = service();
+        let home = project(&service);
         for (id, name) in [("R-1", "nightly"), ("R-2", "weekly"), ("R-3", "release")] {
             service
-                .create(
+                .create_in(
                     Resource::Runs,
+                    &home,
                     &json!({ "testRunId": id, "name": name, "timestamp": "1", "tags": ["ci"] }),
                 )
                 .expect("run");
         }
         for name in ["chrome-linux", "firefox-windows"] {
             service
-                .create(Resource::Configurations, &json!({ "name": name }))
+                .create_in(Resource::Configurations, &home, &json!({ "name": name }))
                 .expect("configuration");
         }
         for (run, configuration) in [
@@ -2145,9 +2328,11 @@ mod tests {
     #[test]
     fn run_results_are_recorded_and_replaced() {
         let (service, _directory) = service();
+        let home = project(&service);
         service
-            .create(
+            .create_in(
                 Resource::Runs,
+                &home,
                 &json!({ "testRunId": "R-1", "name": "nightly", "timestamp": "1" }),
             )
             .expect("run");
@@ -2192,8 +2377,9 @@ mod tests {
         let project = project(&service);
         case(&service, &project, "TC-1");
         service
-            .create(
+            .create_in(
                 Resource::Runs,
+                &project,
                 &json!({ "testRunId": "R-1", "name": "nightly", "timestamp": "1" }),
             )
             .expect("run");
@@ -2222,9 +2408,11 @@ mod tests {
     #[test]
     fn milestone_progress_reads_the_referenced_runs() {
         let (service, _directory) = service();
+        let home = project(&service);
         service
-            .create(
+            .create_in(
                 Resource::Runs,
+                &home,
                 &json!({
                     "testRunId": "R-1",
                     "name": "nightly",
@@ -2238,8 +2426,9 @@ mod tests {
             )
             .expect("run");
         service
-            .create(
+            .create_in(
                 Resource::Milestones,
+                &home,
                 &json!({ "milestoneId": "M-1", "name": "v1.0", "testRunIds": ["nightly.json"] }),
             )
             .expect("milestone");
@@ -2308,6 +2497,475 @@ mod tests {
         let (service, _directory) = service();
         assert!(matches!(
             service.require_test_case("TC-1").expect_err("missing"),
+            DomainError::NotFound(_)
+        ));
+    }
+
+    // --- project homes -------------------------------------------------
+
+    /// Creates a project named `name` beside `checkout` and returns its parent.
+    fn another_project(service: &TestService<FileRepository>, name: &str) -> Parent {
+        service
+            .create(Resource::Projects, &json!({ "name": name }))
+            .expect("project");
+        Parent::Project(format!("{name}.json"))
+    }
+
+    /// Stores a run called `name` in `home`, recording one passed result.
+    fn run_in(service: &TestService<FileRepository>, home: &Parent, name: &str) {
+        service
+            .create_in(
+                Resource::Runs,
+                home,
+                &json!({
+                    "name": name,
+                    "timestamp": "1",
+                    "results": [{ "testCaseId": "TC-1", "status": "Passed", "timestamp": "1" }]
+                }),
+            )
+            .expect("run");
+    }
+
+    #[test]
+    fn a_home_preferred_identifier_resolves_the_occurrence_it_names() {
+        let (service, _directory) = service();
+        let checkout = project(&service);
+        let billing = another_project(&service, "billing");
+        run_in(&service, &checkout, "nightly");
+        run_in(&service, &billing, "nightly");
+
+        // A bare identifier resolves globally, so two occurrences are refused.
+        let error = service
+            .resolve(Resource::Runs, "nightly.json", None, "Test run not found")
+            .expect_err("two homes");
+        assert_eq!(
+            error.to_string(),
+            ambiguous(Resource::Runs, &[checkout.clone(), billing.clone()]).to_string(),
+            "the global rule must not pick one of the two"
+        );
+
+        // Either home says which occurrence is meant.
+        assert_eq!(
+            service
+                .resolve(
+                    Resource::Runs,
+                    "nightly.json",
+                    Some(&billing),
+                    "Test run not found"
+                )
+                .expect("billing's run"),
+            billing
+        );
+        assert_eq!(
+            service
+                .resolve(
+                    Resource::Runs,
+                    "nightly.json",
+                    Some(&checkout),
+                    "Test run not found"
+                )
+                .expect("checkout's run"),
+            checkout
+        );
+
+        // A home that does not hold the identifier falls back to the global
+        // rule, so a unique identifier still resolves from an unrelated home.
+        run_in(&service, &checkout, "weekly");
+        assert_eq!(
+            service
+                .resolve(
+                    Resource::Runs,
+                    "weekly.json",
+                    Some(&billing),
+                    "Test run not found"
+                )
+                .expect("one home only"),
+            checkout
+        );
+    }
+
+    #[test]
+    fn an_ambiguous_identifier_names_both_homes() {
+        let (service, _directory) = service();
+        let checkout = project(&service);
+        let billing = another_project(&service, "billing");
+        run_in(&service, &checkout, "nightly");
+        run_in(&service, &billing, "nightly");
+
+        let error = service
+            .get(Resource::Runs, "nightly.json")
+            .expect_err("ambiguous");
+        match error {
+            DomainError::Conflict(message) => {
+                assert!(message.contains("2 parents"), "{message}");
+                assert!(message.contains("billing.json"), "{message}");
+                assert!(message.contains("checkout.json"), "{message}");
+                assert!(
+                    message.contains("POST /projects/{id}/test_runs"),
+                    "the conflict must name the parent-scoped route: {message}"
+                );
+            }
+            other => panic!("expected a conflict, got {other:?}"),
+        }
+
+        // A write is refused too, rather than landing in an arbitrary home.
+        assert!(matches!(
+            service
+                .record_run_result(
+                    "nightly.json",
+                    &json!({ "testCaseId": "TC-9", "status": "Passed" })
+                )
+                .expect_err("ambiguous"),
+            DomainError::Conflict(_)
+        ));
+    }
+
+    #[test]
+    fn the_conflict_names_the_parent_scoped_routes_of_its_own_resource() {
+        let homes = [
+            Parent::Project("billing.json".to_owned()),
+            Parent::Project("checkout.json".to_owned()),
+        ];
+        for (resource, endpoint) in [
+            (
+                Resource::Runs,
+                "POST /projects/{id}/test_runs, or the matching /{run_id} delete",
+            ),
+            (
+                Resource::Milestones,
+                "POST /projects/{id}/milestones, or the matching /{milestone_id} delete",
+            ),
+            (
+                Resource::Configurations,
+                "POST /projects/{id}/configurations, or the matching /{config_id} delete",
+            ),
+            (
+                Resource::Suites,
+                "POST /projects/{id}/test_suites, or the matching /{suite_id} delete",
+            ),
+            (
+                Resource::Cases,
+                "POST /projects/{id}/test_cases, POST /test_suites/{id}/test_cases, or the matching /{case_id} delete",
+            ),
+        ] {
+            let message = ambiguous(resource, &homes).to_string();
+            assert!(message.contains(endpoint), "{resource:?}: {message}");
+            assert!(
+                message.contains("2 parents (billing.json, checkout.json)"),
+                "{resource:?}: {message}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_retired_flat_creates_name_their_replacement() {
+        let (service, _directory) = service();
+        project(&service);
+
+        for (resource, body, message) in [
+            (
+                Resource::Runs,
+                json!({ "name": "nightly", "timestamp": "1" }),
+                "Test runs are created inside a project: POST /projects/{id}/test_runs",
+            ),
+            (
+                Resource::Milestones,
+                json!({ "name": "v1.0" }),
+                "Milestones are created inside a project: POST /projects/{id}/milestones",
+            ),
+            (
+                Resource::Configurations,
+                json!({ "name": "chrome" }),
+                "Configurations are created inside a project: POST /projects/{id}/configurations",
+            ),
+        ] {
+            let error = service.create(resource, &body).expect_err("retired route");
+            match error {
+                DomainError::InvalidRequest { code, message: got } => {
+                    assert_eq!(code, "invalid_request", "{resource:?}");
+                    assert_eq!(got, message, "{resource:?}");
+                }
+                other => panic!("{resource:?} produced {other:?}"),
+            }
+            assert!(
+                list(&service, resource).is_empty(),
+                "{resource:?}: a retired route must store nothing"
+            );
+        }
+    }
+
+    #[test]
+    fn an_identifier_no_project_holds_is_not_found() {
+        let (service, _directory) = service();
+        project(&service);
+
+        for resource in [
+            Resource::Runs,
+            Resource::Milestones,
+            Resource::Configurations,
+        ] {
+            let error = service
+                .resolve(
+                    resource,
+                    "missing.json",
+                    None,
+                    entity_missing_message(resource),
+                )
+                .expect_err("nothing holds it");
+            assert!(
+                matches!(&error, DomainError::NotFound(message)
+                    if message == entity_missing_message(resource)),
+                "{resource:?} produced {error:?}"
+            );
+        }
+
+        assert!(matches!(
+            service
+                .milestone_progress("missing.json")
+                .expect_err("missing"),
+            DomainError::NotFound(message) if message == "Milestone not found"
+        ));
+    }
+
+    #[test]
+    fn duplicating_a_run_stores_the_copy_in_its_own_home() {
+        let (service, _directory) = service();
+        let checkout = project(&service);
+        let billing = another_project(&service, "billing");
+        run_in(&service, &billing, "nightly");
+
+        let new_id = service
+            .duplicate(&duplicate::RUN, "nightly.json", &json!({}))
+            .expect("duplicate");
+
+        let copies = service
+            .list_children(&billing, Resource::Runs)
+            .expect("billing's runs");
+        assert_eq!(copies.len(), 2, "{copies:?}");
+        assert!(copies.contains(&new_id), "{copies:?}");
+        assert!(
+            service
+                .list_children(&checkout, Resource::Runs)
+                .expect("checkout's runs")
+                .is_empty(),
+            "a duplicate must not move or copy into another project"
+        );
+    }
+
+    #[test]
+    fn the_summary_report_counts_two_runs_sharing_an_identifier() {
+        let (service, _directory) = service();
+        let checkout = project(&service);
+        let billing = another_project(&service, "billing");
+        run_in(&service, &checkout, "nightly");
+        run_in(&service, &billing, "nightly");
+
+        // A global listing de-duplicates to one `nightly.json`; the report
+        // walks projects instead, so both runs contribute their result.
+        assert_eq!(
+            list(&service, Resource::Runs),
+            vec!["nightly.json".to_owned()],
+            "the listing still de-duplicates"
+        );
+
+        let report = service
+            .summary_report(&reports::SummaryFilters::default(), None)
+            .expect("report");
+        assert_eq!(report.total, 2, "one result per project's run");
+        assert_eq!(report.passed, 2);
+    }
+
+    #[test]
+    fn milestone_progress_prefers_its_own_home_for_a_shared_identifier() {
+        let (service, _directory) = service();
+        let checkout = project(&service);
+        let billing = another_project(&service, "billing");
+        // The milestone's home holds no run of this identifier, and two other
+        // projects do, so the reference cannot be resolved.
+        run_in(&service, &checkout, "nightly");
+        run_in(&service, &billing, "nightly");
+        let platform = another_project(&service, "platform");
+        service
+            .create_in(
+                Resource::Milestones,
+                &platform,
+                &json!({ "name": "v1.0", "testRunIds": ["nightly.json"] }),
+            )
+            .expect("milestone");
+
+        let error = service
+            .milestone_progress("v1.0.json")
+            .expect_err("two runs answer to the reference");
+        assert!(
+            matches!(&error, DomainError::Conflict(_)),
+            "an arbitrary pick would report a wrong number, got {error:?}"
+        );
+    }
+
+    #[test]
+    fn milestone_progress_resolves_a_shared_identifier_from_its_home() {
+        let (service, _directory) = service();
+        let checkout = project(&service);
+        let billing = another_project(&service, "billing");
+        run_in(&service, &checkout, "nightly");
+        run_in(&service, &billing, "nightly");
+        // The milestone lives in `billing`, so its reference means that run
+        // even though `checkout` holds the same identifier.
+        service
+            .create_in(
+                Resource::Milestones,
+                &billing,
+                &json!({ "name": "v1.0", "testRunIds": ["nightly.json"] }),
+            )
+            .expect("milestone");
+
+        let progress = service.milestone_progress("v1.0.json").expect("progress");
+        assert_eq!(progress.total_cases, 1);
+        assert_eq!(progress.passed, 1);
+    }
+
+    #[test]
+    fn milestone_progress_skips_a_reference_no_project_holds() {
+        let (service, _directory) = service();
+        let checkout = project(&service);
+        run_in(&service, &checkout, "nightly");
+        service
+            .create_in(
+                Resource::Milestones,
+                &checkout,
+                &json!({
+                    "name": "v1.0",
+                    "testRunIds": ["nightly.json", "deleted.json"]
+                }),
+            )
+            .expect("milestone");
+
+        let progress = service.milestone_progress("v1.0.json").expect("progress");
+        assert_eq!(
+            progress.total_cases, 1,
+            "progress recomputes over the runs that still exist"
+        );
+    }
+
+    #[test]
+    fn a_run_links_the_configuration_its_own_home_holds() {
+        let (service, _directory) = service();
+        let checkout = project(&service);
+        let billing = another_project(&service, "billing");
+        for home in [&checkout, &billing] {
+            service
+                .create_in(Resource::Configurations, home, &json!({ "name": "chrome" }))
+                .expect("configuration");
+        }
+        run_in(&service, &billing, "nightly");
+
+        // The identifier is ambiguous globally, but the run's home decides it.
+        assert!(matches!(
+            service
+                .document(Resource::Configurations, "chrome.json")
+                .expect_err("two homes"),
+            DomainError::Conflict(_)
+        ));
+        service
+            .link_configuration_to_run("nightly.json", &json!({ "configId": "chrome.json" }))
+            .expect("the run's own configuration");
+
+        let run = service.get(Resource::Runs, "nightly.json").expect("run");
+        assert_eq!(run["configurations"][0]["configId"], "chrome.json");
+
+        service
+            .unlink_configuration_from_run("nightly.json", "chrome.json")
+            .expect("unlink");
+        let run = service.get(Resource::Runs, "nightly.json").expect("run");
+        assert!(run["configurations"].as_array().is_none_or(Vec::is_empty));
+    }
+
+    #[test]
+    fn a_write_goes_back_to_the_home_the_read_resolved() {
+        let (service, _directory) = service();
+        let checkout = project(&service);
+        let billing = another_project(&service, "billing");
+        run_in(&service, &billing, "nightly");
+
+        service
+            .record_run_result(
+                "nightly.json",
+                &json!({ "testCaseId": "TC-9", "status": "Failed" }),
+            )
+            .expect("record");
+
+        assert_eq!(
+            service
+                .list_children(&billing, Resource::Runs)
+                .expect("billing's runs"),
+            vec!["nightly.json".to_owned()],
+            "the write must not create a second occurrence elsewhere"
+        );
+        assert!(
+            service
+                .list_children(&checkout, Resource::Runs)
+                .expect("checkout's runs")
+                .is_empty()
+        );
+
+        let run = service.get(Resource::Runs, "nightly.json").expect("run");
+        assert_eq!(run["results"].as_array().map(Vec::len), Some(2));
+    }
+
+    #[test]
+    fn a_parent_addressed_read_never_answers_a_conflict() {
+        let (service, _directory) = service();
+        let checkout = project(&service);
+        let billing = another_project(&service, "billing");
+        for (home, marker) in [(&checkout, "in-checkout"), (&billing, "in-billing")] {
+            service
+                .create_in(
+                    Resource::Runs,
+                    home,
+                    &json!({
+                        "name": "nightly",
+                        "testRunId": marker,
+                        "timestamp": "1"
+                    }),
+                )
+                .expect("run");
+        }
+
+        // The global read cannot choose, but a named home can.
+        assert!(matches!(
+            service
+                .document(Resource::Runs, "nightly.json")
+                .expect_err("two homes"),
+            DomainError::Conflict(_)
+        ));
+        for (home, marker) in [(&checkout, "in-checkout"), (&billing, "in-billing")] {
+            let document = service
+                .document_in(Resource::Runs, home, "nightly.json", "Test run not found")
+                .expect("the named home's occurrence");
+            assert_eq!(document["testRunId"], marker, "{home:?}");
+        }
+
+        // A home that does not hold the identifier reports the caller's own
+        // missing message, and never a conflict.
+        let platform = another_project(&service, "platform");
+        let error = service
+            .document_in(
+                Resource::Runs,
+                &platform,
+                "nightly.json",
+                "Test run not found",
+            )
+            .expect_err("this home does not hold it");
+        assert!(
+            matches!(&error, DomainError::NotFound(message) if message == "Test run not found"),
+            "{error:?}"
+        );
+
+        // So does an identifier nothing holds anywhere.
+        assert!(matches!(
+            service
+                .document_in(Resource::Runs, &billing, "ghost.json", "Test run not found")
+                .expect_err("absent"),
             DomainError::NotFound(_)
         ));
     }

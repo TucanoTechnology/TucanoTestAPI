@@ -225,6 +225,56 @@ async fn the_tree_is_stored_as_folders_that_mirror_the_hierarchy() {
     assert_eq!(status, StatusCode::NOT_FOUND);
 }
 
+/// The folder that holds a resource is what scopes its identifier: a name is
+/// taken inside its own project, and the same name is free in another one.
+#[tokio::test]
+async fn an_identifier_is_unique_inside_its_project_and_free_across_projects() {
+    let (_directory, app) = test_app();
+
+    let alpha = common::create_project(&app, "alpha").await;
+    let beta = common::create_project(&app, "beta").await;
+
+    let resources = [
+        ("test_suites", json!({"name": "smoke"})),
+        (
+            "test_cases",
+            json!({"testCaseId": "TC-1", "title": "Login", "expectedResult": "Stored"}),
+        ),
+        (
+            "test_runs",
+            json!({"name": "nightly", "timestamp": "2026-09-04T00:00:00Z"}),
+        ),
+        ("milestones", json!({"name": "sprint-42"})),
+        ("configurations", json!({"name": "chrome-linux"})),
+    ];
+
+    for (collection, body) in &resources {
+        let mut created = Vec::new();
+        for project in [&alpha, &beta] {
+            let uri = format!("/projects/{project}/{collection}");
+            let (status, answer) = send_json(&app, json_request("POST", &uri, body)).await;
+            assert_eq!(status, StatusCode::CREATED, "POST {uri}: {answer}");
+            created.push(answer["id"].as_str().expect("created id").to_owned());
+        }
+        assert_eq!(
+            created[0], created[1],
+            "the same name derived a different identifier in each project: {collection}"
+        );
+
+        // The identifier is taken once the project holds it: the second
+        // creation in the same project is the conflict.
+        let uri = format!("/projects/{alpha}/{collection}");
+        let (status, answer) = send_json(&app, json_request("POST", &uri, body)).await;
+        assert_eq!(status, StatusCode::CONFLICT, "POST {uri}: {answer}");
+        assert_error_envelope(&answer, "conflict");
+
+        // Reads stay global, so both homes answer the one identifier.
+        let (status, listed) = send_json(&app, get(&format!("/{collection}"))).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(listed, json!([created[0]]), "{collection}");
+    }
+}
+
 /// The body the router's request-size limit answers with.
 const LENGTH_LIMIT_BODY: &str = "length limit exceeded";
 
@@ -258,6 +308,9 @@ async fn an_unusable_path_identifier_is_answered_with_invalid_id() {
         ("GET", "/projects/nope/test_cases", json!({})),
         ("POST", "/projects/nope/test_cases", case_creation.clone()),
         ("DELETE", "/projects/nope/test_cases/nope", json!({})),
+        ("GET", "/projects/nope/test_runs", json!({})),
+        ("GET", "/projects/nope/milestones", json!({})),
+        ("GET", "/projects/nope/configurations", json!({})),
         ("GET", "/test_suites/nope", json!({})),
         ("PUT", "/test_suites/nope", json!({})),
         ("DELETE", "/test_suites/nope", json!({})),
@@ -294,10 +347,16 @@ async fn an_unusable_path_identifier_is_answered_with_invalid_id() {
     // The run routes also take the identifier of the resource they attach from
     // the body, and refuse an unusable one there the same way. The run is named
     // only, so reaching the identifier at all depends on the identity fields the
-    // API records for a run created from a name alone.
+    // API records for a run created from a name alone. A run lives inside a
+    // project, so the creation names one.
+    let home = common::fixture_home(&app).await;
     let (status, created) = send_json(
         &app,
-        json_request("POST", "/test_runs", &json!({"name": "nightly"})),
+        json_request(
+            "POST",
+            &format!("/projects/{home}/test_runs"),
+            &json!({"name": "nightly"}),
+        ),
     )
     .await;
     assert_eq!(status, StatusCode::CREATED, "creating the run: {created}");
@@ -358,16 +417,23 @@ async fn a_test_case_identifier_is_addressed_verbatim() {
 async fn duplicate_routes_report_an_unusable_identifier_as_their_own_description_says() {
     let (_directory, app) = test_app();
 
-    // These three read the identifier as a body field before they read the
-    // path, so an unusable path identifier reaches them as a bad request.
-    for uri in [
-        "/projects/nope/duplicate",
-        "/test_runs/nope/duplicate",
-        "/milestones/nope/duplicate",
-    ] {
+    // A project reads the identifier as a body field before it reads the path,
+    // so an unusable path identifier reaches it as a bad request.
+    let (status, body) = send_json(
+        &app,
+        json_request("POST", "/projects/nope/duplicate", &json!({})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "/projects/nope/duplicate");
+    assert_error_envelope(&body, "invalid_request");
+
+    // The routes that read a document inside a project must find its home
+    // before they can read it, and locating an identifier refuses an unusable
+    // one — the same answer every other bare-identifier document route gives.
+    for uri in ["/test_runs/nope/duplicate", "/milestones/nope/duplicate"] {
         let (status, body) = send_json(&app, json_request("POST", uri, &json!({}))).await;
         assert_eq!(status, StatusCode::BAD_REQUEST, "{uri}");
-        assert_error_envelope(&body, "invalid_request");
+        assert_error_envelope(&body, "invalid_id");
     }
 
     // The suite route reads the path identifier first, like the rest of the
@@ -565,7 +631,12 @@ async fn openapi_documents_the_error_contract_of_every_operation() {
             "TestSuiteUpdateRequest",
             NO_REQUIRED,
         ),
-        ("/test_runs", "post", "TestRunCreateRequest", NAME_REQUIRED),
+        (
+            "/projects/{id}/test_runs",
+            "post",
+            "TestRunCreateRequest",
+            NAME_REQUIRED,
+        ),
         (
             "/test_runs/{id}",
             "put",
@@ -579,7 +650,7 @@ async fn openapi_documents_the_error_contract_of_every_operation() {
             NO_REQUIRED,
         ),
         (
-            "/milestones",
+            "/projects/{id}/milestones",
             "post",
             "MilestoneCreateRequest",
             NAME_REQUIRED,
@@ -591,7 +662,7 @@ async fn openapi_documents_the_error_contract_of_every_operation() {
             NO_REQUIRED,
         ),
         (
-            "/configurations",
+            "/projects/{id}/configurations",
             "post",
             "TestConfigurationCreateRequest",
             NAME_REQUIRED,
@@ -650,7 +721,7 @@ async fn openapi_declares_the_security_posture_of_every_operation() {
     ];
 
     let operations = documented_operations(&document);
-    assert_eq!(operations.len(), 68, "the documented surface changed");
+    assert_eq!(operations.len(), 71, "the documented surface changed");
 
     for (label, operation) in &operations {
         let responses = operation["responses"].as_object().expect("responses");
@@ -708,7 +779,7 @@ async fn openapi_declares_the_security_posture_of_every_operation() {
         .filter(|(_, operation)| operation["responses"].get("403").is_some())
         .count();
     assert_eq!(
-        refuses, 53,
+        refuses, 63,
         "the 403 surface changed; update this count with it"
     );
 }
@@ -916,7 +987,7 @@ async fn openapi_operations_carry_stable_ids_and_resource_tags() {
             "{label} carries an undeclared tag: {tag}"
         );
     }
-    assert_eq!(ids.len(), 68, "every documented operation is named");
+    assert_eq!(ids.len(), 71, "every documented operation is named");
 }
 
 #[tokio::test]

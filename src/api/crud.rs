@@ -115,6 +115,15 @@ pub(crate) fn duplicated(spec: &DuplicateSpec, new_id: &str) -> (StatusCode, Jso
     )
 }
 
+/// The 201 body a parent-scoped creation returns. `noun` names the resource, so
+/// the message reads "Test run created" rather than repeating a generic one.
+pub(crate) fn created_response(noun: &str, id: String) -> (StatusCode, Json<Value>) {
+    (
+        StatusCode::CREATED,
+        Json(json!({ "message": format!("{noun} created"), "id": id })),
+    )
+}
+
 /// The 201 body a create-or-place request returns. `noun` names the resource so
 /// the message says whether it was created, copied, or moved.
 pub(crate) fn composed_response(composed: &Composed, noun: &str) -> (StatusCode, Json<Value>) {

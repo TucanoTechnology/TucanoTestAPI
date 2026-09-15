@@ -4,7 +4,7 @@ use axum::Router;
 use axum::http::StatusCode;
 use common::{
     app_at, assert_error_envelope, create_case_in, create_named, create_project, create_suite,
-    delete, get, json_request, raw_json_request, send_json, test_app, xml_request,
+    delete, fixture_home, get, json_request, raw_json_request, send_json, test_app, xml_request,
 };
 use serde_json::json;
 use tempfile::TempDir;
@@ -17,11 +17,12 @@ async fn test_runs_support_the_full_crud_lifecycle() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(listing, json!([]));
 
+    let home = fixture_home(&app).await;
     let (status, created) = send_json(
         &app,
         json_request(
             "POST",
-            "/test_runs",
+            &format!("/projects/{home}/test_runs"),
             &json!({"testRunId": "R-001", "name": "nightly", "timestamp": "2026-09-02T00:00:00Z"}),
         ),
     )
@@ -63,9 +64,14 @@ async fn a_run_created_from_a_name_alone_reads_back_and_records_results() {
     let (directory, app) = test_app();
 
     // The body names the run and nothing else: no `testRunId`, no `timestamp`.
+    let home = fixture_home(&app).await;
     let (status, created) = send_json(
         &app,
-        json_request("POST", "/test_runs", &json!({"name": "nightly"})),
+        json_request(
+            "POST",
+            &format!("/projects/{home}/test_runs"),
+            &json!({"name": "nightly"}),
+        ),
     )
     .await;
     assert_eq!(status, StatusCode::CREATED, "creating: {created}");
@@ -84,7 +90,10 @@ async fn a_run_created_from_a_name_alone_reads_back_and_records_results() {
     );
 
     // The stored document itself satisfies the model, not just the response.
-    let marker = directory.path().join("test_runs/nightly.json");
+    let marker = directory.path().join(format!(
+        "projects/{}/test_runs/nightly.json",
+        common::project_folder(&home)
+    ));
     let on_disk: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(&marker).expect("run readable"))
             .expect("run is valid JSON");
@@ -96,7 +105,7 @@ async fn a_run_created_from_a_name_alone_reads_back_and_records_results() {
         &app,
         json_request(
             "POST",
-            "/test_runs",
+            &format!("/projects/{home}/test_runs"),
             &json!({"name": "morning", "timestamp": "2026-09-02T00:00:00Z"}),
         ),
     )
@@ -107,7 +116,7 @@ async fn a_run_created_from_a_name_alone_reads_back_and_records_results() {
     assert_eq!(morning["timestamp"], "2026-09-02T00:00:00Z");
 
     // Every route that deserialises the run answers instead of failing.
-    let project = create_project(&app, "checkout").await;
+    let project = home;
     create_suite(&app, &project, "smoke").await;
     create_case_in(
         &app,
@@ -143,8 +152,13 @@ async fn a_run_created_from_a_name_alone_reads_back_and_records_results() {
 async fn creating_a_test_run_requires_a_non_empty_name() {
     let (_directory, app) = test_app();
 
+    let home = fixture_home(&app).await;
     for payload in [json!({"testRunId": "R-001"}), json!({"name": ""})] {
-        let (status, body) = send_json(&app, json_request("POST", "/test_runs", &payload)).await;
+        let (status, body) = send_json(
+            &app,
+            json_request("POST", &format!("/projects/{home}/test_runs"), &payload),
+        )
+        .await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
         assert_error_envelope(&body, "invalid_request");
     }
@@ -158,9 +172,14 @@ async fn duplicate_test_runs_are_rejected_with_conflict() {
         "nightly.json"
     );
 
+    let home = fixture_home(&app).await;
     let (status, body) = send_json(
         &app,
-        json_request("POST", "/test_runs", &json!({"name": "nightly"})),
+        json_request(
+            "POST",
+            &format!("/projects/{home}/test_runs"),
+            &json!({"name": "nightly"}),
+        ),
     )
     .await;
     assert_eq!(status, StatusCode::CONFLICT);
@@ -191,11 +210,12 @@ async fn test_runs_support_composition_execution_and_isolation() {
     let (_directory, app) = test_app();
 
     // 1. Create two test runs, one suite, and one test case
+    let home = fixture_home(&app).await;
     send_json(
         &app,
         json_request(
             "POST",
-            "/test_runs",
+            &format!("/projects/{home}/test_runs"),
             &json!({"testRunId": "RUN-1.json", "name": "run1", "timestamp": "2026-09-04T00:00:00Z"}),
         ),
     )
@@ -205,13 +225,13 @@ async fn test_runs_support_composition_execution_and_isolation() {
         &app,
         json_request(
             "POST",
-            "/test_runs",
+            &format!("/projects/{home}/test_runs"),
             &json!({"testRunId": "RUN-2.json", "name": "run2", "timestamp": "2026-09-04T00:00:00Z"}),
         ),
     )
     .await;
 
-    let project = create_project(&app, "checkout").await;
+    let project = home;
     create_suite(&app, &project, "smoke").await;
     create_case_in(
         &app,
@@ -309,11 +329,12 @@ async fn test_runs_support_composition_execution_and_isolation() {
 async fn a_partial_update_keeps_the_fields_the_body_leaves_out() {
     let (_directory, app) = test_app();
 
+    let home = fixture_home(&app).await;
     let (status, _) = send_json(
         &app,
         json_request(
             "POST",
-            "/test_runs",
+            &format!("/projects/{home}/test_runs"),
             &json!({
                 "testRunId": "R-001",
                 "name": "nightly",
@@ -570,12 +591,13 @@ async fn configuration_links_survive_a_repository_restart() {
 async fn listing_runs_filters_by_the_configuration_they_link() {
     let (_directory, app) = test_app();
 
+    let home = fixture_home(&app).await;
     for (id, name) in [("R-1", "nightly"), ("R-2", "weekly"), ("R-3", "release")] {
         let (status, body) = send_json(
             &app,
             json_request(
                 "POST",
-                "/test_runs",
+                &format!("/projects/{home}/test_runs"),
                 &json!({
                     "testRunId": id,
                     "name": name,
@@ -664,9 +686,14 @@ async fn listing_runs_filters_by_the_configuration_they_link() {
 
 /// Creates a run to import into and returns the identifier.
 async fn create_run(app: &Router, name: &str) -> String {
+    let project = fixture_home(app).await;
     let (status, created) = send_json(
         app,
-        json_request("POST", "/test_runs", &json!({"name": name})),
+        json_request(
+            "POST",
+            &format!("/projects/{project}/test_runs"),
+            &json!({"name": name}),
+        ),
     )
     .await;
     assert_eq!(
@@ -1196,8 +1223,12 @@ async fn listing_defects_returns_the_links_a_result_carries() {
 
     // The links belong to the result, not the run, so they are written where the
     // route that will create them stores them — and read back through the same
-    // document the API serves.
-    let path = directory.path().join("test_runs/nightly.json");
+    // document the API serves. A run lives in its project's folder.
+    let home = fixture_home(&app).await;
+    let path = directory.path().join(format!(
+        "projects/{}/test_runs/nightly.json",
+        common::project_folder(&home)
+    ));
     let mut run: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(&path).expect("run readable"))
             .expect("run is valid JSON");

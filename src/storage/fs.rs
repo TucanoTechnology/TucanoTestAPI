@@ -5,14 +5,17 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
 use super::layout::{
-    Parent, Placement, attachment_path, case_dir, case_marker, document_path, folder_wire_id,
-    node_folder, parent_dir, project_dir, project_marker, revision_dir, revision_marker, root_dir,
+    Parent, Placement, RESERVED_PROJECT_CHILDREN, attachment_path, case_dir, case_marker,
+    folder_wire_id, node_folder, parent_dir, project_collection_dir, project_dir,
+    project_document_path, project_marker, revision_dir, revision_marker, root_dir,
     set_private_permissions, step_attachment_path, suite_dir, suite_marker, unique_suffix,
+    validate_document_id,
 };
 use super::{Repository, Resource};
 
 /// Filesystem-backed [`Repository`]: a folder tree for projects, suites, and
-/// cases, one JSON document elsewhere.
+/// cases, and one JSON document per run, milestone and configuration inside the
+/// project folder that owns it.
 #[derive(Clone)]
 pub struct FileRepository {
     root: PathBuf,
@@ -60,9 +63,9 @@ impl FileRepository {
                 let parent = required_parent(parent)?;
                 case_marker(&self.root, parent, id)
             }
-            _ => {
-                reject_parent(parent)?;
-                document_path(&self.root, resource, id)
+            Resource::Runs | Resource::Milestones | Resource::Configurations => {
+                let project = project_parent(parent)?;
+                project_document_path(&self.root, project, resource, id)
             }
         }
     }
@@ -111,9 +114,11 @@ impl FileRepository {
         self.child_folders(&root_dir(&self.root, Resource::Projects)?, "project.json")
     }
 
-    /// Flat `.json` documents of a resource stored below the data root.
-    fn list_flat(&self, resource: Resource) -> io::Result<Vec<String>> {
-        let entries = match fs::read_dir(root_dir(&self.root, resource)?) {
+    /// Names of the `.json` documents inside a project-scoped collection
+    /// directory, sorted. A collection a project does not hold is empty rather
+    /// than an error, and the atomic-write temporary files are left out.
+    fn collection_documents(&self, directory: &Path) -> io::Result<Vec<String>> {
+        let entries = match fs::read_dir(directory) {
             Ok(entries) => entries,
             Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
             Err(error) => return Err(error),
@@ -131,6 +136,14 @@ impl FileRepository {
             .collect::<Vec<_>>();
         names.sort();
         Ok(names)
+    }
+
+    /// Collection directory of a project-scoped resource, per project folder.
+    fn collection_dirs(&self, resource: Resource) -> io::Result<Vec<PathBuf>> {
+        self.project_folders()?
+            .iter()
+            .map(|project| project_collection_dir(&self.root, &folder_wire_id(project), resource))
+            .collect()
     }
 
     fn read_json(&self, path: &Path) -> io::Result<Value> {
@@ -173,6 +186,7 @@ impl FileRepository {
         parent: Option<&Parent>,
         id: &str,
     ) -> io::Result<()> {
+        self.ensure_name_not_reserved(resource, parent, id)?;
         let folder = self.folder(resource, parent, id)?;
         if !folder.exists() {
             return Ok(());
@@ -187,6 +201,32 @@ impl FileRepository {
                     "child name is already taken by another kind of resource",
                 ));
             }
+        }
+        Ok(())
+    }
+
+    /// A project folder reserves the names of its own collections.
+    ///
+    /// A suite or a case folder taking one would be created *inside* that
+    /// collection, where its marker would be listed as a document of a resource
+    /// it is not, so the name is refused whether or not anything is stored
+    /// there yet.
+    fn ensure_name_not_reserved(
+        &self,
+        resource: Resource,
+        parent: Option<&Parent>,
+        id: &str,
+    ) -> io::Result<()> {
+        if !matches!(parent, Some(Parent::Project(_)))
+            || !matches!(resource, Resource::Suites | Resource::Cases)
+        {
+            return Ok(());
+        }
+        if RESERVED_PROJECT_CHILDREN.contains(&node_folder(resource, id)?) {
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                "child name is already taken by another kind of resource",
+            ));
         }
         Ok(())
     }
@@ -305,6 +345,7 @@ impl FileRepository {
                 "source does not exist",
             ));
         }
+        self.ensure_name_not_reserved(resource, Some(target), id)?;
         if to.exists() {
             return Err(io::Error::new(
                 io::ErrorKind::AlreadyExists,
@@ -358,7 +399,13 @@ impl Repository for FileRepository {
                 }
                 ids
             }
-            _ => self.list_flat(resource)?,
+            Resource::Runs | Resource::Milestones | Resource::Configurations => {
+                let mut ids = Vec::new();
+                for directory in self.collection_dirs(resource)? {
+                    ids.extend(self.collection_documents(&directory)?);
+                }
+                ids
+            }
         };
         ids.sort();
         ids.dedup();
@@ -366,8 +413,22 @@ impl Repository for FileRepository {
     }
 
     fn locate(&self, resource: Resource, id: &str) -> io::Result<Vec<Parent>> {
-        let folder = node_folder(resource, id)?;
         let mut homes = Vec::new();
+        if resource.is_project_scoped() {
+            // Refuse an unusable identifier before the walk: with no project to
+            // build a path against, nothing else would check it.
+            validate_document_id(resource, id)?;
+            // Every project whose collection holds the document owns an
+            // occurrence; `project_folders` is sorted, so the order is stable.
+            for project in self.project_folders()? {
+                let project_id = folder_wire_id(&project);
+                if project_document_path(&self.root, &project_id, resource, id)?.is_file() {
+                    homes.push(Parent::Project(project_id));
+                }
+            }
+            return Ok(homes);
+        }
+        let folder = node_folder(resource, id)?;
         match resource {
             Resource::Suites => {
                 for project in self.project_folders()? {
@@ -413,6 +474,13 @@ impl Repository for FileRepository {
     }
 
     fn list_children(&self, parent: &Parent, child: Resource) -> io::Result<Vec<String>> {
+        if child.is_project_scoped() {
+            let Parent::Project(project) = parent else {
+                return Err(not_a_project_home(child));
+            };
+            let directory = project_collection_dir(&self.root, project, child)?;
+            return self.collection_documents(&directory);
+        }
         let directory = parent_dir(&self.root, parent)?;
         match child {
             Resource::Suites => {
@@ -453,7 +521,9 @@ impl Repository for FileRepository {
     ) -> io::Result<()> {
         let lock = self.acquire_lock()?;
         let result = (|| {
-            if resource != Resource::Projects
+            // Both guards are about a folder a child would occupy, so only the
+            // resources stored as folders inside a parent are checked.
+            if matches!(resource, Resource::Suites | Resource::Cases)
                 && let Some(parent) = parent
             {
                 let folder = self.folder(resource, Some(parent), id)?;
@@ -716,7 +786,7 @@ fn reject_parent(parent: Option<&Parent>) -> io::Result<()> {
     Ok(())
 }
 
-/// A suite's parent is always a project.
+/// A suite, a run, a milestone and a configuration always live in a project.
 fn project_parent(parent: Option<&Parent>) -> io::Result<&str> {
     match parent {
         Some(Parent::Project(project)) => Ok(project),
@@ -725,6 +795,20 @@ fn project_parent(parent: Option<&Parent>) -> io::Result<&str> {
             "resource requires a project parent",
         )),
     }
+}
+
+/// The refusal a parent that cannot own a project-scoped document answers.
+fn not_a_project_home(resource: Resource) -> io::Error {
+    let noun = match resource {
+        Resource::Runs => "runs",
+        Resource::Milestones => "milestones",
+        Resource::Configurations => "configurations",
+        Resource::Projects | Resource::Suites | Resource::Cases => "these resources",
+    };
+    io::Error::new(
+        io::ErrorKind::InvalidInput,
+        format!("{noun} live inside a project"),
+    )
 }
 
 /// A case is always owned by a parent.
@@ -776,6 +860,12 @@ mod tests {
         }
         assert!(!directory.path().join("test_suites").exists());
         assert!(!directory.path().join("test_cases").exists());
+        for name in RESERVED_PROJECT_CHILDREN {
+            assert!(
+                !directory.path().join(name).exists(),
+                "{name} is a project collection, not a root collection"
+            );
+        }
     }
 
     #[test]
@@ -940,7 +1030,7 @@ mod tests {
 
     #[test]
     fn list_children_reports_only_the_parents_own_children() {
-        let (_directory, repository) = repository();
+        let (directory, repository) = repository();
         create_project(&repository, "checkout.json");
         create_project(&repository, "billing.json");
         repository
@@ -981,8 +1071,271 @@ mod tests {
         assert!(
             repository
                 .list_children(&project("checkout.json"), Resource::Runs)
-                .is_err()
+                .expect("runs")
+                .is_empty(),
+            "a project that holds no run lists none, and its collection folder is not created"
         );
+        assert!(
+            !directory
+                .path()
+                .join("projects/checkout/test_runs")
+                .exists()
+        );
+    }
+
+    #[test]
+    fn project_scoped_documents_live_in_their_project_collection() {
+        let (directory, repository) = repository();
+        create_project(&repository, "checkout.json");
+        let home = project("checkout.json");
+
+        for (resource, id) in [
+            (Resource::Runs, "nightly.json"),
+            (Resource::Milestones, "v1.0.json"),
+            (Resource::Configurations, "chrome.json"),
+        ] {
+            repository
+                .write_at(resource, Some(&home), id, &json!({ "name": id }))
+                .expect("write");
+            assert_eq!(
+                repository.read_at(resource, Some(&home), id).expect("read")["name"],
+                json!(id),
+                "{resource:?}"
+            );
+            assert!(
+                repository
+                    .exists_at(resource, Some(&home), id)
+                    .expect("exists"),
+                "{resource:?}"
+            );
+            assert_eq!(
+                repository.list_children(&home, resource).expect("children"),
+                vec![id.to_owned()],
+                "{resource:?}"
+            );
+            assert_eq!(
+                repository.list(resource).expect("list"),
+                vec![id.to_owned()],
+                "{resource:?}"
+            );
+        }
+
+        assert!(
+            directory
+                .path()
+                .join("projects/checkout/test_runs/nightly.json")
+                .is_file()
+        );
+        assert!(
+            directory
+                .path()
+                .join("projects/checkout/milestones/v1.0.json")
+                .is_file()
+        );
+        assert!(
+            directory
+                .path()
+                .join("projects/checkout/configurations/chrome.json")
+                .is_file()
+        );
+    }
+
+    #[test]
+    fn a_project_scoped_document_requires_a_project_parent() {
+        let (_directory, repository) = repository();
+        create_project(&repository, "checkout.json");
+        let home = project("checkout.json");
+        repository
+            .write_at(
+                Resource::Suites,
+                Some(&home),
+                "smoke.json",
+                &json!({"name": "smoke"}),
+            )
+            .expect("suite");
+        let source = suite("checkout.json", "smoke.json");
+
+        for resource in [
+            Resource::Runs,
+            Resource::Milestones,
+            Resource::Configurations,
+        ] {
+            assert!(
+                repository.read_at(resource, None, "nightly.json").is_err(),
+                "{resource:?} is never addressed without a parent"
+            );
+            for parent in [Some(&source), None] {
+                let error = repository
+                    .write_at(resource, parent, "nightly.json", &json!({}))
+                    .expect_err("a suite is not a home");
+                assert_eq!(error.kind(), io::ErrorKind::InvalidInput, "{resource:?}");
+            }
+            let error = repository
+                .list_children(&source, resource)
+                .expect_err("a suite owns no collection");
+            assert_eq!(error.kind(), io::ErrorKind::InvalidInput, "{resource:?}");
+            let error = repository
+                .locate(resource, "nightly")
+                .expect_err("identifier without the suffix");
+            assert_eq!(error.kind(), io::ErrorKind::InvalidInput, "{resource:?}");
+        }
+    }
+
+    #[test]
+    fn locate_reports_every_project_holding_the_same_identifier() {
+        let (_directory, repository) = repository();
+        create_project(&repository, "checkout.json");
+        create_project(&repository, "billing.json");
+        for parent in [project("checkout.json"), project("billing.json")] {
+            repository
+                .write_at(
+                    Resource::Runs,
+                    Some(&parent),
+                    "nightly.json",
+                    &json!({"name": "nightly"}),
+                )
+                .expect("run");
+        }
+
+        assert_eq!(
+            repository
+                .locate(Resource::Runs, "nightly.json")
+                .expect("homes"),
+            vec![project("billing.json"), project("checkout.json")],
+            "homes come back in the stable order the project listing has"
+        );
+        assert_eq!(
+            repository.list(Resource::Runs).expect("runs"),
+            vec!["nightly.json".to_owned()],
+            "a global listing de-duplicates, exactly as it does for suites"
+        );
+        assert_eq!(
+            repository
+                .list_children(&project("checkout.json"), Resource::Runs)
+                .expect("runs"),
+            vec!["nightly.json".to_owned()],
+            "a parent-scoped listing names that project's own occurrence"
+        );
+        assert!(
+            repository
+                .locate(Resource::Runs, "missing.json")
+                .expect("homes")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn locate_refuses_an_unusable_identifier_with_no_project_to_hold_it() {
+        let (_directory, repository) = repository();
+        for resource in [
+            Resource::Runs,
+            Resource::Milestones,
+            Resource::Configurations,
+        ] {
+            for id in [
+                "nightly",
+                "",
+                ".",
+                "..",
+                "../escape.json",
+                "nested/child.json",
+            ] {
+                let error = repository.locate(resource, id).expect_err("refused");
+                assert_eq!(
+                    error.kind(),
+                    io::ErrorKind::InvalidInput,
+                    "{resource:?} {id:?} is refused rather than reported missing"
+                );
+            }
+            assert!(
+                repository
+                    .locate(resource, "nightly.json")
+                    .expect("a usable identifier")
+                    .is_empty()
+            );
+        }
+    }
+
+    #[test]
+    fn a_project_reserves_the_names_of_its_collections() {
+        let (_directory, repository) = repository();
+        create_project(&repository, "checkout.json");
+        let home = project("checkout.json");
+
+        for name in RESERVED_PROJECT_CHILDREN {
+            let error = repository
+                .write_at(
+                    Resource::Suites,
+                    Some(&home),
+                    &format!("{name}.json"),
+                    &json!({"name": name}),
+                )
+                .expect_err("a suite may not take a collection name");
+            assert_eq!(error.kind(), io::ErrorKind::AlreadyExists, "{name}");
+
+            let error = repository
+                .write_at(
+                    Resource::Cases,
+                    Some(&home),
+                    name,
+                    &json!({"testCaseId": name}),
+                )
+                .expect_err("a case may not take a collection name");
+            assert_eq!(error.kind(), io::ErrorKind::AlreadyExists, "{name}");
+        }
+    }
+
+    #[test]
+    fn the_reservation_only_guards_the_project_folder() {
+        let (_directory, repository) = repository();
+        create_project(&repository, "checkout.json");
+        let home = project("checkout.json");
+        repository
+            .write_at(
+                Resource::Suites,
+                Some(&home),
+                "smoke.json",
+                &json!({"name": "smoke"}),
+            )
+            .expect("suite");
+
+        repository
+            .write_at(
+                Resource::Cases,
+                Some(&suite("checkout.json", "smoke.json")),
+                "test_runs",
+                &json!({"testCaseId": "test_runs"}),
+            )
+            .expect("inside a suite the name is free");
+        assert_eq!(
+            repository
+                .list_children(&suite("checkout.json", "smoke.json"), Resource::Cases)
+                .expect("cases"),
+            vec!["test_runs".to_owned()]
+        );
+    }
+
+    #[test]
+    fn placing_a_reserved_name_into_a_project_is_refused() {
+        let (directory, repository) = repository();
+        create_project(&repository, "checkout.json");
+        create_project(&repository, "billing.json");
+        // A folder that predates the reservation, sitting where checkout's run
+        // collection lives.
+        let legacy = directory.path().join("projects/checkout/test_runs");
+        fs::create_dir_all(&legacy).expect("folder");
+        fs::write(legacy.join("suite.json"), b"{\"name\": \"legacy\"}").expect("marker");
+
+        let error = repository
+            .place(
+                Resource::Suites,
+                &project("checkout.json"),
+                "test_runs.json",
+                &project("billing.json"),
+                Placement::Move,
+            )
+            .expect_err("reserved target name");
+        assert_eq!(error.kind(), io::ErrorKind::AlreadyExists);
     }
 
     #[test]
@@ -1211,6 +1564,14 @@ mod tests {
                 b"evidence",
             )
             .expect("attachment");
+        repository
+            .write_at(
+                Resource::Runs,
+                Some(&project_id),
+                "nightly.json",
+                &json!({"name": "nightly"}),
+            )
+            .expect("run");
 
         repository
             .delete_at(Resource::Projects, None, "checkout.json")
@@ -1218,6 +1579,10 @@ mod tests {
 
         assert!(!directory.path().join("projects/checkout").exists());
         assert!(repository.list(Resource::Cases).expect("cases").is_empty());
+        assert!(
+            repository.list(Resource::Runs).expect("runs").is_empty(),
+            "a project's runs go with it"
+        );
     }
 
     #[test]
@@ -1483,27 +1848,56 @@ mod tests {
     }
 
     #[test]
-    fn flat_resources_keep_their_document_lifecycle() {
+    fn project_scoped_documents_keep_their_document_lifecycle() {
         let (directory, repository) = repository();
+        create_project(&repository, "checkout.json");
+        let home = project("checkout.json");
         let value = json!({"testRunId": "R-001"});
         repository
-            .write_at(Resource::Runs, None, "nightly.json", &value)
+            .write_at(Resource::Runs, Some(&home), "nightly.json", &value)
             .expect("write");
         assert_eq!(
             repository
-                .read_at(Resource::Runs, None, "nightly.json")
+                .read_at(Resource::Runs, Some(&home), "nightly.json")
                 .expect("read"),
             value
         );
-        assert!(directory.path().join("test_runs/nightly.json").is_file());
+        assert!(
+            directory
+                .path()
+                .join("projects/checkout/test_runs/nightly.json")
+                .is_file()
+        );
 
         repository
-            .delete_at(Resource::Runs, None, "nightly.json")
+            .write_at(
+                Resource::Runs,
+                Some(&home),
+                "nightly.json",
+                &json!({"testRunId": "R-002"}),
+            )
+            .expect("overwrite");
+        assert_eq!(
+            repository
+                .read_at(Resource::Runs, Some(&home), "nightly.json")
+                .expect("read")["testRunId"],
+            "R-002"
+        );
+
+        repository
+            .delete_at(Resource::Runs, Some(&home), "nightly.json")
             .expect("delete");
         assert!(
             repository
-                .read_at(Resource::Runs, None, "nightly.json")
+                .read_at(Resource::Runs, Some(&home), "nightly.json")
                 .is_err()
+        );
+        assert!(
+            directory
+                .path()
+                .join("projects/checkout/test_runs")
+                .is_dir(),
+            "deleting one document leaves the collection, and the project, alone"
         );
     }
 
@@ -1532,8 +1926,9 @@ mod tests {
     }
 
     #[test]
-    fn flat_resources_require_a_json_extension() {
+    fn documents_require_a_json_extension() {
         let (_directory, repository) = repository();
+        create_project(&repository, "checkout.json");
         let error = repository
             .write_at(
                 Resource::Projects,
@@ -1543,6 +1938,22 @@ mod tests {
             )
             .expect_err("rejected");
         assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+
+        for resource in [
+            Resource::Runs,
+            Resource::Milestones,
+            Resource::Configurations,
+        ] {
+            let error = repository
+                .write_at(
+                    resource,
+                    Some(&project("checkout.json")),
+                    "nightly",
+                    &json!({"name": "nightly"}),
+                )
+                .expect_err("rejected");
+            assert_eq!(error.kind(), io::ErrorKind::InvalidInput, "{resource:?}");
+        }
     }
 
     #[test]
@@ -1569,6 +1980,24 @@ mod tests {
                     .is_err(),
                 "case identifier should be rejected: {id:?}"
             );
+            for resource in [
+                Resource::Runs,
+                Resource::Milestones,
+                Resource::Configurations,
+            ] {
+                assert!(
+                    repository
+                        .read_at(resource, Some(&project("checkout.json")), id)
+                        .is_err(),
+                    "{resource:?} identifier should be rejected: {id:?}"
+                );
+                assert!(
+                    repository
+                        .read_at(resource, Some(&project(id)), "nightly.json")
+                        .is_err(),
+                    "{resource:?} should be rejected in a hostile project: {id:?}"
+                );
+            }
         }
     }
 
@@ -1581,6 +2010,11 @@ mod tests {
                 .is_err()
         );
         assert!(repository.read_at(Resource::Cases, None, "TC-001").is_err());
+        assert!(
+            repository
+                .read_at(Resource::Runs, None, "nightly.json")
+                .is_err()
+        );
         assert!(
             repository
                 .read_at(
@@ -1598,6 +2032,7 @@ mod tests {
         use std::os::unix::fs::symlink;
 
         let (directory, repository) = repository();
+        create_project(&repository, "checkout.json");
         let outside = directory
             .path()
             .parent()
@@ -1608,10 +2043,12 @@ mod tests {
             serde_json::to_string(&json!({"name": "secret"})).expect("json"),
         )
         .expect("outside file");
-        symlink(&outside, directory.path().join("test_runs/evil.json")).expect("symlink");
+        let runs = directory.path().join("projects/checkout/test_runs");
+        fs::create_dir_all(&runs).expect("runs dir");
+        symlink(&outside, runs.join("evil.json")).expect("symlink");
 
         let error = repository
-            .read_at(Resource::Runs, None, "evil.json")
+            .read_at(Resource::Runs, Some(&project("checkout.json")), "evil.json")
             .expect_err("symlink escape must be rejected");
         assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
     }

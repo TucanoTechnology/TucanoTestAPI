@@ -11,15 +11,17 @@
 //! Two policies recur and are worth naming:
 //!
 //! - **Reads and writes reach a project, not a listing.** A caller with no role
-//!   in a project never sees its suites, cases, runs, or milestones, and a
-//!   listing is filtered to the projects the caller can reach rather than
-//!   refused. A system administrator is not filtered: [`scope`] returns `None`,
-//!   which every helper treats as "nothing to check".
-//! - **A request that names no project is not a loophole.** A run carries the
-//!   projects it covers in its own body, and the role is required in every one of
-//!   them; a run naming none is readable by any authenticated caller. A milestone
-//!   must name at least one project-bearing reference, so a milestone that names
-//!   none is a bad request rather than an unguarded document.
+//!   in a project never sees its suites, cases, runs, milestones, or
+//!   configurations, and a listing is filtered to the projects the caller can
+//!   reach rather than refused. A system administrator is not filtered: [`scope`]
+//!   returns `None`, which every helper treats as "nothing to check".
+//! - **A resource is governed by where it lives, and by what it names.** Every
+//!   resource has a home project, and a run or a milestone also reaches the
+//!   projects its own references name. The role is required in the home *and* in
+//!   every project a reference reaches, so a run stored in one project can never
+//!   be used to read the embedded snapshots of another. A document that names no
+//!   project is governed by its home alone — it is not thereby open to every
+//!   caller.
 //!
 //! With `TUCANO_AUTH_REQUIRED` off every helper returns before it resolves
 //! anything, so the trusted-network deployment reads no grant and answers no
@@ -36,7 +38,7 @@ use super::{
 use crate::{
     auth::{Principal, Role},
     domain::DomainError,
-    storage::{Repository, Resource},
+    storage::{Parent, Repository, Resource},
 };
 
 /// The projects `principal` may reach, or `None` when there is nothing to check.
@@ -148,36 +150,94 @@ fn effective_run_projects(document: &Value, body: &Value) -> Vec<String> {
     project_ids(body.get("projects").or_else(|| document.get("projects")))
 }
 
-/// The projects a milestone's references reach.
+/// The projects a milestone's references reach, resolved with the milestone's
+/// own project preferred.
 ///
 /// A reference the store cannot resolve is skipped, matching how progress
 /// tolerates a deleted suite or run: a dangling reference must not fail a
-/// request that the resource itself can still answer.
+/// request that the resource itself can still answer. An identifier two projects
+/// hold is not dangling, so it is read from `home` when the home holds it and
+/// only resolved globally otherwise — a milestone in one project means its own
+/// project's `nightly`, not a conflict. Skipping it instead would drop every
+/// project that run covers out of the authorization, leaving the milestone
+/// governed by its home alone.
 fn milestone_projects<R: Repository>(
     state: &AppState<R>,
+    home: &str,
     suites: &[String],
     runs: &[String],
 ) -> Vec<String> {
+    let parent = Parent::Project(home.to_owned());
     let mut projects = BTreeSet::new();
     for suite in suites {
+        // A suite the home holds lives in the home, which the caller requires
+        // anyway; one it does not hold is resolved globally, as before.
+        if state
+            .document_in(Resource::Suites, &parent, suite, missing(Resource::Suites))
+            .is_ok()
+        {
+            projects.insert(home.to_owned());
+            continue;
+        }
         if let Ok(project) = state.project_of(Resource::Suites, suite, missing(Resource::Suites)) {
             projects.insert(project);
         }
     }
     for run in runs {
-        if let Ok(document) = state.document(Resource::Runs, run) {
+        let document = state
+            .document_in(Resource::Runs, &parent, run, missing(Resource::Runs))
+            .or_else(|_| state.document(Resource::Runs, run));
+        if let Ok(document) = document {
             projects.extend(project_ids(document.get("projects")));
         }
     }
     projects.into_iter().collect()
 }
 
+/// Every project a run or a milestone reaches: the project that stores it, and
+/// the projects its own references name.
+///
+/// The home anchors a document whose references name no project at all, so a run
+/// that covers nothing is still governed by someone rather than open to every
+/// caller.
+///
+/// # Errors
+///
+/// [`DomainError::NotFound`] when nothing holds `id`, and
+/// [`DomainError::Conflict`] when two projects do.
+fn reachable_projects<R: Repository>(
+    state: &AppState<R>,
+    resource: Resource,
+    id: &str,
+) -> Result<Vec<String>, DomainError> {
+    let home = state.project_of(resource, id, missing(resource))?;
+    let document = state.document(resource, id)?;
+    let references = match resource {
+        Resource::Runs => project_ids(document.get("projects")),
+        _ => milestone_projects(
+            state,
+            &home,
+            &string_array(document.get("testSuiteIds")),
+            &string_array(document.get("testRunIds")),
+        ),
+    };
+    Ok(with_home(home, references))
+}
+
+/// `projects` plus `home`, the project the document is stored in.
+fn with_home(home: String, mut projects: Vec<String>) -> Vec<String> {
+    if !projects.contains(&home) {
+        projects.push(home);
+    }
+    projects
+}
+
 /// The projects a resource stored under `id` reaches.
 ///
 /// This is the resolution the guards run before the handler reads the document
-/// the request will read next. A flat resource names its own project; a
-/// hierarchical one is resolved through [`TestService::project_of`]; a run or a
-/// milestone is followed through its references.
+/// the request will read next. A project names itself; a suite, a case and a
+/// configuration are governed by the project that holds them; a run and a
+/// milestone additionally by every project their references reach.
 fn projects_of<R: Repository>(
     state: &AppState<R>,
     resource: Resource,
@@ -185,29 +245,17 @@ fn projects_of<R: Repository>(
 ) -> Result<Vec<String>, DomainError> {
     match resource {
         Resource::Projects => Ok(vec![id.to_owned()]),
-        Resource::Suites | Resource::Cases => {
+        Resource::Suites | Resource::Cases | Resource::Configurations => {
             Ok(vec![state.project_of(resource, id, missing(resource))?])
         }
-        Resource::Runs => {
-            let document = state.document(Resource::Runs, id)?;
-            Ok(project_ids(document.get("projects")))
-        }
-        Resource::Milestones => {
-            let document = state.document(Resource::Milestones, id)?;
-            Ok(milestone_projects(
-                state,
-                &string_array(document.get("testSuiteIds")),
-                &string_array(document.get("testRunIds")),
-            ))
-        }
-        Resource::Configurations => Ok(Vec::new()),
+        Resource::Runs | Resource::Milestones => reachable_projects(state, resource, id),
     }
 }
 
 /// Requires `required` in every project of `projects`.
 ///
-/// An empty set is vacuously satisfied: it is the authenticated-only fallback a
-/// run that names no project gets.
+/// An empty set is vacuously satisfied, which no longer happens: every resource
+/// has a home project, so the set a guard builds always names at least one.
 fn require_every(
     auth: &AuthState,
     principal: &Principal,
@@ -221,28 +269,6 @@ fn require_every(
         authorize(auth, principal, project, required)?;
     }
     Ok(())
-}
-
-/// Requires `required` in every project a milestone reaches.
-///
-/// A milestone that reaches none is refused rather than left open, because it
-/// names nothing the role could be required in and would otherwise be readable
-/// and writable by any authenticated caller.
-fn require_milestone(
-    auth: &AuthState,
-    principal: &Principal,
-    projects: &[String],
-    required: Role,
-) -> Result<(), DomainError> {
-    if !auth.config.required || principal.system_admin {
-        return Ok(());
-    }
-    if projects.is_empty() {
-        return Err(DomainError::forbidden(
-            "This milestone is not linked to any project",
-        ));
-    }
-    require_every(auth, principal, projects, required)
 }
 
 /// The role a write to `resource` needs.
@@ -267,13 +293,6 @@ fn missing(resource: Resource) -> &'static str {
     }
 }
 
-/// The bad request a milestone that names no project is refused with.
-fn milestone_needs_project() -> DomainError {
-    DomainError::invalid_request(
-        "A milestone must reference at least one project: link it to a test suite or a test run",
-    )
-}
-
 /// The field a placement body names its source entity by.
 fn source_field(resource: Resource) -> Option<&'static str> {
     match resource {
@@ -287,9 +306,9 @@ fn source_field(resource: Resource) -> Option<&'static str> {
 ///
 /// # Errors
 ///
-/// [`DomainError::Forbidden`] when the caller cannot reach the resource, and
+/// [`DomainError::Forbidden`] when the caller cannot reach the resource,
 /// [`DomainError::NotFound`] when the resource the guard resolves does not
-/// exist.
+/// exist, and [`DomainError::Conflict`] when two projects hold the identifier.
 pub(crate) fn guard_get<R: Repository>(
     state: &AppState<R>,
     principal: &Principal,
@@ -299,27 +318,27 @@ pub(crate) fn guard_get<R: Repository>(
     if !state.auth().config.required {
         return Ok(());
     }
-    if resource == Resource::Configurations {
-        return Ok(());
-    }
     let projects = projects_of(state, resource, id)?;
-    if resource == Resource::Milestones {
-        return require_milestone(state.auth(), principal, &projects, Role::Viewer);
-    }
     require_every(state.auth(), principal, &projects, Role::Viewer)
 }
 
 /// Authorizes creating `resource` from `body`.
 ///
+/// Only a project is created without a parent, and only a system administrator
+/// may create one, because the grant that would scope the creation cannot name
+/// a project yet. Every other resource is created inside a parent, so its flat
+/// route has nothing but an explanation to give and [`guard_project_create`]
+/// authorizes the real creation.
+///
 /// # Errors
 ///
-/// [`DomainError::Forbidden`] when the caller cannot reach every project the
-/// body names, and the bad-request answer for a milestone that names none.
+/// [`DomainError::Forbidden`] for a caller that is not a system administrator
+/// when authentication is enforced.
 pub(crate) fn guard_create<R: Repository>(
     state: &AppState<R>,
     principal: &Principal,
     resource: Resource,
-    body: &Value,
+    _body: &Value,
 ) -> Result<(), DomainError> {
     let auth = state.auth();
     if !auth.config.required {
@@ -327,39 +346,61 @@ pub(crate) fn guard_create<R: Repository>(
     }
     match resource {
         Resource::Projects => require_admin(auth, principal),
-        Resource::Runs => require_every(
-            auth,
-            principal,
-            &project_ids(body.get("projects")),
-            Role::Editor,
-        ),
-        Resource::Milestones => {
-            let projects = milestone_projects(
-                state,
-                &string_array(body.get("testSuiteIds")),
-                &string_array(body.get("testRunIds")),
-            );
-            if projects.is_empty() {
-                return Err(milestone_needs_project());
-            }
-            require_every(auth, principal, &projects, Role::Owner)
-        }
         _ => Ok(()),
     }
+}
+
+/// Authorizes creating `resource` inside the project `project` names.
+///
+/// The caller needs the resource's write role in that project. A run embeds the
+/// projects it covered and a milestone reaches the projects its references live
+/// in, so the role is required in every one of those too — a creation may not
+/// name a project the caller cannot reach.
+///
+/// # Errors
+///
+/// [`DomainError::Forbidden`] when the caller cannot reach the target project or
+/// any project the body names, and whatever resolving a reference failed with.
+pub(crate) fn guard_project_create<R: Repository>(
+    state: &AppState<R>,
+    principal: &Principal,
+    resource: Resource,
+    project: &str,
+    body: &Value,
+) -> Result<(), DomainError> {
+    let auth = state.auth();
+    if !auth.config.required {
+        return Ok(());
+    }
+    let required = write_role(resource);
+    authorize(auth, principal, project, required)?;
+    let named = match resource {
+        Resource::Runs => project_ids(body.get("projects")),
+        // The project being created in is the milestone's home, so its
+        // references resolve with that home preferred.
+        Resource::Milestones => milestone_projects(
+            state,
+            project,
+            &string_array(body.get("testSuiteIds")),
+            &string_array(body.get("testRunIds")),
+        ),
+        _ => Vec::new(),
+    };
+    require_every(auth, principal, &named, required)
 }
 
 /// Authorizes updating `id` of `resource` with `body`.
 ///
 /// The projects a run or a milestone reaches come from the body when it names
 /// them and from the stored document otherwise, so a body that adds a foreign
-/// project needs the role there, and one that clears the last reference is
-/// refused where a reference is required.
+/// project needs the role there. The home project is always required, whatever
+/// the body says, because it is where the document lives.
 ///
 /// # Errors
 ///
 /// [`DomainError::Forbidden`] when the caller cannot reach every project the
-/// resource would carry, and the bad-request answer for a milestone stripped of
-/// its last reference.
+/// resource would carry, [`DomainError::NotFound`] when it does not exist, and
+/// [`DomainError::Conflict`] when two projects hold the identifier.
 pub(crate) fn guard_update<R: Repository>(
     state: &AppState<R>,
     principal: &Principal,
@@ -368,25 +409,26 @@ pub(crate) fn guard_update<R: Repository>(
     body: &Value,
 ) -> Result<(), DomainError> {
     let auth = state.auth();
-    if !auth.config.required || resource == Resource::Configurations {
+    if !auth.config.required {
         return Ok(());
     }
     match resource {
         Resource::Runs => {
-            let document = state.document(Resource::Runs, id)?;
-            let projects = effective_run_projects(&document, body);
+            let home = state.project_of(resource, id, missing(resource))?;
+            let document = state.document(resource, id)?;
+            let projects = with_home(home, effective_run_projects(&document, body));
             require_every(auth, principal, &projects, Role::Editor)
         }
         Resource::Milestones => {
-            let document = state.document(Resource::Milestones, id)?;
-            let projects = milestone_projects(
+            let home = state.project_of(resource, id, missing(resource))?;
+            let document = state.document(resource, id)?;
+            let references = milestone_projects(
                 state,
+                &home,
                 &effective_ids(&document, body, "testSuiteIds"),
                 &effective_ids(&document, body, "testRunIds"),
             );
-            if projects.is_empty() {
-                return Err(milestone_needs_project());
-            }
+            let projects = with_home(home, references);
             require_every(auth, principal, &projects, Role::Owner)
         }
         _ => {
@@ -400,8 +442,9 @@ pub(crate) fn guard_update<R: Repository>(
 ///
 /// # Errors
 ///
-/// [`DomainError::Forbidden`] when the caller cannot reach the resource, and
-/// [`DomainError::NotFound`] when it does not exist.
+/// [`DomainError::Forbidden`] when the caller cannot reach the resource,
+/// [`DomainError::NotFound`] when it does not exist, and
+/// [`DomainError::Conflict`] when two projects hold the identifier.
 pub(crate) fn guard_delete<R: Repository>(
     state: &AppState<R>,
     principal: &Principal,
@@ -409,13 +452,10 @@ pub(crate) fn guard_delete<R: Repository>(
     id: &str,
 ) -> Result<(), DomainError> {
     let auth = state.auth();
-    if !auth.config.required || resource == Resource::Configurations {
+    if !auth.config.required {
         return Ok(());
     }
     let projects = projects_of(state, resource, id)?;
-    if resource == Resource::Milestones {
-        return require_milestone(auth, principal, &projects, Role::Owner);
-    }
     require_every(auth, principal, &projects, write_role(resource))
 }
 
@@ -441,10 +481,6 @@ pub(crate) fn guard_duplicate<R: Repository>(
     }
     match resource {
         Resource::Projects => require_admin(auth, principal),
-        Resource::Milestones => {
-            let projects = projects_of(state, resource, id)?;
-            require_milestone(auth, principal, &projects, Role::Owner)
-        }
         _ => {
             let projects = projects_of(state, resource, id)?;
             require_every(auth, principal, &projects, write_role(resource))
@@ -526,14 +562,16 @@ fn authorize_item<R: Repository>(
 
 /// Authorizes an operation on a run.
 ///
-/// The caller must reach every project the run names; a run that names none is
-/// readable and writable by any authenticated caller, which is the decided
-/// fallback for a run that covers no project.
+/// The caller must reach the project the run is stored in and every project it
+/// names, so a run covering several projects is only reachable by a caller who
+/// holds the role in all of them, and a run covering none is still governed by
+/// its home.
 ///
 /// # Errors
 ///
-/// [`DomainError::Forbidden`] when the caller cannot reach the run, and
-/// [`DomainError::NotFound`] when it does not exist.
+/// [`DomainError::Forbidden`] when the caller cannot reach the run,
+/// [`DomainError::NotFound`] when it does not exist, and
+/// [`DomainError::Conflict`] when two projects hold the identifier.
 pub(crate) fn require_run<R: Repository>(
     state: &AppState<R>,
     principal: &Principal,
@@ -543,13 +581,8 @@ pub(crate) fn require_run<R: Repository>(
     if !state.auth().config.required {
         return Ok(());
     }
-    let document = state.document(Resource::Runs, run_id)?;
-    require_every(
-        state.auth(),
-        principal,
-        &project_ids(document.get("projects")),
-        required,
-    )
+    let projects = reachable_projects(state, Resource::Runs, run_id)?;
+    require_every(state.auth(), principal, &projects, required)
 }
 
 /// Authorizes a run operation that also names a suite or a case.
@@ -585,11 +618,12 @@ pub(crate) fn require_run_source<R: Repository>(
 /// Filters a listing to the projects a restricted caller can reach.
 ///
 /// An unrestricted caller (`scope` is `None`) sees the listing unchanged. A
-/// restricted one keeps a project by membership, a suite or a case by the
-/// project it belongs to, a run whose embedded projects are all reachable and
-/// non-empty, and a milestone whose references all resolve to reachable
-/// projects. A `configurations` listing is global and is never filtered. An
-/// unresolvable entry is dropped rather than failing the listing.
+/// restricted one keeps an entry when every project it reaches is in scope: a
+/// project by membership, a suite, a case or a configuration by the project that
+/// holds it, a run by its home and the projects it covers, and a milestone by
+/// its home and the projects its references reach. An entry that does not
+/// resolve — including an identifier two projects hold — is dropped rather than
+/// failing the listing.
 ///
 /// # Errors
 ///
@@ -606,27 +640,13 @@ pub(crate) fn filter_list<R: Repository>(
     let mut kept = Vec::with_capacity(items.len());
     for item in items {
         let keep = match resource {
-            Resource::Configurations => true,
             Resource::Projects => reachable.contains(&item),
-            Resource::Suites | Resource::Cases => state
+            Resource::Suites | Resource::Cases | Resource::Configurations => state
                 .project_of(resource, &item, missing(resource))
                 .map(|project| allowed(Some(reachable), &project))
                 .unwrap_or(false),
-            Resource::Runs => state
-                .document(Resource::Runs, &item)
-                .map(|document| run_within(&project_ids(document.get("projects")), reachable))
-                .unwrap_or(false),
-            Resource::Milestones => state
-                .document(Resource::Milestones, &item)
-                .map(|document| {
-                    let projects = milestone_projects(
-                        state,
-                        &string_array(document.get("testSuiteIds")),
-                        &string_array(document.get("testRunIds")),
-                    );
-                    !projects.is_empty()
-                        && projects.iter().all(|project| reachable.contains(project))
-                })
+            Resource::Runs | Resource::Milestones => reachable_projects(state, resource, &item)
+                .map(|projects| all_within(&projects, reachable))
                 .unwrap_or(false),
         };
         if keep {
@@ -636,9 +656,18 @@ pub(crate) fn filter_list<R: Repository>(
     Ok(kept)
 }
 
-/// Whether a run's projects all fall inside `reachable`, and it names one.
-fn run_within(projects: &[String], reachable: &BTreeSet<String>) -> bool {
-    !projects.is_empty() && projects.iter().all(|project| reachable.contains(project))
+/// Whether every project a document reaches falls inside `reachable`.
+///
+/// This is the same rule `reports::run_reachable` applies to the summary
+/// report, stated over the identifiers a listing holds rather than over a
+/// deserialized `TestRun`: **the home is reachable and every project the
+/// document names is reachable**. The home is always among them, so a run that
+/// covers no project is kept when its home is reachable instead of hidden, and
+/// one unreachable covered project still hides it. The two must be changed
+/// together; `a_run_is_in_scope_when_its_home_and_every_project_it_names_are`
+/// and `reports`' own test pin the same three cases on each side.
+fn all_within(projects: &[String], reachable: &BTreeSet<String>) -> bool {
+    projects.iter().all(|project| reachable.contains(project))
 }
 
 #[cfg(test)]
@@ -663,14 +692,32 @@ mod tests {
         assert!(!allowed(Some(&scope), "checkout.json"));
     }
 
+    /// The same truth table `reports::run_reachable` pins on the domain side:
+    /// the home anchors a run that covers nothing, and one unreachable project
+    /// still hides it.
     #[test]
-    fn a_run_within_scope_must_name_a_reachable_project() {
+    fn a_run_is_in_scope_when_its_home_and_every_project_it_names_are() {
         let reachable: BTreeSet<String> = ["checkout.json".to_owned()].into_iter().collect();
-        assert!(run_within(&["checkout.json".to_owned()], &reachable));
-        assert!(!run_within(&[], &reachable));
-        assert!(!run_within(&["payments.json".to_owned()], &reachable));
-        assert!(!run_within(
-            &["checkout.json".to_owned(), "payments.json".to_owned()],
+        let home = || "checkout.json".to_owned();
+
+        // A run that covers no project is governed by its home alone.
+        assert!(all_within(&[home()], &reachable));
+        // Its home plus a project the caller also reaches.
+        assert!(all_within(
+            &[home(), "billing.json".to_owned()],
+            &["checkout.json".to_owned(), "billing.json".to_owned()]
+                .into_iter()
+                .collect::<BTreeSet<_>>()
+        ));
+        // One covered project the caller cannot reach hides the run.
+        assert!(!all_within(
+            &[home(), "payments.json".to_owned()],
+            &reachable
+        ));
+        // An unreachable home hides it whatever else it covers.
+        assert!(!all_within(&["payments.json".to_owned()], &reachable));
+        assert!(!all_within(
+            &["payments.json".to_owned(), home()],
             &reachable
         ));
     }
@@ -705,10 +752,18 @@ mod tests {
     }
 
     #[test]
-    fn a_milestone_that_names_no_project_is_a_bad_request() {
-        assert!(matches!(
-            milestone_needs_project(),
-            DomainError::InvalidRequest { .. }
-        ));
+    fn every_project_resource_has_a_write_role() {
+        // A milestone is the one content resource an owner must write, and a
+        // configuration is now governed by its project like any other content.
+        assert_eq!(write_role(Resource::Projects), Role::Owner);
+        assert_eq!(write_role(Resource::Milestones), Role::Owner);
+        for resource in [
+            Resource::Suites,
+            Resource::Cases,
+            Resource::Runs,
+            Resource::Configurations,
+        ] {
+            assert_eq!(write_role(resource), Role::Editor, "{resource:?}");
+        }
     }
 }

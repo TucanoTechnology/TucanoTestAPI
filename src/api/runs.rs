@@ -1,4 +1,8 @@
 //! `/test_runs` — a point-in-time execution of suites and cases.
+//!
+//! A run is created inside a project, through `/projects/{id}/test_runs`; the
+//! bare collection route stays registered to explain that, and every other run
+//! route addresses a run by id and resolves the project holding it.
 
 use axum::{
     Json, Router,
@@ -11,13 +15,13 @@ use serde_json::{Value, json};
 use crate::{
     domain::{DomainError, duplicate},
     models::ImportSummary,
-    storage::{Repository, Resource},
+    storage::{Parent, Repository, Resource},
 };
 
 use super::{
     AppState,
     crud::prelude::*,
-    crud::{crud_handlers, duplicate_handler},
+    crud::{created_response, crud_handlers, duplicate_handler},
 };
 
 crud_handlers!(
@@ -30,6 +34,39 @@ crud_handlers!(
 );
 
 duplicate_handler!(duplicate_test_run, duplicate::RUN);
+
+async fn list_project_runs<R: Repository>(
+    State(service): State<AppState<R>>,
+    principal: Principal,
+    Path(id): Path<String>,
+) -> Result<Json<Value>, DomainError> {
+    access::require(&service, &principal, &id, Role::Viewer)?;
+    let items = service.list_children(&Parent::Project(id), Resource::Runs)?;
+    Ok(Json(json!(items)))
+}
+
+async fn create_project_run<R: Repository>(
+    State(service): State<AppState<R>>,
+    principal: Principal,
+    Path(id): Path<String>,
+    Json(body): Json<Value>,
+) -> Result<(StatusCode, Json<Value>), DomainError> {
+    access::guard_project_create(&service, &principal, Resource::Runs, &id, &body)?;
+    let created = service.create_in(Resource::Runs, &Parent::Project(id), &body)?;
+    Ok(created_response("Test run", created.id))
+}
+
+/// Removes the occurrence the caller named, so an identifier two projects hold
+/// is deleted from the one the path says.
+async fn delete_project_run<R: Repository>(
+    State(service): State<AppState<R>>,
+    principal: Principal,
+    Path((id, run_id)): Path<(String, String)>,
+) -> Result<Json<Value>, DomainError> {
+    access::require(&service, &principal, &id, Role::Editor)?;
+    service.delete_in(Resource::Runs, &Parent::Project(id), &run_id)?;
+    Ok(Json(json!({ "message": "Test run deleted" })))
+}
 
 async fn add_suite_to_run<R: Repository>(
     State(service): State<AppState<R>>,
@@ -163,6 +200,8 @@ async fn unlink_run_configuration<R: Repository>(
 
 pub(crate) fn routes<R: Repository + 'static>() -> Router<AppState<R>> {
     Router::new()
+        // Retired: a run is created inside a project. The handler answers with
+        // an explanation rather than a document.
         .route(
             "/test_runs",
             get(list_test_runs::<R>).post(create_test_run::<R>),
@@ -200,5 +239,13 @@ pub(crate) fn routes<R: Repository + 'static>() -> Router<AppState<R>> {
         .route(
             "/test_runs/{id}/configurations/{config_id}",
             delete(unlink_run_configuration::<R>),
+        )
+        .route(
+            "/projects/{id}/test_runs",
+            get(list_project_runs::<R>).post(create_project_run::<R>),
+        )
+        .route(
+            "/projects/{id}/test_runs/{run_id}",
+            delete(delete_project_run::<R>),
         )
 }

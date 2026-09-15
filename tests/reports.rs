@@ -10,8 +10,8 @@ use axum::http::StatusCode;
 use serde_json::{Value, json};
 
 use common::{
-    assert_error_envelope, create_named, create_project, create_suite, get, json_request,
-    send_json, test_app,
+    assert_error_envelope, create_named, create_project, create_suite, fixture_home, get,
+    json_request, send_json, test_app,
 };
 
 #[tokio::test]
@@ -129,10 +129,23 @@ async fn an_unusable_project_identifier_is_invalid_id() {
     assert_error_envelope(&body, "invalid_id");
 }
 
-/// Creates a run from a complete body and returns the identifier the API stored
-/// it under.
+/// Creates a run inside the fixture project and returns the identifier the API
+/// stored it under.
 async fn create_run(app: &Router, body: Value) -> String {
-    let (status, created) = send_json(app, json_request("POST", "/test_runs", &body)).await;
+    let home = fixture_home(app).await;
+    create_run_in(app, &home, body).await
+}
+
+/// Creates a run inside `home` and returns the identifier the API stored it
+/// under. A run is stored in the project folder that owns it, and that folder —
+/// not the `projects` snapshot it carries — is what the `?projectId=` report
+/// filter matches.
+async fn create_run_in(app: &Router, home: &str, body: Value) -> String {
+    let (status, created) = send_json(
+        app,
+        json_request("POST", &format!("/projects/{home}/test_runs"), &body),
+    )
+    .await;
     assert_eq!(status, StatusCode::CREATED, "creating run: {created}");
     created["id"].as_str().expect("run id").to_owned()
 }
@@ -251,8 +264,9 @@ async fn the_filters_combine_and_each_restricts_the_runs_that_contribute() {
     let billing = create_project(&app, "billing").await;
     let chrome = create_named(&app, "/configurations", "chrome-linux").await;
 
-    let nightly = create_run(
+    let nightly = create_run_in(
         &app,
+        &checkout,
         json!({
             "testRunId": "nightly",
             "name": "nightly",
@@ -264,8 +278,9 @@ async fn the_filters_combine_and_each_restricts_the_runs_that_contribute() {
     .await;
     // A run of the same project that links no configuration, so the
     // configuration filter has something to exclude.
-    let _weekly = create_run(
+    let _weekly = create_run_in(
         &app,
+        &checkout,
         json!({
             "testRunId": "weekly",
             "name": "weekly",
@@ -275,9 +290,11 @@ async fn the_filters_combine_and_each_restricts_the_runs_that_contribute() {
         }),
     )
     .await;
-    // A run of another project, so the project filter has something to exclude.
-    let daily = create_run(
+    // A run that lives in another project, so the project filter has something
+    // to exclude.
+    let daily = create_run_in(
         &app,
+        &billing,
         json!({
             "testRunId": "daily",
             "name": "daily",
@@ -352,11 +369,12 @@ async fn a_milestone_filter_keeps_only_the_runs_it_references() {
     )
     .await;
 
+    let home = fixture_home(&app).await;
     let (status, body) = send_json(
         &app,
         json_request(
             "POST",
-            "/milestones",
+            &format!("/projects/{home}/milestones"),
             &json!({
                 "milestoneId": "v1.0.json",
                 "name": "v1.0",
