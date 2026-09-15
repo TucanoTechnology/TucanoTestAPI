@@ -84,6 +84,15 @@ conceptual organisation so a project, suite, or case has one real home and suppl
 entity. This plan supersedes the flat-layout behaviour implied by the baseline: `projects/`, `test_suites/`, and
 `test_cases/` are no longer flat sibling collections.
 
+**Amended in part by layout v3 (Issue #215).** This plan left runs, milestones and configurations in
+root-level collections. [#215](https://github.com/TucanoTechnology/TucanoTestAPI/issues/215) moved all three
+inside the project folder, and the tree below shows the current layout; the *Project-Scoped Runs, Milestones and
+Configurations Plan (Issue #215)* section of this document and
+[`docs/architecture/adr-storage-layout-v3.md`](../architecture/adr-storage-layout-v3.md) are the authority for
+it. Everything else here is unchanged — markers, membership, identity, reads, attachments, security invariants
+— with one consequence worth naming: the delete cascade now carries a project's runs, milestones and
+configurations with it, so a run is no longer guaranteed to outlive the project it covered.
+
 ### v2 layout
 
 ```text
@@ -91,6 +100,9 @@ entity. This plan supersedes the flat-layout behaviour implied by the baseline: 
   projects/
     <project>/
       project.json                     project metadata marker
+      test_runs/<id>.json              point-in-time snapshot copies (v3, Issue #215)
+      milestones/<id>.json             milestone documents (v3, Issue #215)
+      configurations/<id>.json         environment configurations (v3, Issue #215)
       <test suite>/
         suite.json                     suite metadata marker
         <test case>/
@@ -99,9 +111,6 @@ entity. This plan supersedes the flat-layout behaviour implied by the baseline: 
       <test case>/                     case owned directly by the project
         test-case.json
         <attachment files>
-  test_runs/<id>.json                  flat; point-in-time snapshot copies
-  milestones/<id>.json                 flat
-  configurations/<id>.json             flat (activated by Issue #69)
 ```
 
 - A project folder is named after the project wire id minus its trailing `.json` (id `checkout.json` →
@@ -121,11 +130,14 @@ entity. This plan supersedes the flat-layout behaviour implied by the baseline: 
 
 - Project ids stay globally unique. Suite ids are unique **within a project**, case ids are unique **within a
   parent** (project or suite). A suite id may therefore exist under several projects, and a case id under several
-  parents (the result of copy-on-include).
+  parents (the result of copy-on-include). Run, milestone and configuration ids are unique **within a project**
+  as of layout v3 (Issue #215); before that they were globally unique because they were stored flat.
 - Children of one parent share a single folder namespace: a suite base and a direct-case folder name cannot
   collide, and creating a second child with an existing name returns `409 Conflict`.
 - Creating a child whose name equals a parent marker file name (`project.json` in a project, `suite.json` in a
   suite) collides with the marker file and returns `409 Conflict`.
+- `test_runs`, `milestones` and `configurations` are reserved child names inside a project folder (layout v3):
+  a suite or case folder may not take one of those names, and an attempt returns `409 Conflict`.
 
 ### Reads and writes
 
@@ -1108,6 +1120,94 @@ uses each declared variable and gives it a string default, including `host` and 
 `::openapi_schemas_are_strict_only_where_the_api_rejects_unknown_fields` stay green, and every `$ref` still
 resolves, so no schema or route changed.
 
+## Project-Scoped Runs, Milestones and Configurations Plan (Issue #215)
+
+Issue: [#215](https://github.com/TucanoTechnology/TucanoTestAPI/issues/215) — `test_runs/<id>.json`,
+`milestones/<id>.json` and `configurations/<id>.json` are the last three resources stored in a root-level
+collection, which the real-home rule of Issue #65 forbids for everything else. This section records the
+compatibility surface of the change; the decision, its alternatives and its consequences are in
+[`docs/architecture/adr-storage-layout-v3.md`](../architecture/adr-storage-layout-v3.md), which is the
+authority. **Status: decided, not yet implemented** — the layout the section describes is layout v3.
+
+### Stored layout
+
+The three collections move one level down, into the project folder that owns them, and stay single documents
+rather than becoming folders:
+
+```text
+<data>/projects/<project>/test_runs/<id>.json
+<data>/projects/<project>/milestones/<id>.json
+<data>/projects/<project>/configurations/<id>.json
+```
+
+`Resource::ROOT_DIRS` becomes `[Projects]`, so `projects/` is the only collection below the data root (beside
+`auth/` and `.tucano.lock`). **No document changes shape**: no field is added to `TestRun`, `Milestone` or
+`TestConfiguration`, the home is the folder and is never stored, so the legacy Draft 2020-12 schemas are
+untouched and `SUPPORTED_FORMAT_VERSION` stays `1`
+([`file-format-versioning-plan.md`](./file-format-versioning-plan.md)).
+
+### Identity
+
+Run, milestone and configuration ids become unique **within a project**, matching suites. A global document
+route therefore answers `404 not_found` for zero occurrences, operates on the single occurrence, and answers
+`409 conflict` — through the existing `ambiguous()` helper, naming the parent-scoped routes — for two or more.
+Global listings stay de-duplicated and sorted. `test_runs`, `milestones` and `configurations` are reserved
+child names in a project folder, so a suite or case folder cannot take one.
+
+### Wire surface
+
+- **Added and documented:** `GET`/`POST /projects/{id}/test_runs`, `DELETE
+  /projects/{id}/test_runs/{run_id}`, and the `milestones`/`{milestone_id}` and `configurations`/`{config_id}`
+  siblings — nine operations. Each list answers a bare sorted id array and publishes no query parameter; each
+  create answers `201 {"message","id"}`; each delete answers `200 {"message"}`. Unknown project → `404
+  not_found`; duplicate id in that project → `409 conflict`; missing required fields → `400 invalid_request`.
+- **Retired:** `POST /test_runs`, `POST /milestones`, `POST /configurations`. Each path stays registered and
+  answers `400 invalid_request` naming its replacement, exactly as `POST /test_suites` and `POST /test_cases`
+  do since Issue #66. The `TestRunCreateRequest`, `MilestoneCreateRequest` and
+  `TestConfigurationCreateRequest` schemas the Issue #140 plan bound them to move to the parent-scoped creates
+  unchanged, so no request body shape is retired with them.
+- **Undocumented but served:** because the route-parity test compares path keys, the three bare collection
+  paths join `api::UNDOCUMENTED_ROUTES` as whole keys, so the global scans `GET /test_runs`, `GET /milestones`
+  and `GET /configurations` keep working and leave the published contract — the same trade Issue #66 made for
+  `GET /test_suites` and `GET /test_cases`.
+- **Unchanged paths:** `GET`/`PUT`/`DELETE /test_runs/{id}` and every run sub-route (suites, cases, results,
+  defect links, imports, configuration links), `GET`/`PUT`/`DELETE /milestones/{id}`, `/duplicate`,
+  `/progress`, and `GET`/`PUT`/`DELETE /configurations/{id}`. Their response shapes are unchanged; each gains
+  `409 conflict` as a possible answer for an ambiguous identifier.
+- **Operation count:** 68 → **71** (six removed, nine added). The pin in
+  `tests/service.rs::openapi_operations_carry_stable_ids_and_resource_tags` moves with it.
+- **Placement is not added.** A parent-scoped `POST` creates only: it accepts no `mode`, and a body carrying
+  one is refused as an unknown field by the payload validation of Issues #71 and #121.
+
+### Authorization
+
+- A run requires the role in its **home project and in every project its `projects` array names** — `Viewer`
+  to read, `Editor` to write. `TestRun.projects` keeps its shape and its meaning as the projects the run
+  covered; it stops being the ownership source. The "a run naming no project is open to any authenticated
+  caller" fallback is withdrawn.
+- A milestone requires the role in its **home project and in every project its references reach** — `Viewer`
+  to read, `Owner` to write. Because the home now supplies the project, the `400 invalid_request` "A milestone
+  must reference at least one project" and the `403 forbidden` "This milestone is not linked to any project"
+  are both withdrawn.
+- A configuration becomes a project resource: `Viewer` to read, `Editor` to write or create, and
+  `GET /configurations` is filtered to the caller's projects. The four installation-wide short-circuits in
+  `src/api/access.rs` are removed. A run may still link a configuration from any project the caller reaches,
+  which needs `Editor` there too, as `require_run_source` already does for suites and cases.
+- A parent-scoped `DELETE` requires the role in the **named** project only and deletes that occurrence, so it
+  works for an identifier another project also holds.
+- References resolve with the acting document's home preferred, then globally: a milestone's `testRunIds` and a
+  run's `configId` are looked up in the milestone's or run's own project first, and an identifier that is
+  ambiguous after that answers `409 conflict` instead of resolving arbitrarily.
+
+### Migration and rollback
+
+No migration is performed or scripted. `FileRepository::new` creates only `projects/`, never reads the three
+legacy root collections, and **refuses to start** when one of them still holds `*.json` documents (ignoring
+`.tucano-*.tmp`), naming the offending directories and the manual recipe. It never deletes anything: an empty
+legacy directory, which every pre-v3 volume has, is not an error. Rolling the image back against a v3 volume
+leaves the older build answering `404` for these three resources and reporting empty milestone progress, so a
+full rollback means restoring the pre-change snapshot the promotion runbook requires.
+
 ## Breaking change accounting
 
 - **Request id propagated, echoed and published in the error envelope** (Issue #106, plan above). `X-Request-Id`
@@ -1155,7 +1255,10 @@ resolves, so no schema or route changed.
 - **Storage layout v2** replaces the flat `projects/`, `test_suites/`, `test_cases/` layout. Existing data
   directories created by earlier builds are development artifacts and are not migrated; fresh layout is created
   on startup. Persistence behaviour is asserted by repository unit tests that inspect the physical tree, and by
-  the integration suites.
+  the integration suites. **Amended by layout v3 (Issue #215, plan above):** the same no-migration policy
+  applies to `test_runs/`, `milestones/` and `configurations/`, which v3 moved inside the project folder, with
+  one difference — `FileRepository::new` now refuses to start when a legacy root collection still holds
+  documents rather than leaving them silently unread.
 - **Parent-required creation and copy/move placement** change the composition wire contract described by the
   Issue #23/#24 notes above; those notes remain valid only for the payload shapes that this plan keeps.
 - **Retired flat creation routes** (Issue #66). `POST /test_suites` and `POST /test_cases` no longer create; they
@@ -1280,6 +1383,34 @@ resolves, so no schema or route changed.
   `duplicateProject`) and one client class per tag. The count is 64 operations — the issue text said 60, but the
   five duplicates were being counted twice by the old `$ref` fragments; the new test pins the honest 64.
   Deviation recorded with tests in `tests/service.rs` as listed in the plan.
+- **Runs, milestones and configurations stored inside their project** (Issue #215, plan above). Storage layout
+  v3: `<data>/test_runs/<id>.json`, `<data>/milestones/<id>.json` and `<data>/configurations/<id>.json` become
+  `<data>/projects/<project>/test_runs/<id>.json` and siblings, and their identifiers become unique per project
+  instead of globally. **No stored document changes shape** — the home is the folder and is never written into
+  the document, so no field is added to `TestRun`, `Milestone` or `TestConfiguration`, the legacy Draft 2020-12
+  schemas are untouched, and `SUPPORTED_FORMAT_VERSION` stays `1`. The wire change is not additive and has four
+  parts. (1) `POST /test_runs`, `POST /milestones` and `POST /configurations` no longer create: they answer
+  `400 invalid_request` naming the parent-scoped replacement, and the three bare collection paths leave
+  `openapi.json` as whole keys — which also withdraws the published `GET /test_runs`, `GET /milestones` and
+  `GET /configurations` scans, although the router keeps serving them, exactly as Issue #66 did for
+  `/test_suites` and `/test_cases`. (2) Nine operations are added: `GET`/`POST` on
+  `/projects/{id}/test_runs`, `/projects/{id}/milestones` and `/projects/{id}/configurations`, and `DELETE` on
+  each one's `/{run_id}`, `/{milestone_id}`, `/{config_id}` item path, taking the documented count from 68 to
+  71. (3) Every global document route for the three resources — including the run sub-routes, `/duplicate` and
+  `/progress` — can now answer `409 conflict` for an identifier two projects hold, naming the parent-scoped
+  routes, which is the answer `/test_cases/{id}` already gives. (4) Authorization changes: a run now needs the
+  role in its home project **in addition to** every project its `projects` array names, so the "a run naming no
+  project is open to any authenticated caller" fallback is withdrawn; a milestone needs it in its home in
+  addition to its references, and because the home supplies a project the `400` "A milestone must reference at
+  least one project" and the `403` "This milestone is not linked to any project" are both withdrawn, making a
+  reference-less milestone legal; configurations stop being installation-wide and need `viewer` to read and
+  `editor` to write in their home project, so `GET /configurations` becomes filtered for a restricted caller.
+  Nothing is migrated: a volume holding documents in a legacy root collection makes `FileRepository::new` fail
+  at startup with a message naming the directories and the manual recipe, and the service never deletes them.
+  Rolling the image back against a v3 volume answers `404` for these resources and reports empty milestone
+  progress, so a full rollback means restoring the pre-change snapshot. Deviation recorded with tests in
+  `src/storage/layout.rs`, `src/storage/fs.rs`, `tests/runs.rs`, `tests/milestones.rs`,
+  `tests/configurations.rs`, `tests/reports.rs`, `tests/auth.rs` and `tests/service.rs` as listed in the plan.
 
 ## Required case matrix
 

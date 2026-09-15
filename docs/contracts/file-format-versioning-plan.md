@@ -63,9 +63,17 @@ and the reader's supported value is a named constant, `SUPPORTED_FORMAT_VERSION:
 | `Project` | `projects/<project>/project.json` |
 | `TestSuite` | `projects/<project>/<suite>/suite.json` |
 | `TestCase` | `<project or suite>/<case>/test-case.json` |
-| `TestRun` | `test_runs/<id>.json` |
-| `Milestone` | `milestones/<id>.json` |
-| `TestConfiguration` | `configurations/<id>.json` |
+| `TestRun` | `projects/<project>/test_runs/<id>.json` |
+| `Milestone` | `projects/<project>/milestones/<id>.json` |
+| `TestConfiguration` | `projects/<project>/configurations/<id>.json` |
+
+The last three rows are storage **layout v3** ([#215](https://github.com/TucanoTechnology/TucanoTestAPI/issues/215),
+[`docs/architecture/adr-storage-layout-v3.md`](../architecture/adr-storage-layout-v3.md)): runs, milestones and
+configurations moved from root-level collections into the project folder that owns them. **That move is not a
+format change and needs no `formatVersion` bump.** The marker describes the shape and meaning of a document, and
+neither changed — no field was added, removed, renamed or retyped, and a v2 build reads a v3 document byte for
+byte. What a v2 build cannot do is *find* it, which is a layout question answered by the migration and rollback
+policy in the ADR, not by this marker.
 
 A run is not only a document of its own: it embeds full `Project`, `TestSuite`, `TestCase` and
 `TestConfiguration` snapshots, and a project and suite embed their children. So the same field also appears
@@ -125,7 +133,7 @@ interpret a document as a model. Source-verified as of this writing:
 | Site | What it loads | Needs the check |
 | --- | --- | --- |
 | `TestService::load_entity<T>` (`src/domain/service.rs`) | assembled reads — the project, suite and case paths | yes |
-| `TestService::load<T>` (`src/domain/service.rs`) | flat reads — runs, milestones, configurations | yes |
+| `TestService::load<T>` (`src/domain/service.rs`) | home-resolved reads — runs, milestones, configurations | yes |
 | `milestone_progress`, milestone load (`src/domain/service.rs`) | a milestone, for progress | yes |
 | `milestone_progress`, run load (`src/domain/service.rs`) | each referenced run, for progress | yes — and see below |
 | `read_json` (`src/storage/fs.rs`), `merged_document` (`src/domain/service.rs`) | raw `Value` for single-document `GET`, `PUT` merge, duplicate, delete | no — raw paths by design |
