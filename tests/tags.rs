@@ -313,14 +313,20 @@ async fn a_wrong_typed_scalar_is_rejected_with_the_field_named() {
 #[tokio::test]
 async fn the_tags_filter_works_on_runs() {
     let (_directory, app) = test_app();
+    let home = common::fixture_home(&app).await;
 
     let nightly = create_tagged(
         &app,
-        "/test_runs",
+        &format!("/projects/{home}/test_runs"),
         json!({"name": "nightly", "tags": ["ci"]}),
     )
     .await;
-    let manual = create_tagged(&app, "/test_runs", json!({"name": "manual"})).await;
+    let manual = create_tagged(
+        &app,
+        &format!("/projects/{home}/test_runs"),
+        json!({"name": "manual"}),
+    )
+    .await;
 
     let (status, stored) = send_json(&app, get(&format!("/test_runs/{nightly}"))).await;
     assert_eq!(status, StatusCode::OK);
@@ -338,9 +344,13 @@ async fn the_tags_filter_works_on_runs() {
 /// `?tags=` walks the stored document's `tags` array, so on a resource whose
 /// model has no `tags` field — and whose writes therefore refuse one — the
 /// filter is documented but can only ever answer an empty listing. It is
-/// published on the two list operations whose resource can carry tags;
-/// `GET /test_suites` and `GET /test_cases` filter by tags as well but are
-/// retired from the document as a whole (`api::UNDOCUMENTED_ROUTES`).
+/// published on the one list operation left in the document whose resource can
+/// carry tags: `GET /projects`. Suites, cases and runs filter by tags as well,
+/// but their flat collection paths — `GET /test_suites`, `GET /test_cases`,
+/// `GET /test_runs` — are served without a separate contract entry
+/// (`api::UNDOCUMENTED_ROUTES`). The parent-scoped lists that replace them
+/// publish no query parameters at all, and the tag filter stays on the global
+/// scans only, so the document names the parameter exactly once.
 #[tokio::test]
 async fn the_tags_parameter_is_published_only_where_a_tag_can_be_stored() {
     let document: Value =
@@ -388,28 +398,33 @@ async fn the_tags_parameter_is_published_only_where_a_tag_can_be_stored() {
     documented.sort();
     assert_eq!(
         documented,
-        vec!["GET /projects", "GET /test_runs"],
+        vec!["GET /projects"],
         "`?tags=` is published only on the list operations of a taggable resource"
     );
 
     // The two resources the parameter is withheld from cannot store a tag at
     // all, so advertising the filter there would document a false promise.
     let (_directory, app) = test_app();
-    for uri in ["/milestones", "/configurations"] {
+    let project = common::create_project(&app, "checkout").await;
+    for collection in ["milestones", "configurations"] {
         let (status, body) = send_json(
             &app,
-            json_request("POST", uri, &json!({"name": "x", "tags": ["smoke"]})),
+            json_request(
+                "POST",
+                &format!("/projects/{project}/{collection}"),
+                &json!({"name": "x", "tags": ["smoke"]}),
+            ),
         )
         .await;
-        assert_eq!(status, StatusCode::BAD_REQUEST, "{uri}: {body}");
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{collection}: {body}");
         common::assert_error_envelope(&body, "invalid_request");
 
-        let (status, listed) = send_json(&app, get(&format!("{uri}?tags=smoke"))).await;
+        let (status, listed) = send_json(&app, get(&format!("/{collection}?tags=smoke"))).await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(
             listed,
             json!([]),
-            "`?tags=` on {uri} can only ever answer an empty listing"
+            "`?tags=` on /{collection} can only ever answer an empty listing"
         );
     }
 }

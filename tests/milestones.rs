@@ -1,7 +1,7 @@
 mod common;
 
 use axum::http::StatusCode;
-use common::{assert_error_envelope, delete, get, json_request, send_json, test_app};
+use common::{assert_error_envelope, delete, fixture_home, get, json_request, send_json, test_app};
 use serde_json::json;
 
 #[tokio::test]
@@ -12,11 +12,12 @@ async fn milestones_support_the_full_crud_lifecycle() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(listing, json!([]));
 
+    let home = fixture_home(&app).await;
     let (status, created) = send_json(
         &app,
         json_request(
             "POST",
-            "/milestones",
+            &format!("/projects/{home}/milestones"),
             &json!({
                 "milestoneId": "v1.0-RC1.json",
                 "name": "v1.0-RC1",
@@ -69,9 +70,14 @@ async fn a_milestone_created_from_a_name_alone_reads_back_and_reports_progress()
     let (_directory, app) = test_app();
 
     // The body names the milestone and nothing else: no `milestoneId`.
+    let home = fixture_home(&app).await;
     let (status, created) = send_json(
         &app,
-        json_request("POST", "/milestones", &json!({"name": "M1"})),
+        json_request(
+            "POST",
+            &format!("/projects/{home}/milestones"),
+            &json!({"name": "M1"}),
+        ),
     )
     .await;
     assert_eq!(status, StatusCode::CREATED, "creating: {created}");
@@ -95,9 +101,14 @@ async fn a_milestone_created_from_a_name_alone_reads_back_and_reports_progress()
 async fn creating_a_milestone_requires_a_non_empty_name() {
     let (_directory, app) = test_app();
 
+    let home = fixture_home(&app).await;
     let (status, body) = send_json(
         &app,
-        json_request("POST", "/milestones", &json!({"description": "no name"})),
+        json_request(
+            "POST",
+            &format!("/projects/{home}/milestones"),
+            &json!({"description": "no name"}),
+        ),
     )
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
@@ -109,11 +120,12 @@ async fn milestone_progress_aggregates_linked_test_runs() {
     let (_directory, app) = test_app();
 
     // 1. Create test run RUN-1.json with results
+    let home = fixture_home(&app).await;
     send_json(
         &app,
         json_request(
             "POST",
-            "/test_runs",
+            &format!("/projects/{home}/test_runs"),
             &json!({
                 "testRunId": "RUN-1.json",
                 "name": "RUN-1",
@@ -129,11 +141,11 @@ async fn milestone_progress_aggregates_linked_test_runs() {
     .await;
 
     // 2. Create milestone M-1.json linking RUN-1.json
-    send_json(
+    let (status, created) = send_json(
         &app,
         json_request(
             "POST",
-            "/milestones",
+            &format!("/projects/{home}/milestones"),
             &json!({
                 "milestoneId": "M-1.json",
                 "name": "Sprint 42",
@@ -142,6 +154,7 @@ async fn milestone_progress_aggregates_linked_test_runs() {
         ),
     )
     .await;
+    assert_eq!(status, StatusCode::CREATED, "creating: {created}");
 
     // 3. Fetch progress for M-1.json
     let (status, progress) = send_json(&app, get("/milestones/M-1.json/progress")).await;
@@ -167,11 +180,12 @@ async fn progress_for_missing_milestone_returns_not_found() {
 async fn duplicating_a_milestone_copies_it_into_an_independent_document() {
     let (_directory, app) = test_app();
 
+    let home = fixture_home(&app).await;
     send_json(
         &app,
         json_request(
             "POST",
-            "/test_runs",
+            &format!("/projects/{home}/test_runs"),
             &json!({
                 "testRunId": "RUN-1.json",
                 "name": "RUN-1",
@@ -185,11 +199,11 @@ async fn duplicating_a_milestone_copies_it_into_an_independent_document() {
     )
     .await;
 
-    send_json(
+    let (status, created) = send_json(
         &app,
         json_request(
             "POST",
-            "/milestones",
+            &format!("/projects/{home}/milestones"),
             &json!({
                 "milestoneId": "M-1.json",
                 "name": "Sprint 42",
@@ -201,6 +215,7 @@ async fn duplicating_a_milestone_copies_it_into_an_independent_document() {
         ),
     )
     .await;
+    assert_eq!(status, StatusCode::CREATED, "creating: {created}");
 
     let (status, duplicated) = send_json(
         &app,
@@ -260,16 +275,18 @@ async fn duplicating_a_milestone_copies_it_into_an_independent_document() {
 async fn duplicating_a_milestone_onto_an_existing_identifier_is_a_conflict() {
     let (_directory, app) = test_app();
 
+    let home = fixture_home(&app).await;
     for id in ["M-1.json", "M-2.json"] {
-        send_json(
+        let (status, created) = send_json(
             &app,
             json_request(
                 "POST",
-                "/milestones",
+                &format!("/projects/{home}/milestones"),
                 &json!({"milestoneId": id, "name": id}),
             ),
         )
         .await;
+        assert_eq!(status, StatusCode::CREATED, "creating {id}: {created}");
     }
 
     let (status, body) = send_json(
@@ -319,11 +336,12 @@ async fn duplicating_a_missing_milestone_returns_not_found() {
 async fn a_partial_update_keeps_the_fields_the_body_leaves_out() {
     let (_directory, app) = test_app();
 
+    let home = fixture_home(&app).await;
     let (status, _) = send_json(
         &app,
         json_request(
             "POST",
-            "/milestones",
+            &format!("/projects/{home}/milestones"),
             &json!({
                 "milestoneId": "M-1.json",
                 "name": "Sprint 42",

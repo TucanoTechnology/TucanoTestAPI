@@ -64,7 +64,7 @@ async fn wrong_typed_scalars_are_rejected_on_create() {
     assert_rejected(
         &app,
         "POST",
-        "/test_runs",
+        &format!("/projects/{project}/test_runs"),
         json!({"name": "nightly", "timestamp": 123}),
         "timestamp",
     )
@@ -87,7 +87,7 @@ async fn wrong_typed_scalars_are_rejected_on_create() {
     assert_rejected(
         &app,
         "POST",
-        "/milestones",
+        &format!("/projects/{project}/milestones"),
         json!({"name": "v1.0", "testSuiteIds": "S-1"}),
         "testSuiteIds",
     )
@@ -96,7 +96,7 @@ async fn wrong_typed_scalars_are_rejected_on_create() {
     assert_rejected(
         &app,
         "POST",
-        "/configurations",
+        &format!("/projects/{project}/configurations"),
         json!({"name": "chrome", "browser": 1}),
         "browser",
     )
