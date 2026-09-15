@@ -4,7 +4,7 @@ use axum::Router;
 use axum::http::StatusCode;
 use common::{
     app_at, assert_error_envelope, create_case_in, create_named, create_project, create_suite,
-    delete, get, json_request, raw_json_request, send_json, test_app, xml_request,
+    delete, fixture_home, get, json_request, raw_json_request, send_json, test_app, xml_request,
 };
 use serde_json::json;
 use tempfile::TempDir;
@@ -664,9 +664,14 @@ async fn listing_runs_filters_by_the_configuration_they_link() {
 
 /// Creates a run to import into and returns the identifier.
 async fn create_run(app: &Router, name: &str) -> String {
+    let project = fixture_home(app).await;
     let (status, created) = send_json(
         app,
-        json_request("POST", "/test_runs", &json!({"name": name})),
+        json_request(
+            "POST",
+            &format!("/projects/{project}/test_runs"),
+            &json!({"name": name}),
+        ),
     )
     .await;
     assert_eq!(

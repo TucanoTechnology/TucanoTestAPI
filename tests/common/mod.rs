@@ -139,14 +139,52 @@ fn multipart_with_body(uri: &str, body: Vec<u8>) -> Request<Body> {
 
 /// Creates a project, suite, or flat resource from its `name` and returns the
 /// generated identifier.
+///
+/// A run, a milestone and a configuration are stored inside the project that
+/// owns them, so naming one of those collections by its retired flat path
+/// creates the fixture project first and posts to the project-scoped route.
 pub async fn create_named(app: &Router, collection: &str, name: &str) -> String {
+    let collection = scoped(app, collection).await;
     created_id(
         app,
-        collection,
+        &collection,
         &json!({"name": name}),
         &format!("{name} in {collection}"),
     )
     .await
+}
+
+/// The project the fixtures store their project-scoped resources in.
+///
+/// Created on first use and returned unchanged afterwards, so a test — and every
+/// helper it calls — may ask for it as often as it likes and always gets the one
+/// home the tree already has.
+pub async fn fixture_home(app: &Router) -> String {
+    let (status, body) = send_json(
+        app,
+        json_request("POST", "/projects", &json!({"name": "checkout"})),
+    )
+    .await;
+    match status {
+        StatusCode::CREATED => body["id"].as_str().expect("project id").to_owned(),
+        StatusCode::CONFLICT => "checkout.json".to_owned(),
+        other => panic!("creating the fixture project answered {other}: {body}"),
+    }
+}
+
+/// Rewrites a retired flat collection path to the project-scoped route that
+/// replaced it, creating the home the resource needs. Any other path — a
+/// project, or a collection that is already parent-scoped — is returned as it
+/// is.
+pub async fn scoped(app: &Router, collection: &str) -> String {
+    match collection {
+        "/test_runs" | "/milestones" | "/configurations" => format!(
+            "/projects/{}/{}",
+            fixture_home(app).await,
+            collection.trim_start_matches('/')
+        ),
+        other => other.to_owned(),
+    }
 }
 
 /// Creates a project at the root of the tree.
@@ -214,7 +252,7 @@ pub fn assert_error_envelope(body: &Value, code: &str) {
 /// `403` in `openapi.json`. A route that gains or loses its guard therefore
 /// breaks one side or the other instead of quietly drifting out of the
 /// contract.
-pub const ROLE_CHECKED_WRITE_OPERATIONS: [&str; 33] = [
+pub const ROLE_CHECKED_WRITE_OPERATIONS: [&str; 39] = [
     "post /projects",
     "put /projects/{id}",
     "delete /projects/{id}",
@@ -231,7 +269,8 @@ pub const ROLE_CHECKED_WRITE_OPERATIONS: [&str; 33] = [
     "post /test_cases/{id}/duplicate",
     "post /projects/{id}/test_cases",
     "delete /projects/{id}/test_cases/{case_id}",
-    "post /test_runs",
+    "post /projects/{id}/test_runs",
+    "delete /projects/{id}/test_runs/{run_id}",
     "put /test_runs/{id}",
     "delete /test_runs/{id}",
     "post /test_runs/{id}/duplicate",
@@ -244,10 +283,15 @@ pub const ROLE_CHECKED_WRITE_OPERATIONS: [&str; 33] = [
     "post /test_runs/{id}/import/json",
     "post /test_runs/{id}/configurations",
     "delete /test_runs/{id}/configurations/{config_id}",
+    "post /projects/{id}/milestones",
+    "delete /projects/{id}/milestones/{milestone_id}",
     "put /milestones/{id}",
     "delete /milestones/{id}",
     "post /milestones/{id}/duplicate",
-    "post /milestones",
+    "post /projects/{id}/configurations",
+    "delete /projects/{id}/configurations/{config_id}",
+    "put /configurations/{id}",
+    "delete /configurations/{id}",
 ];
 
 /// The request a role matrix sends for one entry of
@@ -261,6 +305,7 @@ pub fn role_checked_write(
     case: &str,
     run: &str,
     milestone: &str,
+    configuration: &str,
 ) -> (&'static str, String, Option<Value>) {
     let method = match label.split_once(' ').expect("label").0 {
         "get" => "GET",
@@ -307,14 +352,17 @@ pub fn role_checked_write(
         "delete /projects/{id}/test_cases/{case_id}" => {
             (format!("/projects/{project}/test_cases/{case}"), None)
         }
-        "post /test_runs" => (
-            "/test_runs".to_owned(),
+        "post /projects/{id}/test_runs" => (
+            format!("/projects/{project}/test_runs"),
             Some(json!({
                 "name": "extra",
                 "timestamp": "2026-09-04T00:00:00Z",
                 "projects": [{"projectId": project, "name": "alpha", "testSuites": []}],
             })),
         ),
+        "delete /projects/{id}/test_runs/{run_id}" => {
+            (format!("/projects/{project}/test_runs/{run}"), None)
+        }
         "put /test_runs/{id}" => (format!("/test_runs/{run}"), Some(json!({}))),
         "delete /test_runs/{id}" => (format!("/test_runs/{run}"), None),
         "post /test_runs/{id}/duplicate" => {
@@ -345,16 +393,32 @@ pub fn role_checked_write(
         "delete /test_runs/{id}/configurations/{config_id}" => {
             (format!("/test_runs/{run}/configurations/config-1"), None)
         }
+        "post /projects/{id}/milestones" => (
+            format!("/projects/{project}/milestones"),
+            Some(json!({"name": "linked", "testRunIds": [run]})),
+        ),
+        "delete /projects/{id}/milestones/{milestone_id}" => {
+            (format!("/projects/{project}/milestones/{milestone}"), None)
+        }
         "put /milestones/{id}" => (format!("/milestones/{milestone}"), Some(json!({}))),
         "delete /milestones/{id}" => (format!("/milestones/{milestone}"), None),
         "post /milestones/{id}/duplicate" => (
             format!("/milestones/{milestone}/duplicate"),
             Some(json!({})),
         ),
-        "post /milestones" => (
-            "/milestones".to_owned(),
-            Some(json!({"name": "linked", "testRunIds": [run]})),
+        "post /projects/{id}/configurations" => (
+            format!("/projects/{project}/configurations"),
+            Some(json!({"name": "extra"})),
         ),
+        "delete /projects/{id}/configurations/{config_id}" => (
+            format!("/projects/{project}/configurations/{configuration}"),
+            None,
+        ),
+        "put /configurations/{id}" => (
+            format!("/configurations/{configuration}"),
+            Some(json!({})),
+        ),
+        "delete /configurations/{id}" => (format!("/configurations/{configuration}"), None),
         other => panic!("unknown role-checked operation: {other}"),
     };
     (method, request.0, request.1)
