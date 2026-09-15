@@ -2,8 +2,21 @@
 
 /**
  * Cleanup script for Tucano Test API.
- * Clears all test data (projects, test suites, test cases, test runs,
- * milestones, attachments, configurations) from the API.
+ *
+ * Wipes every milestone, test run, test suite, project and test case the API
+ * lists, and the attachments stored inside them.
+ *
+ * Configurations are not removed by a step of their own. A configuration is a
+ * project resource: it is reached through the project that owns it, so a bare
+ * `DELETE /configurations/{id}` would not say which project's copy is meant, and
+ * this script's job is to clear everything rather than to guess. It does not
+ * have to: deleting a project cascades to the configurations, runs and
+ * milestones inside it, so every configuration that lives in a listed project
+ * goes with that project — and this script deletes every project it lists.
+ *
+ * `scripts/teardown.mjs` is the scoped opposite: it removes exactly the
+ * configurations the seed created, each read back from and deleted through the
+ * project that holds it.
  *
  * Usage:
  *   node scripts/clear-data.mjs [API_BASE_URL]

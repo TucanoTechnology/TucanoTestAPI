@@ -6,12 +6,17 @@
  * Removes exactly the demo environment `scripts/seed.mjs` created, and nothing
  * else, following the teardown scope of `docs/testing/seed-dataset-spec.md` §4:
  * milestones, then runs, then suites and their copies, then cases and the placed
- * copies, then the projects, then the two configurations the seed created, then
- * the auth account and grants through the same `AuthStore` path the seed used.
+ * copies, then the two configurations the seed created — each read back from and
+ * deleted through the project that owns it — then the projects that held them,
+ * then the auth account and grants through the same `AuthStore` path the seed
+ * used.
  *
  * The order matters. A run and a milestone hold references to suites, cases and
- * projects, so a dependency-ordered removal avoids conflicts and half-removed
- * trees.
+ * projects, and a configuration is reached through the project that owns it: a
+ * project taken first cascades its configurations away, leaving this script with
+ * a removal it can no longer resolve and would have to report as kept. So the
+ * configurations come before the projects, and a dependency-ordered removal
+ * avoids conflicts and half-removed trees.
  *
  * Two rules from the spec shape everything below:
  *
@@ -49,8 +54,20 @@
 
 const PROJECTS_TO_REMOVE = ["checkout.json", "payments.json"];
 
-/** The two configurations the seed created — installations-wide, so exactly these. */
-const CONFIGURATIONS = ["chrome-linux.json", "firefox-linux.json"];
+/** The one project the seed granted the viewer, so the one grant teardown names. */
+const VIEWER_GRANT_PROJECT = "checkout.json";
+
+/**
+ * The two configurations the seed created, each with the project that owns it.
+ *
+ * A configuration is a project resource: it is listed and deleted through the
+ * project that holds it, never globally, so the key is the project the script
+ * has to walk through to reach the value.
+ */
+const CONFIGURATIONS = {
+  "checkout.json": "chrome-linux.json",
+  "payments.json": "firefox-linux.json",
+};
 
 const RUNS = ["nightly.json", "nightly-import.json"];
 const MILESTONES = ["v1.0.json"];
@@ -334,16 +351,69 @@ async function step4Cases() {
 }
 
 /**
- * 5. Projects the seed created, with whatever is left below them.
+ * 5. Configurations the seed created — each read from and deleted through the
+ * project that owns it.
+ *
+ * A configuration is a project resource, so it is listed from its project's own
+ * collection and removed through that project's own route; the bare
+ * `DELETE /configurations/{id}` is not the route to use for a scoped teardown.
+ * The global listing still answers, and it is read first as a cross-check: it
+ * holds the configurations of the projects the caller reaches, and every entry
+ * that is not one of the seed's is named as kept rather than swept away.
+ *
+ * This runs before the projects, because deleting a project cascades to the
+ * configurations inside it: taken afterwards, there would be nothing left to
+ * resolve and the run would report a removal it could not account for.
+ */
+async function step5Configurations() {
+  const all = await call("GET", "/configurations");
+  if (!Array.isArray(all)) {
+    recordKept(
+      "configurations",
+      "GET /configurations answered something other than an array",
+    );
+    return;
+  }
+  const seeded = Object.values(CONFIGURATIONS);
+  for (const id of all) {
+    if (!seeded.includes(id)) {
+      recordKept(
+        `configuration ${id}`,
+        "not one the seed created (the seed creates chrome-linux in checkout.json and firefox-linux in payments.json)",
+      );
+    }
+  }
+  for (const [projectId, configId] of Object.entries(CONFIGURATIONS)) {
+    const listing = `/projects/${encodeURIComponent(projectId)}/configurations`;
+    await deleteOne(
+      `configuration ${configId} in ${projectId}`,
+      `${listing}/${encodeURIComponent(configId)}`,
+      async () => {
+        const held = await getOrNull(listing);
+        if (held === null) {
+          return false;
+        }
+        if (!Array.isArray(held)) {
+          return `GET ${listing} answered something other than an array`;
+        }
+        return held.includes(configId)
+          ? null
+          : `not listed under ${projectId}; it may live somewhere this teardown did not record`;
+      },
+    );
+  }
+}
+
+/**
+ * 6. Projects the seed created, with whatever is left below them.
  *
  * Deleting a project removes everything under it, so this step also cleans up
- * anything steps 3 and 4 missed — which is why deleting a project is the
- * riskiest call in the script and why it is last but for the flat resources.
- * Any other project is named as kept: the teardown removes its own two and says
- * so, rather than reporting a clean sweep while somebody else's project sits
- * beside them.
+ * anything steps 3 to 5 missed — which is why deleting a project is the riskiest
+ * call in the script and why it comes after the configurations. Any other
+ * project is named as kept: the teardown removes its own two and says so, rather
+ * than reporting a clean sweep while somebody else's project sits beside them.
  */
-async function step5Projects() {
+async function step6Projects() {
   const all = await call("GET", "/projects");
   if (!Array.isArray(all)) {
     recordKept(
@@ -363,40 +433,6 @@ async function step5Projects() {
     await deleteOne(
       `project ${id}`,
       `/projects/${encodeURIComponent(id)}`,
-      async () => null,
-    );
-  }
-}
-
-/**
- * 6. Configurations the seed created — exactly its two, never the collection.
- *
- * Configurations are installation-wide and shared with every project, so a
- * blanket delete would break unrelated runs. The listing is read once and every
- * other configuration is named as kept: if this deployment holds more than the
- * seed's two, the teardown says so rather than reporting a clean sweep it did
- * not perform.
- */
-async function step6Configurations() {
-  const all = await call("GET", "/configurations");
-  if (!Array.isArray(all)) {
-    recordKept(
-      "configurations",
-      "GET /configurations answered something other than an array",
-    );
-    return;
-  }
-  for (const id of all) {
-    if (!CONFIGURATIONS.includes(id)) {
-      recordKept(
-        `configuration ${id}`,
-        "not one the seed created (the seed creates chrome-linux and firefox-linux)",
-      );
-      continue;
-    }
-    await deleteOne(
-      `configuration ${id}`,
-      `/configurations/${encodeURIComponent(id)}`,
       async () => null,
     );
   }
@@ -426,9 +462,9 @@ async function step7Auth() {
 
   const { spawnSync } = await import("node:child_process");
   const args = ["--username", username];
-  for (const project of PROJECTS_TO_REMOVE) {
-    args.push("--grant", project);
-  }
+  // The seed grants the viewer exactly one project, so teardown names exactly
+  // one. `unseed-auth` requires at least one `--grant` to know what to remove.
+  args.push("--grant", VIEWER_GRANT_PROJECT);
   // `TUCANO_UNSEED_AUTH_CMD` is a command *line* (it may carry its own
   // `VAR=value` prefix), so it goes to a shell. Everything the script adds is quoted.
   const quoted = args
@@ -502,8 +538,8 @@ async function runTeardown() {
   await step2Runs();
   await step3Suites();
   await step4Cases();
-  await step5Projects();
-  await step6Configurations();
+  await step5Configurations();
+  await step6Projects();
   await step7Auth();
 
   console.log(`\n📋 Removed ${removed.length} item(s).`);
