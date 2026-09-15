@@ -66,7 +66,7 @@ example is a gap, not a deferral.
 | 24 | Summary report | `GET /reports/summary` and `?configurationId=chrome-linux.json` | the report routes | n/a (read-only — no new files) |
 | 25 | Auth users: system administrator | `admin` — the bootstrap account | `TUCANO_BOOTSTRAP_USERNAME`/`TUCANO_BOOTSTRAP_PASSWORD` at startup; `POST /auth/login` | `auth/users.json` (**not** produced by an API call — see [§5](#5-known-gap-auth-accounts-and-role-grants)) |
 | 26 | Auth users: non-admin account | `viewer` — a stored account with no `systemAdmin` flag | written through the `AuthStore` path by the generator; `POST /auth/login` | `auth/users.json` (**not** produced by an API call) |
-| 27 | Role grants per project | `viewer` holds `owner` on `checkout.json`; `admin` holds `owner` on both projects | written through the `AuthStore` grant path; verified by `GET /auth/me` | `auth/projects/checkout.json`, `auth/projects/payments.json` |
+| 27 | Role grants per project | `viewer` holds `owner` on `checkout.json` and on `payments.json`. `admin` holds **no grant at all** — a system administrator is authorized without one (see [§5](#5-known-gap-auth-accounts-and-role-grants)) | written through the `AuthStore` grant path; verified by `GET /auth/me` as `viewer`, and for `admin` by an authorized write and by `systemAdmin: true` | `auth/projects/checkout.json`, `auth/projects/payments.json` |
 | 28 | Authorization enforcement | the `viewer`-scoped token proves reads succeed and a write is refused with `forbidden` | any guarded write with the scoped token | n/a (the refusal is the evidence) |
 | 29 | Sessions | sign in, refresh (rotating the refresh token once), sign out, `GET /auth/me` | `POST /auth/login`, `POST /auth/refresh`, `POST /auth/logout`, `GET /auth/me` | n/a (`auth/users.json` carries the revocable refresh tokens) |
 | 30 | Service surface | `GET /health`, `GET /openapi.json` | the service routes | n/a (read-only) |
@@ -77,12 +77,96 @@ the generator's validation step has something to assert beyond the file tree.
 
 ### Stale-matrix check
 
-The matrix is only checkable if something fails when it goes stale. The
-generator's validation step (issue #195) must assert, for every row marked with
-a producing call, that the call succeeds and that the named on-disk evidence
-exists after the seed run — and must fail, loudly and non-zero, when a row's
-evidence is missing. That is what turns "keeping it up to date" from an
-intention into a check.
+The matrix is only checkable if something fails when it goes stale. Two checks
+share that job, and they are deliberately split by cost (issue #195):
+
+| Check | Where it runs | What it catches |
+| --- | --- | --- |
+| Route coverage (below) | every pull request, in CI | a feature route that exists in `openapi.json` but reaches no matrix row, and a row that names a route the contract does not publish |
+| Seed validation ([§3 step 12](#step-12--validation-of-the-seeded-environment)) | the local one-command path | a producing call that fails, or on-disk evidence a row promises but the seed did not leave |
+
+The seeded half must assert, for every row marked with a producing call, that
+the call succeeds and that the named on-disk evidence exists after the seed run
+— and must fail, loudly and non-zero, when a row's evidence is missing. It needs
+a running stack, so it is **not** a CI job: starting a service on every pull
+request was considered and rejected on CI cost and machine load, and the
+one-command path in [§7](#7-implementation-status) is where it lives instead.
+
+### Route coverage
+
+The static half runs as a dependency-free check over two files — `openapi.json`
+and this document — with no build, no network and no started service. It fails,
+non-zero, on either of these:
+
+1. **Route without a row.** An operation in `openapi.json` no matrix row
+   accounts for, and which the exemption table below does not exempt.
+2. **Row without a route.** A producing call in a row that resolves to no
+   operation in `openapi.json` — a typo, or a route that was renamed away.
+
+Matching is by resolved route shape: a matrix entry such as
+`POST /test_suites/{id}/test_cases` matches the contract's operation of the same
+method and segment count, where a `{…}` parameter matches whatever the document
+wrote in that position, so `{index}` and `{step_index}` are the same slot.
+
+A row's *Seeded example* and *Producing call* columns are both read, because the
+"Producing call" column names the writing call and some features are read-only.
+
+#### Exempt operations
+
+The contract publishes operations that no seed can exercise, because they are
+the read, replace and delete companions of a route the seed does create, or they
+are not part of the seeded data model at all. Exempting them is a decision, not
+a default, so each one is listed here with its reason. The check reads this
+table; an operation that is neither accounted for by a row nor listed here fails
+the check.
+
+| Operation | Why no seeded example |
+| --- | --- |
+| `GET /configurations` | list companion of `POST /configurations` (row 10) |
+| `GET /configurations/{id}` | read companion of row 10; teardown's `DELETE /configurations/{id}` covers the delete |
+| `PUT /configurations/{id}` | replace companion of row 10 |
+| `DELETE /configurations/{id}` | teardown-scope call ([§4](#4-teardown-scope)), not a seed call |
+| `GET /milestones` | list companion of `POST /milestones` (row 20) |
+| `GET /milestones/{id}` | read companion of row 20 |
+| `PUT /milestones/{id}` | replace companion of row 20 |
+| `DELETE /milestones/{id}` | teardown-scope call ([§4](#4-teardown-scope)) |
+| `POST /milestones/{id}/duplicate` | duplication is seeded for a suite (row 21); the same route shape for milestones is not |
+| `GET /projects` | list companion of `POST /projects` (row 1) |
+| `GET /projects/{id}` | read companion of row 1 |
+| `PUT /projects/{id}` | replace companion of row 1 |
+| `DELETE /projects/{id}` | teardown-scope call ([§4](#4-teardown-scope)) |
+| `POST /projects/{id}/duplicate` | duplication is seeded for a suite (row 21), not for a project |
+| `DELETE /projects/{id}/test_cases/{case_id}` | teardown-scope call; placement is row 22 |
+| `GET /projects/{id}/test_cases` | list companion of the case routes; [§3 step 12](#step-12--validation-of-the-seeded-environment) reads each parent's cases back through it |
+| `GET /projects/{id}/test_suites` | list companion of `POST /projects/{id}/test_suites` (row 2); the seed reads this listing to learn the duplicate's identifier |
+| `DELETE /projects/{id}/test_suites/{suite_id}` | teardown-scope call ([§4](#4-teardown-scope)) |
+| `GET /test_cases/{id}` | read companion of the case routes, but only for a case with one home. Row 22 places `TC-LOGIN-1` into `payments.json` while its source stays in `smoke.checkout.json`, so a bare `GET /test_cases/TC-LOGIN-1` is answered `409` by design and [§3 step 12](#step-12--validation-of-the-seeded-environment) reads that case back through its parents' listings instead |
+| `PUT /test_cases/{id}` | row 5 names the concrete `PUT /test_cases/TC-LOGIN-2` |
+| `DELETE /test_cases/{id}` | teardown-scope call, by parent ([§4](#4-teardown-scope)) |
+| `GET /test_cases/{id}/attachments/{filename}` | read-back companion of row 6 |
+| `DELETE /test_cases/{id}/attachments/{filename}` | teardown is scoped to the case folder, not to individual attachments |
+| `POST /test_cases/{id}/duplicate` | duplication is seeded for a suite (row 21); a case is placed, not duplicated (row 22) |
+| `GET /test_cases/{id}/history/{version}` | read companion of `GET /test_cases/{id}/history` (row 9) |
+| `GET /test_cases/{id}/steps/{step_index}/attachments` | read companion of the step-attachment upload (row 7) |
+| `DELETE /test_cases/{id}/steps/{step_index}/attachments/{filename}` | teardown is scoped to the case folder |
+| `GET /test_runs` | list companion of `POST /test_runs` (row 12); rows 8 and 14 read it with a filter |
+| `GET /test_runs/{id}` | read companion of row 12; [§3 step 12](#step-12--validation-of-the-seeded-environment) reads both seeded runs back |
+| `PUT /test_runs/{id}` | replace companion of row 12 |
+| `DELETE /test_runs/{id}` | teardown-scope call ([§4](#4-teardown-scope)) |
+| `DELETE /test_runs/{id}/configurations/{config_id}` | unlink companion of row 11; the seed links without unlinking |
+| `POST /test_runs/{id}/duplicate` | duplication is seeded for a suite (row 21), not for a run |
+| `GET /test_runs/{id}/results/{case_id}/defects` | list companion of the defect-link creation (row 16) |
+| `DELETE /test_runs/{id}/results/{case_id}/defects/{link_id}` | row 17 unlinks the GitHub link the seed created; it writes the route with the link id it read back from the create response, which the check matches as the same shape |
+| `GET /test_suites/{id}` | read companion of the suite routes; [§3 step 12](#step-12--validation-of-the-seeded-environment) reads the seeded suites back |
+| `PUT /test_suites/{id}` | replace companion of row 2 |
+| `DELETE /test_suites/{id}` | teardown-scope call, by parent ([§4](#4-teardown-scope)) |
+| `GET /test_suites/{id}/test_cases` | list companion of `POST /test_suites/{id}/test_cases` (row 4) |
+| `DELETE /test_suites/{id}/test_cases/{case_id}` | teardown-scope call ([§4](#4-teardown-scope)) |
+| `GET /api-docs` | the Swagger UI page, not part of the data model |
+| `GET /openapi.json` | the contract itself; row 30 covers it as a service-surface assertion |
+
+Teardown-scope operations count as accounted for because [§4](#4-teardown-scope)
+is the document that specifies them, and the check verifies they reach it.
 
 ## 2. Target tree below `TUCANO_DATA_DIR`
 
@@ -96,8 +180,8 @@ $TUCANO_DATA_DIR/
 ├── auth/
 │   ├── users.json                            # accounts, password hashes, refresh tokens
 │   └── projects/
-│       ├── checkout.json                     # {"grants": {"<admin id>": "owner", "<viewer id>": "owner"}}
-│       └── payments.json
+│       ├── checkout.json                     # {"grants": {"<viewer id>": "owner"}}
+│       └── payments.json                     # {"grants": {"<viewer id>": "owner"}}
 ├── .tucano.lock                              # advisory lock, created by the API
 ├── projects/
 │   ├── checkout.json/
@@ -412,14 +496,27 @@ The generator's validation step asserts, at minimum:
 - Every document in the target tree above is present and readable back through
   its `GET` route, with the identifiers the tree names.
 - `GET /milestones/v1.0.json/progress` reports five buckets
-  (`Passed`, `Failed`, `Blocked`, `Untested`, `Retest`) derived from
-  `nightly.json`, with `totalCases` equal to the cases the run declares.
+  (`Passed`, `Failed`, `Blocked`, `Untested`, `Retest`) that count the results
+  `nightly.json` records, while `totalCases` counts the cases that run
+  **declares**. The two come from different places and need not agree: the
+  seeded run declares two cases and records four results, so the buckets sum to
+  4 while `totalCases` is 2. This is the documented, permissive legacy
+  arithmetic — see *Milestone progress: `totalCases` and the buckets need not
+  agree* in
+  [`docs/contracts/api-compatibility.md`](../contracts/api-compatibility.md).
 - `GET /reports/coverage` and `GET /reports/summary` answer for both scopes.
 - `GET /test_runs?tags=nightly` and `GET /test_runs?configuration=chrome-linux.json`
   both return the seeded runs.
-- `GET /auth/me` reports the seeded account's `systemAdmin` flag and its role on
-  each seeded project.
+- `GET /auth/me` reports the seeded **viewer's** role (`owner`) on each project
+  it was granted, and for the bootstrap account reports `systemAdmin: true` with
+  **no** grants at all — a system administrator needs none (see
+  [§5](#5-known-gap-auth-accounts-and-role-grants)), which the authorized write
+  below proves.
 - A guarded write with a token that lacks the role answers `403 forbidden`.
+
+This step needs a seeded stack, so it runs on the documented one-command path
+(`scripts/demo.sh`), not in CI. The static route-coverage check in
+[§1](#route-coverage) is the half that runs on every pull request.
 
 ## 4. Teardown scope
 
@@ -516,9 +613,22 @@ API":
   password hashes and refresh-token list stay in the format the server reads
   back. The generator never writes these files through the HTTP surface because
   it cannot.
-- **The bootstrap account is not seeded at all.** It is created by the
+- **The bootstrap account is not written by the generator.** It is created by the
   deployment at startup from `TUCANO_BOOTSTRAP_USERNAME`/`TUCANO_BOOTSTRAP_PASSWORD`,
-  and the seed signs in as it to obtain the token every other call needs.
+  and the seed signs in as it to obtain the token every other call needs. Row 25
+  lists it as a seeded example because the dataset is not complete without it;
+  its producing call is that startup path, not a call the generator makes.
+- **The bootstrap account holds no role grant, by design.** A system
+  administrator is authorized without one: `authorize` and `require_milestone`
+  short-circuit on the token's `systemAdmin` claim before they consult the grant
+  store, which the unit test
+  `a_system_administrator_is_authorized_without_any_grant` pins. So seeding a
+  grant for `admin` would add an on-disk artifact the server never reads, and
+  the grants the generator does write exist to give the *non-admin* account
+  reach. Row 27 therefore seeds exactly one grantee per project — the `viewer` —
+  and `GET /auth/me` intentionally reports `"roles": {}` for the admin: `me`
+  reports the account's grants, not its effective authority, so an admin with no
+  grant legitimately reports none.
 - **`GET /auth/me` is the assertion that closes the loop.** After the seed, the
   validation step reads each seeded account's `roles` map and `systemAdmin` flag
   through the API, which proves the files the generator wrote are the ones the
@@ -539,7 +649,9 @@ honest:
 1. **A new feature adds a matrix row.** If a resource, a route or a stored field
    is added to `openapi.json`, the coverage matrix gains a row with a seeded
    example and producing call, or an explicit note saying why no example is
-   needed.
+   needed. The route-coverage check in [§1](#route-coverage) fails the pull
+   request until either is there, and the same check fails when a row names a
+   route the contract no longer publishes.
 2. **A new row adds an assertion.** The validation step in [§3 step 12](#step-12--validation-of-the-seeded-environment)
    covers the new row, so a stale matrix fails a check rather than being
    discovered by a reader.
@@ -580,5 +692,27 @@ not resolve instead of guessing. The subcommand ends with a summary line
 that the JS half parses, which is what makes a second teardown over an
 already-clean volume exit `0` rather than reporting a false refusal.
 
-[§3 step 12](#step-12--validation-of-the-seeded-environment) is out of scope
-here by design and belongs to #195.
+The freshness checks ([§1](#stale-matrix-check)) are implemented by
+`scripts/check-matrix.mjs` (#195), and the two halves of the decision above are
+deliberately split by cost. The static half is a dependency-free Node script
+over `openapi.json` and this document; CI runs it as its own job
+(`matrix-integrity` in [`.github/workflows/ci.yml`](../.github/workflows/ci.yml))
+that reads two files and starts nothing. The seeded half is the generator's
+validation step, and it runs on the one-command path `scripts/demo.sh`, which
+brings a stack up, seeds it, runs `scripts/smoke.sh`, then runs the validation
+step (`scripts/validate-seed.mjs`) against the seeded data.
+
+Starting a service on every pull request was considered and rejected: a
+seed-and-validate job would add the container build, the service startup and the
+whole seed sequence to every PR's CI cost and machine load. The static check
+catches the drift a feature addition causes — a route that reaches no row — at
+the cost of reading two files, and the seeded check catches a broken producing
+call on the local path where a developer is already running a stack.
+
+## 8. Validation status
+
+| Piece | Issue | State |
+| --- | --- | --- |
+| Generator ([§3](#3-generating-api-calls) steps 0–11) | #193 | merged |
+| Teardown ([§4](#4-teardown-scope)) | #194 | merged |
+| Compose wiring, route-coverage check, one-command path | #195 | see [`scripts/demo.sh`](../scripts/demo.sh) |
