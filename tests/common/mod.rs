@@ -172,6 +172,15 @@ pub async fn fixture_home(app: &Router) -> String {
     }
 }
 
+/// The folder that stores a project's project-scoped resources.
+///
+/// A project is addressed by its identifier (`checkout.json`) but stored as a
+/// folder named after it with the document suffix removed (`projects/checkout`).
+pub fn project_folder(home: &str) -> &str {
+    home.strip_suffix(".json")
+        .expect("a project identifier addresses a document")
+}
+
 /// Rewrites a retired flat collection path to the project-scoped route that
 /// replaced it, creating the home the resource needs. Any other path — a
 /// project, or a collection that is already parent-scoped — is returned as it
@@ -414,10 +423,7 @@ pub fn role_checked_write(
             format!("/projects/{project}/configurations/{configuration}"),
             None,
         ),
-        "put /configurations/{id}" => (
-            format!("/configurations/{configuration}"),
-            Some(json!({})),
-        ),
+        "put /configurations/{id}" => (format!("/configurations/{configuration}"), Some(json!({}))),
         "delete /configurations/{id}" => (format!("/configurations/{configuration}"), None),
         other => panic!("unknown role-checked operation: {other}"),
     };
