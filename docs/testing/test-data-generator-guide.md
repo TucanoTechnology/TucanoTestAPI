@@ -150,10 +150,12 @@ not be resolved, naming each item it left in place and why. Re-running it over a
 is a success: a missing entity is a settled teardown, not a failure.
 
 `scripts/clear-data.mjs` is the opposite tool and is deliberately *not* what this does: it empties the
-whole of every collection (milestones, runs, suites, cases, projects), leaves configurations and
-accounts alone, and falls back to a guessed base URL. Use it only when you want the whole volume
-emptied and do not care what else was in it. The three scripts are compared in the [repository
-README](../../README.md#test-data-cleanup).
+whole of every collection (milestones, runs, suites, cases, projects), removes no configuration by a
+step of its own — deleting a project cascades to the configurations it holds, so the ones inside a
+listed project go with it rather than being addressed by a bare id whose project would be ambiguous —
+leaves accounts and grants alone, and falls back to a guessed base URL. Use it only when you want the
+whole volume emptied and do not care what else was in it. The three scripts are compared in the
+[repository README](../../README.md#test-data-cleanup).
 
 ## 4. The auth exception
 
@@ -165,11 +167,11 @@ exposes two subcommands that write through the same `AuthStore` the running serv
 # the seed's half: create the account and its grants (idempotent)
 TUCANO_DATA_DIR=/data ./tucano-test seed-auth \
     --username viewer --password viewer-password \
-    --grant checkout.json=owner --grant payments.json=owner
+    --grant checkout.json=owner
 
 # the teardown's half: forget the account and the grants it holds on the named projects
 TUCANO_DATA_DIR=/data ./tucano-test unseed-auth \
-    --username viewer --grant checkout.json --grant payments.json
+    --username viewer --grant checkout.json
 ```
 
 The scripts invoke them through `TUCANO_SEED_AUTH_CMD` and `TUCANO_UNSEED_AUTH_CMD`, so each takes the
@@ -192,8 +194,11 @@ Three properties keep this exception honest:
   grants it is told about rather than every grant the account happens to hold, refuses the bootstrap
   account outright, and reports anything it cannot find as left in place instead of guessing.
 - **`GET /auth/me` closes the loop.** After seeding, the script signs in as the seeded account and
-  asserts the API reports no system-administrator flag and `owner` on both projects, which proves the
-  files were written in the format the server actually honours.
+  asserts the API reports no system-administrator flag and `owner` on `checkout.json` alone — the
+  project the account is granted, with no role recorded against `payments.json`. That single grant is
+  deliberate: a viewer who reaches one project and not the other is what makes the isolation the
+  validation step checks observable, and it proves the files were written in the format the server
+  actually honours.
 
 The gap itself — that auth accounts and grants have no HTTP route, and what closing it would require —
 is recorded in specification §5 and tracked by the epic rather than papered over here.

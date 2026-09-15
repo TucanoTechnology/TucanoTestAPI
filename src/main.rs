@@ -70,7 +70,7 @@ fn port() -> String {
 ///
 /// ```text
 /// tucano-test seed-auth --username viewer --password <password> \
-///     --grant checkout.json=owner --grant payments.json=owner
+///     --grant checkout.json=owner
 /// ```
 fn seed_auth(args: Vec<String>) -> Result<(), Box<dyn std::error::Error>> {
     let mut username: Option<String> = None;
@@ -144,7 +144,7 @@ fn seed_auth(args: Vec<String>) -> Result<(), Box<dyn std::error::Error>> {
 ///
 /// ```text
 /// tucano-test unseed-auth --username viewer \
-///     --grant checkout.json --grant payments.json
+///     --grant checkout.json
 /// ```
 fn unseed_auth(args: Vec<String>) -> Result<(), Box<dyn std::error::Error>> {
     let mut username: Option<String> = None;

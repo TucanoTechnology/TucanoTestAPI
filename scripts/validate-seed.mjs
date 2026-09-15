@@ -63,6 +63,31 @@ const RUNS = ["nightly.json", "nightly-import.json"];
 const PROGRESS_RUN = "nightly.json";
 const MILESTONE = "v1.0.json";
 const CONFIGURATIONS = ["chrome-linux.json", "firefox-linux.json"];
+// The project each project-owned resource lives in, from the target tree of
+// spec §2: both runs and the milestone belong to `checkout.json`,
+// `chrome-linux.json` to `checkout.json` and `firefox-linux.json` to
+// `payments.json`. The empty entries are assertions as well — a project-scoped
+// listing that stays empty is what makes "the home is the project" observable
+// rather than assumed.
+const OWNED = {
+  configurations: {
+    "checkout.json": ["chrome-linux.json"],
+    "payments.json": ["firefox-linux.json"],
+  },
+  test_runs: {
+    "checkout.json": RUNS,
+    "payments.json": [],
+  },
+  milestones: {
+    "checkout.json": [MILESTONE],
+    "payments.json": [],
+  },
+};
+// The project the seed grants the viewer and the one it deliberately withholds
+// (spec §5 and row 27), which is the pair the configuration isolation below
+// turns on.
+const VIEWER_PROJECT = "checkout.json";
+const VIEWER_WITHHELD_PROJECT = "payments.json";
 
 const failures = [];
 let checks = 0;
@@ -271,6 +296,35 @@ async function stepDocuments(token) {
     );
   }
 
+  // Every project-owned resource reads back through both of its routes: the
+  // collection of the project that owns it and its global document route. The
+  // two have to agree on the home, so an entity the project-scoped listing does
+  // not hold fails here even though the global read would still answer.
+  for (const [collection, homes] of Object.entries(OWNED)) {
+    for (const [project, expected] of Object.entries(homes)) {
+      const listing = await request(`/projects/${project}/${collection}`, { token });
+      const expectedNames = [...expected].sort().join(",");
+      ok(
+        Array.isArray(listing) && [...listing].sort().join(",") === expectedNames,
+        `GET /projects/${project}/${collection} lists ${expectedNames || "nothing"}`,
+        JSON.stringify(listing),
+      );
+    }
+  }
+
+  for (const configuration of CONFIGURATIONS) {
+    const document = await getOrNull(`/configurations/${configuration}`, token);
+    ok(
+      Boolean(document),
+      `GET /configurations/${configuration} reads the seeded configuration back`,
+    );
+    ok(
+      document?.configId === configuration,
+      `GET /configurations/${configuration} names configId=${configuration}`,
+      JSON.stringify(document?.configId),
+    );
+  }
+
   for (const run of RUNS) {
     const document = await getOrNull(`/test_runs/${run}`, token);
     ok(Boolean(document), `GET /test_runs/${run} reads the seeded run back`);
@@ -424,6 +478,50 @@ async function stepRefusal() {
     `GET /auth/me with the ${VIEWER_USERNAME} session reports systemAdmin=false`,
     JSON.stringify(me),
   );
+  ok(
+    me?.roles?.[VIEWER_PROJECT] === "owner",
+    `GET /auth/me reports the ${VIEWER_USERNAME} session's owner role on ${VIEWER_PROJECT}`,
+    JSON.stringify(me?.roles),
+  );
+  ok(
+    me?.roles?.[VIEWER_WITHHELD_PROJECT] === undefined,
+    `GET /auth/me reports no grant on ${VIEWER_WITHHELD_PROJECT} for the ${VIEWER_USERNAME} session`,
+    JSON.stringify(me?.roles),
+  );
+
+  // A configuration is a project resource, so this account's reach decides what
+  // the collection answers: its granted project's configuration and nothing from
+  // the project it holds no grant in. Read from the project side too, where no
+  // reach is a 403 rather than an empty listing.
+  const reachable = await request("/configurations", { token });
+  ok(
+    Array.isArray(reachable) &&
+      reachable.includes("chrome-linux.json") &&
+      !reachable.includes("firefox-linux.json"),
+    "GET /configurations with the viewer session lists chrome-linux.json and not firefox-linux.json",
+    JSON.stringify(reachable),
+  );
+
+  const granted = await request(`/projects/${VIEWER_PROJECT}/configurations`, { token });
+  ok(
+    Array.isArray(granted) && granted.includes("chrome-linux.json"),
+    `GET /projects/${VIEWER_PROJECT}/configurations lists chrome-linux.json for the viewer session`,
+    JSON.stringify(granted),
+  );
+
+  try {
+    await request(`/projects/${VIEWER_WITHHELD_PROJECT}/configurations`, { token, expect: [403] });
+    pass(
+      `a viewer session is refused GET /projects/${VIEWER_WITHHELD_PROJECT}/configurations with 403`,
+    );
+  } catch (error) {
+    const what = `a viewer session is refused GET /projects/${VIEWER_WITHHELD_PROJECT}/configurations with 403`;
+    if (error instanceof HttpError) {
+      fail(`${what}, got ${error.status}`, JSON.stringify(error.body));
+    } else {
+      fail(what, error.message);
+    }
+  }
 
   try {
     await request("/projects", {

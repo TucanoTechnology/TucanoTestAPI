@@ -51,6 +51,15 @@ const SUITES = {
 };
 const VIEWER = { username: 'viewer', password: null };
 
+/**
+ * The one project the seeded viewer holds a grant on.
+ *
+ * Configurations are project resources, so the viewer needs a grant to reach
+ * the one the seed puts in `checkout.json`; it deliberately holds none on
+ * `payments.json`, which is the isolation spec §3 step 12 asserts.
+ */
+const VIEWER_PROJECT = 'checkout.json';
+
 const candidateUrls = [
   process.argv[2],
   process.env.TUCANO_API_URL,
@@ -193,22 +202,7 @@ async function step0Session() {
   step(`signed in as ${username}`);
 }
 
-async function step1Configurations() {
-  await call('POST', '/configurations', {
-    body: { configId: 'chrome-linux.json', name: 'chrome-linux' },
-  });
-  await call('POST', '/configurations', {
-    body: {
-      configId: 'firefox-linux.json',
-      name: 'firefox-linux',
-      browser: 'firefox',
-      os: 'linux',
-    },
-  });
-  step(`configurations: ${CONFIGURATIONS.join(', ')}`);
-}
-
-async function step2Projects() {
+async function step1Projects() {
   await call('POST', '/projects', {
     body: {
       projectId: 'checkout.json',
@@ -221,6 +215,31 @@ async function step2Projects() {
     body: { projectId: 'payments.json', name: 'payments' },
   });
   step(`projects: ${PROJECTS.join(', ')}`);
+}
+
+/**
+ * The configurations, each created inside the project that owns it.
+ *
+ * A configuration is a project resource, so `POST /configurations` is retired
+ * and answers `400`: it is created through the project that holds it, and only
+ * that project sees it. `chrome-linux.json` belongs to the project the seed's
+ * run executes, `firefox-linux.json` to the other one — which is what lets the
+ * validation step prove one project's configuration is invisible to a caller
+ * restricted to the other.
+ */
+async function step2Configurations() {
+  await call('POST', '/projects/checkout.json/configurations', {
+    body: { configId: 'chrome-linux.json', name: 'chrome-linux' },
+  });
+  await call('POST', '/projects/payments.json/configurations', {
+    body: {
+      configId: 'firefox-linux.json',
+      name: 'firefox-linux',
+      browser: 'firefox',
+      os: 'linux',
+    },
+  });
+  step('configurations: chrome-linux.json in checkout.json, firefox-linux.json in payments.json');
 }
 
 async function step3Suites() {
@@ -286,7 +305,9 @@ async function step5Attachments() {
 }
 
 async function step6Run() {
-  await call('POST', '/test_runs', {
+  // Created inside the project that owns it. Its `projects` array stays: it
+  // records which projects the run covered, which is not where the run lives.
+  await call('POST', '/projects/checkout.json/test_runs', {
     body: {
       testRunId: 'nightly.json',
       name: 'nightly',
@@ -373,7 +394,9 @@ async function step8Defects() {
 }
 
 async function step9ImportedRun() {
-  await call('POST', '/test_runs', {
+  // The imported run lives in the same project as `nightly.json`, so it is
+  // created through the same project route, under its own identifier.
+  await call('POST', '/projects/checkout.json/test_runs', {
     body: {
       testRunId: 'nightly-import.json',
       name: 'nightly-import',
@@ -407,7 +430,8 @@ async function step9ImportedRun() {
 }
 
 async function step10MilestoneAndDuplicate() {
-  await call('POST', '/milestones', {
+  // The milestone lives in the run's project and references the run by id.
+  await call('POST', '/projects/checkout.json/milestones', {
     body: {
       milestoneId: 'v1.0.json',
       name: 'v1.0',
@@ -455,9 +479,7 @@ async function stepAuth() {
   }
   const { spawnSync } = await import('node:child_process');
   const args = ['--username', VIEWER.username, '--password', password];
-  for (const project of PROJECTS) {
-    args.push('--grant', `${project}=owner`);
-  }
+  args.push('--grant', `${VIEWER_PROJECT}=owner`);
   // `TUCANO_SEED_AUTH_CMD` is a command *line* (it may carry its own
   // `VAR=value` prefix), so it is handed to a shell. Everything the script adds
   // to it — the username, the password, the project ids and roles — is quoted.
@@ -485,14 +507,24 @@ async function stepAuth() {
   if (me.systemAdmin !== false) {
     throw new Error(`the seeded viewer should not be a system administrator: ${JSON.stringify(me)}`);
   }
-  for (const project of PROJECTS) {
-    if (me.roles?.[project] !== 'owner') {
+  if (me.roles?.[VIEWER_PROJECT] !== 'owner') {
+    throw new Error(
+      `GET /auth/me reports role ${JSON.stringify(me.roles?.[VIEWER_PROJECT])} on ${VIEWER_PROJECT}, expected owner`,
+    );
+  }
+  // The grant is deliberately one project only: the validation step uses the
+  // viewer's lack of reach elsewhere to prove configurations are per-project.
+  for (const project of PROJECTS.filter((id) => id !== VIEWER_PROJECT)) {
+    if (me.roles?.[project] !== undefined) {
       throw new Error(
-        `GET /auth/me reports role ${JSON.stringify(me.roles?.[project])} on ${project}, expected owner`,
+        `GET /auth/me reports role ${JSON.stringify(me.roles[project])} on ${project}, but the seed grants the viewer none`,
       );
     }
   }
-  step(`auth: ${VIEWER.username} holds owner on ${PROJECTS.join(', ')}`);
+  step(
+    `auth: ${VIEWER.username} holds owner on ${VIEWER_PROJECT} and no grant on ` +
+      PROJECTS.filter((id) => id !== VIEWER_PROJECT).join(', '),
+  );
 }
 
 // --- entry point ------------------------------------------------------------
@@ -505,8 +537,8 @@ async function runSeed() {
   await step0Session();
   await assertClear();
 
-  await step1Configurations();
-  await step2Projects();
+  await step1Projects();
+  await step2Configurations();
   await step3Suites();
   await step4Cases();
   await step5Attachments();
