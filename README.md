@@ -475,9 +475,12 @@ milestone, run, suite, case and project, skips configurations entirely, and does
 
 | Path | Role |
 | --- | --- |
+| `demo.sh` | The one documented command: brings up a Compose stack, seeds it, runs `smoke.sh`, then validates the dataset with `validate-seed.mjs` |
 | `smoke.sh` | Scratch CRUD round trip against a running API, for validating a candidate build |
 | `seed.mjs` | Builds the demo dataset of `docs/testing/seed-dataset-spec.md` over HTTP |
+| `validate-seed.mjs` | Asserts the seeded dataset through the API, including the refusals a non-admin receives |
 | `teardown.mjs` | Removes exactly what `seed.mjs` created, by identifier, and reports anything it leaves in place |
+| `check-matrix.mjs` | Fails when a route in `openapi.json` and a row of the dataset's coverage matrix disagree |
 | `clear-data.mjs` | Unscoped wipe: empties every sample collection a run or seed left behind |
 | `fixtures/` | The small files the seed uploads: a case attachment, a step attachment, and the JUnit report it imports; a new feature that needs a file adds it here |
 
