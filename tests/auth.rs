@@ -566,13 +566,15 @@ async fn sign_in_token(app: &Router) -> String {
 }
 
 /// The identifiers of one seeded tree: a project, a suite and a case in it, a
-/// run covering the project, and a milestone referencing the run.
+/// run covering the project, and a milestone referencing the run, all of them
+/// stored in that one project, plus a configuration the project owns.
 struct Tree {
     project: String,
     suite: String,
     case: String,
     run: String,
     milestone: String,
+    configuration: String,
 }
 
 async fn seed_tree(app: &Router, token: Option<&str>) -> Tree {
@@ -611,7 +613,7 @@ async fn seed_tree(app: &Router, token: Option<&str>) -> Tree {
             app,
             token,
             "POST",
-            "/test_runs",
+            &format!("/projects/{project}/test_runs"),
             Some(run_body("nightly", &project)),
         )
         .await,
@@ -621,8 +623,18 @@ async fn seed_tree(app: &Router, token: Option<&str>) -> Tree {
             app,
             token,
             "POST",
-            "/milestones",
+            &format!("/projects/{project}/milestones"),
             Some(json!({ "name": "sprint-42", "testRunIds": [run] })),
+        )
+        .await,
+    );
+    let configuration = id_of(
+        &call_ok(
+            app,
+            token,
+            "POST",
+            &format!("/projects/{project}/configurations"),
+            Some(json!({ "name": "chrome-linux" })),
         )
         .await,
     );
@@ -632,6 +644,7 @@ async fn seed_tree(app: &Router, token: Option<&str>) -> Tree {
         case,
         run,
         milestone,
+        configuration,
     }
 }
 
@@ -808,6 +821,7 @@ async fn a_viewer_reads_the_projects_it_reaches_and_cannot_write() {
         case,
         run,
         milestone,
+        configuration,
     } = &tree;
     let token = token.as_str();
 
@@ -918,8 +932,28 @@ async fn a_viewer_reads_the_projects_it_reaches_and_cannot_write() {
     )
     .await;
 
+    // A configuration belongs to the project that stores it, so a viewer of that
+    // project reads it and its listing is no longer installation-wide.
     let configurations = call_ok(&app, Some(token), "GET", "/configurations", None).await;
-    assert_eq!(configurations, json!([]));
+    assert_eq!(configurations, json!([configuration]));
+    let scoped_configurations = call_ok(
+        &app,
+        Some(token),
+        "GET",
+        &format!("/projects/{project}/configurations"),
+        None,
+    )
+    .await;
+    assert_eq!(scoped_configurations, json!([configuration]));
+    let single_configuration = call_ok(
+        &app,
+        Some(token),
+        "GET",
+        &format!("/configurations/{configuration}"),
+        None,
+    )
+    .await;
+    assert_eq!(single_configuration["name"], json!("chrome-linux"));
 
     let coverage = call_ok(&app, Some(token), "GET", "/reports/coverage", None).await;
     assert_eq!(coverage["totalCases"], json!(1));
@@ -966,12 +1000,13 @@ async fn a_viewer_reads_the_projects_it_reaches_and_cannot_write() {
                 case.as_str(),
                 run.as_str(),
                 milestone.as_str(),
+                configuration.as_str(),
             )
         })
         .collect();
     assert_eq!(
         writes.len(),
-        33,
+        39,
         "the write surface changed; update this matrix with it"
     );
 
@@ -992,6 +1027,7 @@ async fn an_editor_writes_content_but_not_projects_or_milestones() {
         case,
         run,
         milestone,
+        ..
     } = &tree;
     let token = token.as_str();
 
@@ -1055,7 +1091,7 @@ async fn an_editor_writes_content_but_not_projects_or_milestones() {
             &app,
             Some(token),
             "POST",
-            "/test_runs",
+            &format!("/projects/{project}/test_runs"),
             Some(run_body("extra", project)),
         )
         .await,
@@ -1152,7 +1188,7 @@ async fn an_editor_writes_content_but_not_projects_or_milestones() {
         &app,
         token,
         "POST",
-        "/milestones",
+        &format!("/projects/{project}/milestones"),
         Some(json!({ "name": "linked", "testRunIds": [run] })),
     )
     .await;
@@ -1205,7 +1241,7 @@ async fn an_owner_administers_its_project_but_not_the_installation() {
             &app,
             Some(token),
             "POST",
-            "/milestones",
+            &format!("/projects/{project}/milestones"),
             Some(json!({ "name": "linked", "testRunIds": [run] })),
         )
         .await,
@@ -1295,33 +1331,66 @@ async fn a_system_administrator_reaches_everything() {
             &app,
             Some(token),
             "POST",
-            "/milestones",
+            &format!("/projects/{project}/milestones"),
             Some(json!({ "name": "linked", "testRunIds": [run] })),
         )
         .await,
     );
     assert_eq!(milestone, "linked.json");
-
-    let (status, _, answer) = send(
-        &app,
-        request(
-            "POST",
-            "/milestones",
-            Some(token),
-            Some(json!({ "name": "orphan" })),
-        ),
-    )
-    .await;
-    assert_eq!(status, StatusCode::BAD_REQUEST, "{answer}");
-    assert_eq!(error_code(&answer), "invalid_request");
 }
 
-/// A milestone is a project resource, so one that references no project is
-/// refused rather than left open to any authenticated caller.
+/// The flat create routes are retired: each answers the explanation that names
+/// the project-scoped route which replaced it, and stores nothing.
 #[tokio::test]
-async fn a_milestone_must_reference_a_project() {
+async fn the_flat_create_routes_name_the_project_scoped_route_that_replaced_them() {
+    let directory = tempfile::tempdir().expect("temp dir");
+    let (app, _tree, token) = administrating_tree(directory.path()).await;
+    let token = token.as_str();
+
+    for (route, replacement) in [
+        ("/test_runs", "/projects/{id}/test_runs"),
+        ("/milestones", "/projects/{id}/milestones"),
+        ("/configurations", "/projects/{id}/configurations"),
+    ] {
+        let (status, _, answer) = send(
+            &app,
+            request("POST", route, Some(token), Some(json!({ "name": "extra" }))),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{route}: {answer}");
+        assert_eq!(error_code(&answer), "invalid_request", "{route}");
+        let message = answer["error"]["message"]
+            .as_str()
+            .unwrap_or_else(|| panic!("{route} has no message: {answer}"));
+        assert!(
+            message.contains(replacement),
+            "{route} must name {replacement}: {message}"
+        );
+    }
+
+    // Nothing was stored: the replacement is the only way in.
+    assert_eq!(
+        call_ok(&app, Some(token), "GET", "/test_runs", None).await,
+        json!(["nightly.json"])
+    );
+    assert_eq!(
+        call_ok(&app, Some(token), "GET", "/milestones", None).await,
+        json!(["sprint-42.json"])
+    );
+    assert_eq!(
+        call_ok(&app, Some(token), "GET", "/configurations", None).await,
+        json!(["chrome-linux.json"])
+    );
+}
+
+/// Decision 4 withdrew the rule that a milestone must reference a project: a
+/// milestone that references nothing is a legal document, stored in the project
+/// that creates it and updated from there like any other.
+#[tokio::test]
+async fn a_milestone_may_reference_no_project() {
     let directory = tempfile::tempdir().expect("temp dir");
     let (app, tree, token) = administrating_tree(directory.path()).await;
+    let project = &tree.project;
     let token = token.as_str();
 
     for body in [
@@ -1329,35 +1398,45 @@ async fn a_milestone_must_reference_a_project() {
         json!({ "name": "orphan", "testRunIds": [] }),
         json!({ "name": "orphan", "testSuiteIds": [] }),
     ] {
-        let (status, _, answer) = send(
+        let created = id_of(
+            &call_ok(
+                &app,
+                Some(token),
+                "POST",
+                &format!("/projects/{project}/milestones"),
+                Some(body),
+            )
+            .await,
+        );
+        assert_eq!(created, "orphan.json");
+        call_ok(
             &app,
-            request("POST", "/milestones", Some(token), Some(body)),
+            Some(token),
+            "DELETE",
+            &format!("/milestones/{created}"),
+            None,
         )
         .await;
-        assert_eq!(status, StatusCode::BAD_REQUEST, "{answer}");
-        assert_eq!(error_code(&answer), "invalid_request");
     }
 
-    let (status, _, answer) = send(
+    call_ok(
         &app,
-        request(
-            "PUT",
-            &format!("/milestones/{}", tree.milestone),
-            Some(token),
-            Some(json!({ "testRunIds": [] })),
-        ),
+        Some(token),
+        "PUT",
+        &format!("/milestones/{}", tree.milestone),
+        Some(json!({ "testRunIds": [] })),
     )
     .await;
-    assert_eq!(status, StatusCode::BAD_REQUEST, "{answer}");
-    assert_eq!(error_code(&answer), "invalid_request");
 }
 
-/// A configuration is installation-wide, so every authenticated caller may
-/// administer it whatever projects it reaches.
+/// A configuration belongs to the project that stores it, so writing one asks
+/// for the editor role in that project — the role the suites, cases and runs
+/// around it ask for too.
 #[tokio::test]
-async fn configurations_are_reachable_by_every_authenticated_caller() {
+async fn a_configuration_is_written_by_an_editor_of_its_project() {
     let directory = tempfile::tempdir().expect("temp dir");
-    let (app, _tree, token) = app_with_role(directory.path(), Role::Viewer).await;
+    let (app, tree, token) = app_with_role(directory.path(), Role::Editor).await;
+    let project = &tree.project;
     let token = token.as_str();
 
     let created = id_of(
@@ -1365,15 +1444,17 @@ async fn configurations_are_reachable_by_every_authenticated_caller() {
             &app,
             Some(token),
             "POST",
-            "/configurations",
+            &format!("/projects/{project}/configurations"),
             Some(json!({ "name": "chrome" })),
         )
         .await,
     );
     assert_eq!(created, "chrome.json");
 
+    // Reads stay global, so the installation-wide scan answers with what the
+    // one project folder holds, in sorted order.
     let listed = call_ok(&app, Some(token), "GET", "/configurations", None).await;
-    assert_eq!(listed, json!(["chrome.json"]));
+    assert_eq!(listed, json!(["chrome-linux.json", "chrome.json"]));
 
     call_ok(
         &app,
@@ -1413,6 +1494,7 @@ async fn a_caller_with_no_grant_sees_nothing() {
         case,
         run,
         milestone,
+        configuration,
     } = &tree;
     let token = token.as_str();
 
@@ -1428,12 +1510,15 @@ async fn a_caller_with_no_grant_sees_nothing() {
         assert_eq!(listed, json!([]), "{uri}");
     }
 
+    // A configuration is a project resource now, so a caller that reaches no
+    // project is refused one exactly as it is refused a run or a milestone.
     for uri in [
         format!("/projects/{project}"),
         format!("/test_suites/{suite}"),
         format!("/test_cases/{case}"),
         format!("/test_runs/{run}"),
         format!("/milestones/{milestone}"),
+        format!("/configurations/{configuration}"),
     ] {
         assert_forbidden(&app, token, "GET", &uri, None).await;
     }

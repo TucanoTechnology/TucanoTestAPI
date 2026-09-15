@@ -1,7 +1,10 @@
 mod common;
 
 use axum::http::StatusCode;
-use common::{assert_error_envelope, delete, get, json_request, send_json, test_app};
+use common::{
+    app_at, assert_error_envelope, delete, fixture_home, get, json_request, project_folder,
+    send_json, test_app,
+};
 use serde_json::json;
 use tempfile::TempDir;
 
@@ -13,11 +16,12 @@ async fn configurations_support_the_full_crud_lifecycle() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(listing, json!([]));
 
+    let home = fixture_home(&app).await;
     let (status, created) = send_json(
         &app,
         json_request(
             "POST",
-            "/configurations",
+            &format!("/projects/{home}/configurations"),
             &json!({
                 "configId": "CFG-001",
                 "name": "chrome-linux",
@@ -70,10 +74,15 @@ async fn configurations_support_the_full_crud_lifecycle() {
 async fn list_supports_case_insensitive_substring_filtering() {
     let (_directory, app) = test_app();
 
+    let home = fixture_home(&app).await;
     for name in ["chrome-linux", "firefox-linux", "chrome-windows"] {
         let (status, _) = send_json(
             &app,
-            json_request("POST", "/configurations", &json!({"name": name})),
+            json_request(
+                "POST",
+                &format!("/projects/{home}/configurations"),
+                &json!({"name": name}),
+            ),
         )
         .await;
         assert_eq!(status, StatusCode::CREATED);
@@ -93,9 +102,14 @@ async fn a_configuration_created_from_a_name_alone_reads_back_as_its_model() {
     let (_directory, app) = test_app();
 
     // The body names the configuration and nothing else: no `configId`.
+    let home = fixture_home(&app).await;
     let (status, created) = send_json(
         &app,
-        json_request("POST", "/configurations", &json!({"name": "C1"})),
+        json_request(
+            "POST",
+            &format!("/projects/{home}/configurations"),
+            &json!({"name": "C1"}),
+        ),
     )
     .await;
     assert_eq!(status, StatusCode::CREATED, "creating: {created}");
@@ -111,12 +125,20 @@ async fn a_configuration_created_from_a_name_alone_reads_back_as_its_model() {
 async fn creating_a_configuration_requires_a_non_empty_name() {
     let (_directory, app) = test_app();
 
+    let home = fixture_home(&app).await;
     for payload in [
         json!({"configId": "CFG-001", "browser": "Chrome"}),
         json!({"name": ""}),
     ] {
-        let (status, body) =
-            send_json(&app, json_request("POST", "/configurations", &payload)).await;
+        let (status, body) = send_json(
+            &app,
+            json_request(
+                "POST",
+                &format!("/projects/{home}/configurations"),
+                &payload,
+            ),
+        )
+        .await;
         assert_eq!(status, StatusCode::BAD_REQUEST, "{payload}");
         assert_error_envelope(&body, "invalid_request");
     }
@@ -131,10 +153,27 @@ async fn duplicate_configurations_are_rejected_with_conflict() {
     let (_directory, app) = test_app();
     let payload = json!({"name": "chrome-linux"});
 
-    let (status, _) = send_json(&app, json_request("POST", "/configurations", &payload)).await;
+    let home = fixture_home(&app).await;
+    let (status, _) = send_json(
+        &app,
+        json_request(
+            "POST",
+            &format!("/projects/{home}/configurations"),
+            &payload,
+        ),
+    )
+    .await;
     assert_eq!(status, StatusCode::CREATED);
 
-    let (status, body) = send_json(&app, json_request("POST", "/configurations", &payload)).await;
+    let (status, body) = send_json(
+        &app,
+        json_request(
+            "POST",
+            &format!("/projects/{home}/configurations"),
+            &payload,
+        ),
+    )
+    .await;
     assert_eq!(status, StatusCode::CONFLICT);
     assert_error_envelope(&body, "conflict");
 }
@@ -162,11 +201,12 @@ async fn missing_configurations_return_a_stable_error_envelope() {
 async fn unknown_fields_are_rejected_before_anything_is_persisted() {
     let (_directory, app) = test_app();
 
+    let home = fixture_home(&app).await;
     let (status, body) = send_json(
         &app,
         json_request(
             "POST",
-            "/configurations",
+            &format!("/projects/{home}/configurations"),
             &json!({"name": "chrome-linux", "unknownField": true}),
         ),
     )
@@ -183,12 +223,13 @@ async fn stored_configurations_survive_a_repository_restart() {
     let directory = TempDir::new().expect("temp dir");
 
     {
-        let app = common::app_at(directory.path());
+        let app = app_at(directory.path());
+        let home = fixture_home(&app).await;
         let (status, _) = send_json(
             &app,
             json_request(
                 "POST",
-                "/configurations",
+                &format!("/projects/{home}/configurations"),
                 &json!({"configId": "CFG-001", "name": "chrome-linux", "browser": "Chrome"}),
             ),
         )
@@ -196,7 +237,7 @@ async fn stored_configurations_survive_a_repository_restart() {
         assert_eq!(status, StatusCode::CREATED);
     }
 
-    let app = common::app_at(directory.path());
+    let app = app_at(directory.path());
     let (status, stored) = send_json(&app, get("/configurations/chrome-linux.json")).await;
 
     assert_eq!(status, StatusCode::OK);
@@ -207,18 +248,22 @@ async fn stored_configurations_survive_a_repository_restart() {
 async fn configuration_markers_are_plain_json_under_the_data_root() {
     let (directory, app) = test_app();
 
+    let home = fixture_home(&app).await;
     let (status, _) = send_json(
         &app,
         json_request(
             "POST",
-            "/configurations",
+            &format!("/projects/{home}/configurations"),
             &json!({"configId": "CFG-001", "name": "chrome-linux", "browser": "Chrome"}),
         ),
     )
     .await;
     assert_eq!(status, StatusCode::CREATED);
 
-    let marker = directory.path().join("configurations/chrome-linux.json");
+    let marker = directory.path().join(format!(
+        "projects/{}/configurations/chrome-linux.json",
+        project_folder(&home)
+    ));
     assert!(marker.is_file(), "marker missing at {}", marker.display());
 
     let stored: serde_json::Value =
@@ -250,26 +295,43 @@ async fn hostile_configuration_identifiers_are_rejected_as_client_errors() {
         );
     }
 
+    let home = fixture_home(&app).await;
+
     // A traversal attempt inside the identifier must never reach the filesystem.
     let (status, body) = send_json(
         &app,
-        json_request("POST", "/configurations", &json!({"name": "../escape"})),
+        json_request(
+            "POST",
+            &format!("/projects/{home}/configurations"),
+            &json!({"name": "../escape"}),
+        ),
     )
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert_error_envelope(&body, "invalid_request");
-    assert!(!directory.path().join("escape.json").exists());
+    assert!(
+        !directory.path().join("escape.json").exists(),
+        "a traversal attempt must never write beside the data root"
+    );
+    assert!(
+        !directory
+            .path()
+            .join(format!("projects/{}/escape.json", project_folder(&home)))
+            .exists(),
+        "a traversal attempt must never write inside the project"
+    );
 }
 
 #[tokio::test]
 async fn test_runs_can_reference_a_configuration() {
     let (_directory, app) = test_app();
 
+    let home = fixture_home(&app).await;
     let (status, _) = send_json(
         &app,
         json_request(
             "POST",
-            "/configurations",
+            &format!("/projects/{home}/configurations"),
             &json!({"configId": "CFG-001", "name": "chrome-linux", "browser": "Chrome"}),
         ),
     )
@@ -280,7 +342,7 @@ async fn test_runs_can_reference_a_configuration() {
         &app,
         json_request(
             "POST",
-            "/test_runs",
+            &format!("/projects/{home}/test_runs"),
             &json!({
                 "testRunId": "R-001",
                 "name": "nightly",
@@ -301,11 +363,12 @@ async fn test_runs_can_reference_a_configuration() {
 async fn a_partial_update_keeps_the_fields_the_body_leaves_out() {
     let (_directory, app) = test_app();
 
+    let home = fixture_home(&app).await;
     let (status, _) = send_json(
         &app,
         json_request(
             "POST",
-            "/configurations",
+            &format!("/projects/{home}/configurations"),
             &json!({
                 "configId": "CFG-001",
                 "name": "chrome-linux",

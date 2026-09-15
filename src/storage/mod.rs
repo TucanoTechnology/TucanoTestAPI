@@ -8,10 +8,11 @@ pub mod layout;
 
 pub use fs::FileRepository;
 pub use layout::{
-    Parent, Placement, Resource, attachment_path, case_dir, case_marker, document_path,
+    Parent, Placement, RESERVED_PROJECT_CHILDREN, Resource, attachment_path, case_dir, case_marker,
     ensure_within, folder_name, folder_wire_id, node_folder, parent_dir, parent_marker,
-    project_dir, project_marker, revision_dir, revision_marker, root_dir, set_private_permissions,
-    step_attachment_path, step_dir, suite_dir, suite_marker, unique_suffix, validate_component,
+    project_collection_dir, project_dir, project_document_path, project_marker, revision_dir,
+    revision_marker, root_dir, set_private_permissions, step_attachment_path, step_dir, suite_dir,
+    suite_marker, unique_suffix, validate_component, validate_document_id,
 };
 
 use serde_json::Value;
@@ -20,17 +21,17 @@ use std::io;
 /// Storage operations the domain needs, expressed in terms of [`Resource`].
 ///
 /// Hierarchy resources (projects, suites, cases) are addressed with the
-/// [`Parent`] that owns them; flat resources (runs, milestones, configurations)
-/// pass `None` and rely on a globally unique identifier. Implementations return
-/// raw [`io::Error`]s; translating them into domain errors is the domain layer's
-/// job.
+/// [`Parent`] that owns them; runs, milestones and configurations are addressed
+/// with the [`Parent::Project`] that owns them, and their identifiers are unique
+/// within a project. Implementations return raw [`io::Error`]s; translating them
+/// into domain errors is the domain layer's job.
 pub trait Repository: Send + Sync {
     /// Identifiers stored for a resource across the whole tree, de-duplicated
     /// and sorted.
     fn list(&self, resource: Resource) -> io::Result<Vec<String>>;
 
-    /// Every parent that owns an occurrence of a hierarchy node, in a stable
-    /// order. Empty means nothing owns it; more than one is ambiguous.
+    /// Every parent that owns an occurrence of an entity, in a stable order.
+    /// Empty means nothing owns it; more than one is ambiguous.
     fn locate(&self, resource: Resource, id: &str) -> io::Result<Vec<Parent>>;
 
     /// Identifiers of the children `parent` owns, sorted.
