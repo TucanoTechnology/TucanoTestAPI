@@ -154,8 +154,14 @@ impl<R: Repository> TestService<R> {
             .map_err(error::read_error)
     }
 
-    /// Validates, names and stores a new document in a collection that has no
-    /// parent of its own — projects and the flat resources.
+    /// Validates, names and stores a new document in the collection that has no
+    /// parent of its own — projects.
+    ///
+    /// A run, a milestone and a configuration are stored inside a project, so
+    /// they are created through [`Self::create_in`] with the project that owns
+    /// them; addressed without one, storage refuses them.
+    // TODO(#219): S3 retires the globally addressed creation of these three
+    // with the message the ADR fixes, instead of letting storage refuse it.
     pub fn create(&self, resource: Resource, value: &Value) -> Result<Created, DomainError> {
         match resource {
             Resource::Suites => Err(DomainError::invalid_request(
@@ -552,16 +558,20 @@ impl<R: Repository> TestService<R> {
 
     /// Reports a milestone's progress from the runs it references.
     pub fn milestone_progress(&self, id: &str) -> Result<MilestoneProgress, DomainError> {
+        // TODO(#219): the milestone's home, and the home-preferring resolution
+        // of `testRunIds` that answers a conflict for a reference two projects
+        // hold, belong to the domain task.
+        let parent = self.owner_for_write(Resource::Milestones, id, "Milestone not found")?;
         let value = self
             .repository
-            .read_at(Resource::Milestones, None, id)
+            .read_at(Resource::Milestones, parent.as_ref(), id)
             .map_err(error::milestone_error)?;
         let milestone: Milestone = serde_json::from_value(value)
             .map_err(|_| DomainError::Internal("Stored milestone JSON is invalid".to_owned()))?;
 
         let mut runs = Vec::new();
         for run_id in milestone.test_run_ids.as_deref().unwrap_or_default() {
-            let Ok(run_value) = self.repository.read_at(Resource::Runs, None, run_id) else {
+            let Ok(run_value) = self.first_document(Resource::Runs, run_id) else {
                 continue;
             };
             let Ok(run) = serde_json::from_value::<TestRun>(run_value) else {
@@ -666,9 +676,12 @@ impl<R: Repository> TestService<R> {
 
         let milestone_runs = match filters.milestone_id.as_deref() {
             Some(id) => {
+                // TODO(#219): S3 owns the milestone's home resolution.
+                let parent =
+                    self.owner_for_write(Resource::Milestones, id, "Milestone not found")?;
                 let value = self
                     .repository
-                    .read_at(Resource::Milestones, None, id)
+                    .read_at(Resource::Milestones, parent.as_ref(), id)
                     .map_err(error::milestone_error)?;
                 let milestone: Milestone = serde_json::from_value(value).map_err(|_| {
                     DomainError::Internal("Stored milestone JSON is invalid".to_owned())
@@ -679,12 +692,11 @@ impl<R: Repository> TestService<R> {
         };
 
         if let Some(config_id) = filters.configuration_id.as_deref() {
-            match self
-                .repository
-                .exists_at(Resource::Configurations, None, config_id)
-            {
-                Ok(true) => {}
-                Ok(false) => {
+            // A filter value is not a dereference, so an identifier two projects
+            // hold is not a conflict here; one none holds is still absent.
+            match self.repository.locate(Resource::Configurations, config_id) {
+                Ok(homes) if !homes.is_empty() => {}
+                Ok(_) => {
                     return Err(DomainError::NotFound(
                         entity_missing_message(Resource::Configurations).to_owned(),
                     ));
@@ -701,12 +713,15 @@ impl<R: Repository> TestService<R> {
         }
 
         let mut results = Vec::new();
+        // TODO(#219): S3 enumerates projects and their runs instead of the
+        // de-duplicated global listing, so two runs sharing an identifier are
+        // both counted.
         for run_id in self
             .repository
             .list(Resource::Runs)
             .map_err(error::read_error)?
         {
-            let Ok(value) = self.repository.read_at(Resource::Runs, None, &run_id) else {
+            let Ok(value) = self.first_document(Resource::Runs, &run_id) else {
                 continue;
             };
             let Ok(run) = serde_json::from_value::<TestRun>(value) else {
@@ -749,13 +764,15 @@ impl<R: Repository> TestService<R> {
         Ok(self.parent_of(resource, id, missing)?.project().to_owned())
     }
 
-    /// Reads a flat document as stored, without assembling its children.
+    /// Reads a document as stored, without assembling its children.
     ///
     /// Used where a route needs a resource's own fields — the projects a run or
     /// a milestone references — and not the tree below it.
     pub fn document(&self, resource: Resource, id: &str) -> Result<Value, DomainError> {
+        // TODO(#219): S3 owns home resolution for the project-scoped resources.
+        let parent = self.owner_for_write(resource, id, entity_missing_message(resource))?;
         self.repository
-            .read_at(resource, None, id)
+            .read_at(resource, parent.as_ref(), id)
             .map_err(|error| error::load_error(error, entity_missing_message(resource)))
     }
 
@@ -1119,7 +1136,14 @@ impl<R: Repository> TestService<R> {
                 let parent = self.parent_of(Resource::Cases, id, missing)?;
                 self.read_document(resource, Some(&parent), id, missing)
             }
-            _ => self.read_document(resource, None, id, missing),
+            // A run, a milestone and a configuration are read from the project
+            // that owns them, so a bare identifier two projects hold is
+            // ambiguous exactly as it already is for a suite or a case.
+            // TODO(#219): S3 replaces this with `resolve(resource, id, home)`.
+            Resource::Runs | Resource::Milestones | Resource::Configurations => {
+                let parent = self.parent_of(resource, id, missing)?;
+                self.read_document(resource, Some(&parent), id, missing)
+            }
         }
     }
 
@@ -1184,7 +1208,8 @@ impl<R: Repository> TestService<R> {
     /// that need the stored fields of an identifier several parents may own.
     fn first_document(&self, resource: Resource, id: &str) -> io::Result<Value> {
         match resource {
-            Resource::Suites | Resource::Cases => {
+            Resource::Projects => self.repository.read_at(resource, None, id),
+            _ => {
                 let home = self
                     .repository
                     .locate(resource, id)?
@@ -1193,7 +1218,6 @@ impl<R: Repository> TestService<R> {
                     .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "resource not found"))?;
                 self.repository.read_at(resource, Some(&home), id)
             }
-            _ => self.repository.read_at(resource, None, id),
         }
     }
 
@@ -1218,6 +1242,11 @@ impl<R: Repository> TestService<R> {
     }
 
     /// The parent a write addresses, for resources that live inside one.
+    ///
+    /// Only projects are addressed without a parent; every other resource is
+    /// stored in the parent that owns it.
+    /// TODO(#219): S3 owns the per-resource endpoint strings `ambiguous()`
+    /// answers with for a run, a milestone and a configuration.
     fn owner_for_write(
         &self,
         resource: Resource,
@@ -1225,8 +1254,8 @@ impl<R: Repository> TestService<R> {
         missing: &str,
     ) -> Result<Option<Parent>, DomainError> {
         match resource {
-            Resource::Suites | Resource::Cases => self.parent_of(resource, id, missing).map(Some),
-            _ => Ok(None),
+            Resource::Projects => Ok(None),
+            _ => self.parent_of(resource, id, missing).map(Some),
         }
     }
 
@@ -1272,7 +1301,9 @@ impl<R: Repository> TestService<R> {
         id: &str,
         missing_message: &str,
     ) -> Result<T, DomainError> {
-        let value = self.read_document(resource, None, id, missing_message)?;
+        // TODO(#219): S3 replaces this with `resolve(resource, id, home)`.
+        let parent = self.owner_for_write(resource, id, missing_message)?;
+        let value = self.read_document(resource, parent.as_ref(), id, missing_message)?;
         serde_json::from_value(value)
             .map_err(|_| DomainError::Internal("Stored JSON is invalid".to_owned()))
     }
@@ -1285,8 +1316,12 @@ impl<R: Repository> TestService<R> {
     ) -> Result<(), DomainError> {
         let document = serde_json::to_value(value)
             .map_err(|_| DomainError::Internal("Failed to serialize document".to_owned()))?;
+        // A document is written back to the parent that owns it, which for a
+        // run is the project it was created in.
+        // TODO(#219): S3 replaces this with `resolve(resource, id, home)`.
+        let parent = self.owner_for_write(resource, id, entity_missing_message(resource))?;
         self.repository
-            .write_at(resource, None, id, &document)
+            .write_at(resource, parent.as_ref(), id, &document)
             .map_err(DomainError::from)
     }
 }
@@ -1679,17 +1714,19 @@ mod tests {
     #[test]
     fn runs_are_listed_by_the_configuration_they_link() {
         let (service, _directory) = service();
+        let home = project(&service);
         for (id, name) in [("R-1", "nightly"), ("R-2", "weekly"), ("R-3", "release")] {
             service
-                .create(
+                .create_in(
                     Resource::Runs,
+                    &home,
                     &json!({ "testRunId": id, "name": name, "timestamp": "1", "tags": ["ci"] }),
                 )
                 .expect("run");
         }
         for name in ["chrome-linux", "firefox-windows"] {
             service
-                .create(Resource::Configurations, &json!({ "name": name }))
+                .create_in(Resource::Configurations, &home, &json!({ "name": name }))
                 .expect("configuration");
         }
         for (run, configuration) in [
@@ -2145,9 +2182,11 @@ mod tests {
     #[test]
     fn run_results_are_recorded_and_replaced() {
         let (service, _directory) = service();
+        let home = project(&service);
         service
-            .create(
+            .create_in(
                 Resource::Runs,
+                &home,
                 &json!({ "testRunId": "R-1", "name": "nightly", "timestamp": "1" }),
             )
             .expect("run");
@@ -2192,8 +2231,9 @@ mod tests {
         let project = project(&service);
         case(&service, &project, "TC-1");
         service
-            .create(
+            .create_in(
                 Resource::Runs,
+                &project,
                 &json!({ "testRunId": "R-1", "name": "nightly", "timestamp": "1" }),
             )
             .expect("run");
@@ -2222,9 +2262,11 @@ mod tests {
     #[test]
     fn milestone_progress_reads_the_referenced_runs() {
         let (service, _directory) = service();
+        let home = project(&service);
         service
-            .create(
+            .create_in(
                 Resource::Runs,
+                &home,
                 &json!({
                     "testRunId": "R-1",
                     "name": "nightly",
@@ -2238,8 +2280,9 @@ mod tests {
             )
             .expect("run");
         service
-            .create(
+            .create_in(
                 Resource::Milestones,
+                &home,
                 &json!({ "milestoneId": "M-1", "name": "v1.0", "testRunIds": ["nightly.json"] }),
             )
             .expect("milestone");
