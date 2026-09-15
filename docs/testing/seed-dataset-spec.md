@@ -47,26 +47,26 @@ example is a gap, not a deferral.
 | 5 | Steps on a case | `TC-LOGIN-2` carries ordered `steps` | `PUT /test_cases/TC-LOGIN-2` | inside `test-case.json` |
 | 6 | Case attachments | `login-flow.txt` on `TC-LOGIN-1` | `POST /test_cases/{id}/attachments` (multipart) | `…/TC-LOGIN-1/login-flow.txt` |
 | 7 | Step attachments | `step-1.txt` on step index 0 of `TC-LOGIN-2` | `POST /test_cases/{id}/steps/{index}/attachments` | `…/TC-LOGIN-2/steps/0/step-1.txt` |
-| 8 | Tags on projects, suites, cases and runs | `checkout`/`regression` on the project; `smoke` on the suite; `auth` on a case; `nightly` on the run | the create/update calls that carry `tags`, then `GET /test_runs?tags=nightly` | the `tags` array in each stored document |
+| 8 | Tags on projects, suites, cases and runs | `checkout`/`regression` on the project; `smoke` on the suite; `auth` on a case; `nightly` on the run | the create/update calls that carry `tags`, then the seeded run read back through the tags filter (`tags=nightly`) | the `tags` array in each stored document |
 | 9 | Case versioning and revision history | `TC-LOGIN-2` updated once after creation | `PUT /test_cases/TC-LOGIN-2`, then `GET /test_cases/TC-LOGIN-2/history` | `…/TC-LOGIN-2/revisions/v1.json`; `version`/`lastModified` in `test-case.json` |
-| 10 | Configurations (installation-wide) | `chrome-linux.json`, `firefox-linux.json` | `POST /configurations` ×2 | `configurations/chrome-linux.json`, `configurations/firefox-linux.json` |
-| 11 | Linking a configuration to a run | `chrome-linux.json` linked to `nightly.json` | `POST /test_runs/{id}/configurations` | the `configurations` reference array in `test_runs/nightly.json` |
-| 12 | Runs (point-in-time snapshots) | `nightly.json` covering the `checkout.json` project and its smoke suite | `POST /test_runs`, then `POST /test_runs/{id}/test_suites` | `test_runs/nightly.json` |
-| 13 | Run case membership pinned from a template | run carries `TC-LOGIN-1`, `TC-LOGIN-2` as copies | `POST /test_runs/{id}/test_cases` | `test_cases` array in `test_runs/nightly.json` |
-| 14 | Recorded results — every status | `TC-LOGIN-1` `Passed`, `TC-LOGIN-2` `Failed` (with notes and `durationMs`), `TC-PROJECT-1` `Blocked`, `TC-CART-1` `Retest`; `Untested` left implicit for the one declared case with no recorded result | `POST /test_runs/{id}/results` per case (the route replaces an earlier result for the same case) | `results` array in `test_runs/nightly.json` |
+| 10 | Configurations (one per project) | `chrome-linux.json` in `checkout.json`; `firefox-linux.json` in `payments.json` | `POST /projects/{id}/configurations` ×2 | `projects/checkout.json/configurations/chrome-linux.json`, `projects/payments.json/configurations/firefox-linux.json` |
+| 11 | Linking a configuration to a run | `chrome-linux.json` linked to `nightly.json` | `POST /test_runs/{id}/configurations` | the `configurations` reference array in `projects/checkout.json/test_runs/nightly.json` |
+| 12 | Runs (point-in-time snapshots) | `nightly.json` covering the `checkout.json` project and its smoke suite | `POST /projects/{id}/test_runs`, then `POST /test_runs/{id}/test_suites` | `projects/checkout.json/test_runs/nightly.json` |
+| 13 | Run case membership pinned from a template | run carries `TC-LOGIN-1`, `TC-LOGIN-2` as copies | `POST /test_runs/{id}/test_cases` | `test_cases` array in `projects/checkout.json/test_runs/nightly.json` |
+| 14 | Recorded results — every status | `TC-LOGIN-1` `Passed`, `TC-LOGIN-2` `Failed` (with notes and `durationMs`), `TC-PROJECT-1` `Blocked`, `TC-CART-1` `Retest`; `Untested` left implicit for the one declared case with no recorded result | `POST /test_runs/{id}/results` per case (the route replaces an earlier result for the same case) | `results` array in `projects/checkout.json/test_runs/nightly.json` |
 | 15 | Result replacement (upsert) | `TC-LOGIN-2` recorded `Blocked` then replaced with `Failed` | same `POST /test_runs/{id}/results` twice | one `Failed` entry for `TC-LOGIN-2` |
 | 16 | Defect links — all four trackers | one link per tracker type on the failed result of `TC-LOGIN-2` | `POST /test_runs/{id}/results/{case_id}/defects` ×4 | `defectLinks` array inside the `TC-LOGIN-2` result |
 | 17 | Defect link removal | the GitHub link of row 16, linked then unlinked | `POST …/defects` then `DELETE …/defects/{link_id}` | the removed link is absent from `defectLinks` |
-| 18 | JUnit XML import | `nightly-import.json` run, importing a fixture for two cases | `POST /test_runs/{id}/import/junit` | `results` array in `test_runs/nightly-import.json` |
-| 19 | JSON result import | `nightly-import.json`, importing `Passed` and `Failed` entries | `POST /test_runs/{id}/import/json` | `results` array in `test_runs/nightly-import.json` |
-| 20 | Milestones and derived progress | `v1.0.json` referencing `nightly.json` | `POST /milestones`, then `GET /milestones/v1.0.json/progress` | `milestones/v1.0.json` |
+| 18 | JUnit XML import | `nightly-import.json` run, importing a fixture for two cases | `POST /test_runs/{id}/import/junit` | `results` array in `projects/checkout.json/test_runs/nightly-import.json` |
+| 19 | JSON result import | `nightly-import.json`, importing `Passed` and `Failed` entries | `POST /test_runs/{id}/import/json` | `results` array in `projects/checkout.json/test_runs/nightly-import.json` |
+| 20 | Milestones and derived progress | `v1.0.json` referencing `nightly.json` | `POST /projects/{id}/milestones`, then `GET /milestones/v1.0.json/progress` | `projects/checkout.json/milestones/v1.0.json` |
 | 21 | Duplication | a suite duplicate kept under a project | `POST /test_suites/smoke.checkout.json/duplicate` | `projects/checkout.json/<copy>/suite.json` |
-| 22 | Copy vs. move composition | `TC-LOGIN-1` copied into `payments.json` while the source stays in `smoke.checkout.json`; `TC-PROJECT-1` moved from `checkout.json` into the copy — the same route with `"mode":"move"` | `POST /projects/{id}/test_cases` with `testCaseId` (copy is the default; `mode` selects move) | `payments.json/TC-LOGIN-1/` beside the source; `TC-PROJECT-1/` gone from `checkout.json` |
+| 22 | Copy vs. move composition | `TC-LOGIN-1` copied into `payments.json` while the source stays in `smoke.checkout.json`; `TC-PROJECT-1` placed with `"mode":"move"` onto the project that already owns it, `checkout.json`, which leaves it there — the same route as the copy, with `mode` selecting move | `POST /projects/{id}/test_cases` with `testCaseId` (copy is the default; `mode` selects move) | `projects/payments.json/TC-LOGIN-1/` beside the source in `projects/checkout.json/smoke.checkout.json/TC-LOGIN-1/`; `projects/checkout.json/TC-PROJECT-1/` stays where [§2](#2-target-tree-below-tucano_data_dir) shows it |
 | 23 | Coverage report | `GET /reports/coverage`, global and `?projectId=checkout.json` | the report routes | n/a (read-only — no new files) |
 | 24 | Summary report | `GET /reports/summary` and `?configurationId=chrome-linux.json` | the report routes | n/a (read-only — no new files) |
 | 25 | Auth users: system administrator | `admin` — the bootstrap account | `TUCANO_BOOTSTRAP_USERNAME`/`TUCANO_BOOTSTRAP_PASSWORD` at startup; `POST /auth/login` | `auth/users.json` (**not** produced by an API call — see [§5](#5-known-gap-auth-accounts-and-role-grants)) |
 | 26 | Auth users: non-admin account | `viewer` — a stored account with no `systemAdmin` flag | written through the `AuthStore` path by the generator; `POST /auth/login` | `auth/users.json` (**not** produced by an API call) |
-| 27 | Role grants per project | `viewer` holds `owner` on `checkout.json` and on `payments.json`. `admin` holds **no grant at all** — a system administrator is authorized without one (see [§5](#5-known-gap-auth-accounts-and-role-grants)) | written through the `AuthStore` grant path; verified by `GET /auth/me` as `viewer`, and for `admin` by an authorized write and by `systemAdmin: true` | `auth/projects/checkout.json`, `auth/projects/payments.json` |
+| 27 | Role grants per project | `viewer` holds `owner` on `checkout.json` and **no grant at all** on `payments.json`. `admin` holds **no grant at all** — a system administrator is authorized without one (see [§5](#5-known-gap-auth-accounts-and-role-grants)) | written through the `AuthStore` grant path; verified by `GET /auth/me` as `viewer`, and for `admin` by an authorized write and by `systemAdmin: true` | `auth/projects/checkout.json` (and no `auth/projects/payments.json`) |
 | 28 | Authorization enforcement | the `viewer`-scoped token proves reads succeed and a write is refused with `forbidden` | any guarded write with the scoped token | n/a (the refusal is the evidence) |
 | 29 | Sessions | sign in, refresh (rotating the refresh token once), sign out, `GET /auth/me` | `POST /auth/login`, `POST /auth/refresh`, `POST /auth/logout`, `GET /auth/me` | n/a (`auth/users.json` carries the revocable refresh tokens) |
 | 30 | Service surface | `GET /health`, `GET /openapi.json` | the service routes | n/a (read-only) |
@@ -122,11 +122,11 @@ the check.
 
 | Operation | Why no seeded example |
 | --- | --- |
-| `GET /configurations` | list companion of `POST /configurations` (row 10) |
-| `GET /configurations/{id}` | read companion of row 10; teardown's `DELETE /configurations/{id}` covers the delete |
+| `GET /configurations` | list companion of the configuration routes. The seeded configurations live in their projects (row 10); [§3 step 12](#step-12--validation-of-the-seeded-environment) reads them back through this filtered listing as well as through each project's own |
+| `GET /configurations/{id}` | read companion of row 10, and the global document route [§3 step 12](#step-12--validation-of-the-seeded-environment) reads each seeded configuration back through |
 | `PUT /configurations/{id}` | replace companion of row 10 |
-| `DELETE /configurations/{id}` | teardown-scope call ([§4](#4-teardown-scope)), not a seed call |
-| `GET /milestones` | list companion of `POST /milestones` (row 20) |
+| `DELETE /configurations/{id}` | delete companion of row 10; teardown removes a seeded configuration through its project's own delete instead ([§4](#4-teardown-scope)) |
+| `GET /milestones` | list companion of `POST /projects/{id}/milestones` (row 20); each seeded milestone is read back through its project's own listing |
 | `GET /milestones/{id}` | read companion of row 20 |
 | `PUT /milestones/{id}` | replace companion of row 20 |
 | `DELETE /milestones/{id}` | teardown-scope call ([§4](#4-teardown-scope)) |
@@ -136,6 +136,12 @@ the check.
 | `PUT /projects/{id}` | replace companion of row 1 |
 | `DELETE /projects/{id}` | teardown-scope call ([§4](#4-teardown-scope)) |
 | `POST /projects/{id}/duplicate` | duplication is seeded for a suite (row 21), not for a project |
+| `GET /projects/{id}/configurations` | list companion of `POST /projects/{id}/configurations` (row 10); [§3 step 12](#step-12--validation-of-the-seeded-environment) reads each project's configuration back through it |
+| `DELETE /projects/{id}/configurations/{config_id}` | teardown-scope call ([§4](#4-teardown-scope)) |
+| `GET /projects/{id}/milestones` | list companion of `POST /projects/{id}/milestones` (row 20); [§3 step 12](#step-12--validation-of-the-seeded-environment) reads the project's milestone back through it |
+| `DELETE /projects/{id}/milestones/{milestone_id}` | teardown-scope call ([§4](#4-teardown-scope)) |
+| `GET /projects/{id}/test_runs` | list companion of `POST /projects/{id}/test_runs` (row 12); [§3 step 12](#step-12--validation-of-the-seeded-environment) reads each project's runs back through it |
+| `DELETE /projects/{id}/test_runs/{run_id}` | teardown-scope call ([§4](#4-teardown-scope)) |
 | `DELETE /projects/{id}/test_cases/{case_id}` | teardown-scope call; placement is row 22 |
 | `GET /projects/{id}/test_cases` | list companion of the case routes; [§3 step 12](#step-12--validation-of-the-seeded-environment) reads each parent's cases back through it |
 | `GET /projects/{id}/test_suites` | list companion of `POST /projects/{id}/test_suites` (row 2); the seed reads this listing to learn the duplicate's identifier |
@@ -149,7 +155,7 @@ the check.
 | `GET /test_cases/{id}/history/{version}` | read companion of `GET /test_cases/{id}/history` (row 9) |
 | `GET /test_cases/{id}/steps/{step_index}/attachments` | read companion of the step-attachment upload (row 7) |
 | `DELETE /test_cases/{id}/steps/{step_index}/attachments/{filename}` | teardown is scoped to the case folder |
-| `GET /test_runs` | list companion of `POST /test_runs` (row 12); rows 8 and 14 read it with a filter |
+| `GET /test_runs` | list companion of `POST /projects/{id}/test_runs` (row 12); [§3 step 12](#step-12--validation-of-the-seeded-environment) and the filter assertions ([§3 step 12](#step-12--validation-of-the-seeded-environment)) read it across every reachable project |
 | `GET /test_runs/{id}` | read companion of row 12; [§3 step 12](#step-12--validation-of-the-seeded-environment) reads both seeded runs back |
 | `PUT /test_runs/{id}` | replace companion of row 12 |
 | `DELETE /test_runs/{id}` | teardown-scope call ([§4](#4-teardown-scope)) |
@@ -180,8 +186,7 @@ $TUCANO_DATA_DIR/
 ├── auth/
 │   ├── users.json                            # accounts, password hashes, refresh tokens
 │   └── projects/
-│       ├── checkout.json                     # {"grants": {"<viewer id>": "owner"}}
-│       └── payments.json                     # {"grants": {"<viewer id>": "owner"}}
+│       └── checkout.json                     # {"grants": {"<viewer id>": "owner"}}
 ├── .tucano.lock                              # advisory lock, created by the API
 ├── projects/
 │   ├── checkout.json/
@@ -204,21 +209,22 @@ $TUCANO_DATA_DIR/
 │   │   │   └── suite.json
 │   │   ├── TC-PROJECT-1/                     # a case owned directly by the project;
 │   │   │   └── test-case.json                # the move in §3, step 11 leaves it here
-│   └── payments.json/
-│       ├── project.json
-│       ├── smoke.payments.json/
-│       │   └── suite.json
-│       └── TC-LOGIN-1/                       # the copy placed into this project
-│           ├── test-case.json
-│           └── 1789393055091247267-login-flow.txt   # the case's attachment travels with it
-├── test_runs/
-│   ├── nightly.json                          # projects, suites, cases, results, defects, config link
-│   └── nightly-import.json                   # results arrived by import
-├── milestones/
-│   └── v1.0.json                             # references nightly.json
-└── configurations/
-    ├── chrome-linux.json
-    └── firefox-linux.json
+│   ├── test_runs/                            # reserved child of this project
+│   │   ├── nightly.json                      # projects, suites, cases, results, defects, config link
+│   │   └── nightly-import.json               # results arrived by import
+│   ├── milestones/                           # reserved child of this project
+│   │   └── v1.0.json                         # references nightly.json
+│   └── configurations/                       # reserved child of this project
+│       └── chrome-linux.json
+└── payments.json/
+    ├── project.json
+    ├── smoke.payments.json/
+    │   └── suite.json
+    ├── TC-LOGIN-1/                           # the copy placed into this project
+    │   ├── test-case.json
+    │   └── 1789393055091247267-login-flow.txt   # the case's attachment travels with it
+    └── configurations/                       # reserved child of this project
+        └── firefox-linux.json
 ```
 
 Two details of this tree are easy to get wrong and are called out deliberately:
@@ -226,20 +232,26 @@ Two details of this tree are easy to get wrong and are called out deliberately:
 - **A project and a suite always contain what the API put there, and nothing
   else.** Suites are folders inside their project; cases are folders inside a
   project or inside a suite. There is no top-level pool of standalone entities,
-  and the generator must never create one.
-- **`test_runs/`, `milestones/` and `configurations/` are flat.** A run,
-  milestone or configuration is a single `<id>.json` document at the root of its
-  collection, never a folder, and none of them owns a subtree.
+  and the generator must never create one. On top of its entries a project owns
+  three folder children holding its runs, its milestones and its configurations;
+  `test_runs`, `milestones` and `configurations` are reserved names inside a
+  project folder, so neither a suite nor a case may take one.
+- **`test_runs/`, `milestones/` and `configurations/` are still single
+  documents, not folders.** A run, milestone or configuration is one `<id>.json`
+  file, never a folder, and none of them owns a subtree — but the folder holding
+  it is a child of the project that owns it, not the root of the data directory.
 
 ## 3. Generating API calls
 
 Every step is an HTTP call with the token from step 0. Steps 1–4 must run in
-order; the later steps depend only on the resources named in them.
+order — step 2 puts a configuration into a project step 1 creates, and steps 3
+and 4 create their suites and cases inside those projects; the later steps
+depend only on the resources named in them.
 
 ### Step 0 — session
 
 Auth is optional at runtime and off by default. The seed needs it on, because
-the whole sequence below carries a token and step 2 creates a project, which
+the whole sequence below carries a token and step 1 creates a project, which
 only a system administrator may do. The deployment must therefore be started
 with the four settings this step depends on:
 
@@ -264,16 +276,7 @@ curl -sS -X POST "$API/auth/login" \
 The response carries `accessToken`, `refreshToken`, `tokenType` and
 `expiresIn`. Send `Authorization: Bearer <accessToken>` on every call below.
 
-### Step 1 — configurations (installation-wide, no project role)
-
-```sh
-curl -sS -X POST "$API/configurations" -H "Authorization: Bearer $TOKEN" \
-  -H 'Content-Type: application/json' -d '{"configId":"chrome-linux.json","name":"chrome-linux"}'
-curl -sS -X POST "$API/configurations" -H "Authorization: Bearer $TOKEN" \
-  -H 'Content-Type: application/json' -d '{"configId":"firefox-linux.json","name":"firefox-linux","browser":"firefox","os":"linux"}'
-```
-
-### Step 2 — projects
+### Step 1 — projects
 
 Only a caller with the system-administrator flag may create a project, which is
 why the seed uses the bootstrap account here.
@@ -285,6 +288,27 @@ curl -sS -X POST "$API/projects" -H "Authorization: Bearer $TOKEN" \
 curl -sS -X POST "$API/projects" -H "Authorization: Bearer $TOKEN" \
   -H 'Content-Type: application/json' -d '{"projectId":"payments.json","name":"payments"}'
 ```
+
+A project is created with no configurations, runs or milestones: those are
+added to it by the steps below.
+
+### Step 2 — configurations inside the project that owns them
+
+A configuration belongs to one project, so it is created through that project's
+own route, after step 1 has created the project. `chrome-linux.json` belongs to
+`checkout.json`, which is the project the seed's run executes, and
+`firefox-linux.json` belongs to `payments.json`; neither project can see the
+other's configuration.
+
+```sh
+curl -sS -X POST "$API/projects/checkout.json/configurations" -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' -d '{"configId":"chrome-linux.json","name":"chrome-linux"}'
+curl -sS -X POST "$API/projects/payments.json/configurations" -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' -d '{"configId":"firefox-linux.json","name":"firefox-linux","browser":"firefox","os":"linux"}'
+```
+
+`POST /configurations` is retired and answers 400; a configuration is always
+created through the project it belongs to.
 
 ### Step 3 — suites inside their projects
 
@@ -341,8 +365,12 @@ fixtures are small text files committed beside it.
 
 ### Step 6 — the run, its pinned membership and its configuration link
 
+The run is created inside the project that owns it, `checkout.json`. Its
+`projects` array stays: it records which projects the run covered, which is not
+the same thing as where the run lives.
+
 ```sh
-curl -sS -X POST "$API/test_runs" -H "Authorization: Bearer $TOKEN" \
+curl -sS -X POST "$API/projects/checkout.json/test_runs" -H "Authorization: Bearer $TOKEN" \
   -H 'Content-Type: application/json' \
   -d '{"testRunId":"nightly.json","name":"nightly","timestamp":"1757800000","tags":["nightly"],"projects":[{"projectId":"checkout.json","name":"checkout","testSuites":[]}]}'
 
@@ -420,10 +448,14 @@ generator's negative checks, not by the seed itself.
 
 ### Step 9 — the imported run
 
+The imported run lives in `checkout.json` too, so it is created through the same
+project route as `nightly.json`, under its own identifier.
+
 ```sh
-curl -sS -X POST "$API/test_runs" -H "Authorization: Bearer $TOKEN" \
+curl -sS -X POST "$API/projects/checkout.json/test_runs" -H "Authorization: Bearer $TOKEN" \
   -H 'Content-Type: application/json' \
   -d '{"testRunId":"nightly-import.json","name":"nightly-import","tags":["nightly"],"projects":[{"projectId":"checkout.json","name":"checkout","testSuites":[]}]}'
+
 curl -sS -X POST "$API/test_runs/nightly-import.json/test_cases" -H "Authorization: Bearer $TOKEN" \
   -H 'Content-Type: application/json' -d '{"testCaseId":"TC-LOGIN-1"}'
 curl -sS -X POST "$API/test_runs/nightly-import.json/test_cases" -H "Authorization: Bearer $TOKEN" \
@@ -442,8 +474,11 @@ passing and a failing case so the import and the run's own results agree.
 
 ### Step 10 — milestone and duplication
 
+The milestone lives in the run's project, `checkout.json`, and references the
+seeded run by identifier.
+
 ```sh
-curl -sS -X POST "$API/milestones" -H "Authorization: Bearer $TOKEN" \
+curl -sS -X POST "$API/projects/checkout.json/milestones" -H "Authorization: Bearer $TOKEN" \
   -H 'Content-Type: application/json' \
   -d '{"milestoneId":"v1.0.json","name":"v1.0","status":"open","testRunIds":["nightly.json"]}'
 curl -sS -X GET "$API/milestones/v1.0.json/progress" -H "Authorization: Bearer $TOKEN"
@@ -469,8 +504,8 @@ curl -sS -X POST "$API/projects/checkout.json/test_cases" -H "Authorization: Bea
 
 The first call copies the existing case into the named project and leaves the
 source in place, which is why `TC-LOGIN-1` appears in exactly two places in the
-target tree — inside `smoke.checkout.json` where it was created, and under
-`payments.json`.
+target tree — inside `projects/checkout.json/smoke.checkout.json/` where it was
+created, and inside `projects/payments.json/`.
 
 [`mode`](#conventions-used-in-this-document) is spelled out only when a test
 needs `move`, which relocates the entity instead of duplicating it. Note the two
@@ -495,6 +530,19 @@ The generator's validation step asserts, at minimum:
 - `GET /health` answers `{"status":"ok","storage":"filesystem"}`.
 - Every document in the target tree above is present and readable back through
   its `GET` route, with the identifiers the tree names.
+- Each of the three project-owned resources — configurations, runs and
+  milestones — reads back through **both** the listing of the project that owns
+  it (`GET /projects/{id}/configurations`, `GET /projects/{id}/test_runs`,
+  `GET /projects/{id}/milestones`) and its global document route
+  (`GET /configurations/{id}`, `GET /test_runs/{id}`, `GET /milestones/{id}`).
+  The two agree on where each one lives: both runs and the milestone read back
+  under `checkout.json`, `chrome-linux.json` under `checkout.json` and
+  `firefox-linux.json` under `payments.json`.
+- A configuration created in one project is not visible to a caller restricted
+  to another. The seeded **viewer** holds `owner` on `checkout.json` and no grant
+  at all on `payments.json`, so for that caller `GET /configurations` lists
+  `chrome-linux.json` and not `firefox-linux.json`, and
+  `GET /projects/payments.json/configurations` answers `403 forbidden`.
 - `GET /milestones/v1.0.json/progress` reports five buckets
   (`Passed`, `Failed`, `Blocked`, `Untested`, `Retest`) that count the results
   `nightly.json` records, while `totalCases` counts the cases that run
@@ -507,8 +555,9 @@ The generator's validation step asserts, at minimum:
 - `GET /reports/coverage` and `GET /reports/summary` answer for both scopes.
 - `GET /test_runs?tags=nightly` and `GET /test_runs?configuration=chrome-linux.json`
   both return the seeded runs.
-- `GET /auth/me` reports the seeded **viewer's** role (`owner`) on each project
-  it was granted, and for the bootstrap account reports `systemAdmin: true` with
+- `GET /auth/me` reports the seeded **viewer's** role (`owner`) on
+  `checkout.json`, which is the project it was granted, and no grant on
+  `payments.json`; and for the bootstrap account reports `systemAdmin: true` with
   **no** grants at all — a system administrator needs none (see
   [§5](#5-known-gap-auth-accounts-and-role-grants)), which the authorized write
   below proves.
@@ -532,25 +581,31 @@ deployment that holds other data.
 | 2 | Test runs the seed created | `DELETE /test_runs/{id}` |
 | 3 | Suites the seed created, and their copies | `DELETE /projects/{id}/test_suites/{suite_id}` |
 | 4 | Cases the seed created, including the placed copies | `DELETE /projects/{id}/test_cases/{case_id}` and `DELETE /test_suites/{id}/test_cases/{case_id}` |
-| 5 | Projects the seed created (with whatever is left below them) | `DELETE /projects/{id}` |
-| 6 | Configurations the seed created | `DELETE /configurations/{id}` |
+| 5 | Configurations the seed created, read back from the project that owns each | `DELETE /projects/{id}/configurations/{config_id}` |
+| 6 | Projects the seed created (with whatever is left below them) | `DELETE /projects/{id}` |
 | 7 | Auth accounts and grants the seed wrote | through the same `AuthStore` path the seed used — [§5](#5-known-gap-auth-accounts-and-role-grants) |
 
 The order matters: a run and a milestone hold references to suites, cases and
 projects, and a deletion in dependency order avoids `409` conflicts and
-half-removed trees. Deleting a project removes everything below it, so step 5
-also cleans up anything step 3 or 4 missed.
+half-removed trees. A configuration is removed before the project that owns it:
+deleting a project cascades to the configurations inside it, so a configuration
+taken after its project would already be gone and the teardown would report a
+deletion it cannot resolve. Deleting a project removes everything below it, so
+step 6 also cleans up anything steps 3 to 5 missed.
 
 ### Never touched
 
 - **Anything the seed did not create.** Removal is by the exact identifiers the
   seed recorded when it created them, never by pattern, prefix or "clear the
   collection".
-- **`configurations/` beyond the seed's own entries.** Configurations are
-  installation-wide and are shared with every project; a blanket delete would
-  break unrelated runs. (Note that the existing `scripts/clear-data.mjs` does
-  not remove configurations at all; the generator must delete exactly
-  `chrome-linux.json` and `firefox-linux.json` and nothing else.)
+- **`configurations/` beyond the seed's own entries.** A configuration belongs to
+  one project, so it is reachable only through the project that owns it: deleting
+  the wrong project's copy of an identifier, or emptying a project's whole
+  `configurations/` folder, would break that project's unrelated runs. (Note that
+  the existing `scripts/clear-data.mjs` does not remove configurations at all —
+  deleting a project cascades to them; the generator must delete exactly
+  `chrome-linux.json` from `checkout.json` and `firefox-linux.json` from
+  `payments.json`, and nothing else.)
 - **The bootstrap account.** `admin` is created by the deployment at startup
   from `TUCANO_BOOTSTRAP_USERNAME`/`TUCANO_BOOTSTRAP_PASSWORD`, not by the seed,
   and removing it would lock out the next run. Teardown removes the seed's own
@@ -568,15 +623,17 @@ This is implemented by `scripts/teardown.mjs` (issue #194). It signs in as the
 bootstrap account exactly as the seed does, walks the table above in order, and
 scopes every removal to the identifiers the seed fixed:
 
-- **Each removal is guarded.** A project, suite, run, milestone or configuration
-  is read back from its collection route (or, for cases, its recorded parent's
-  listing) before its `DELETE` is issued; anything that is not there is skipped,
-  and anything that is there but is not one of the seed's is reported as kept.
+- **Each removal is guarded.** A project, suite, run or milestone is read back
+  from its collection route, a configuration from the listing of the project that
+  owns it, and a case from its recorded parent's listing, before its `DELETE` is
+  issued; anything that is not there is skipped, and anything that is there but
+  is not one of the seed's is reported as kept.
 - **Suites are enumerated, not assumed.** The duplicate step's identifier is
   derived by the API, so step 3 lists a project's suites and removes only the
   seed's named suite or an id carrying the copy prefix; any other suite is named
-  as kept. Projects and configurations are listed for the same reason: a foreign
-  project or configuration is named as kept rather than silently walked past.
+  as kept. Projects are listed for the same reason, and each project's
+  configurations are read from that project's own listing: a foreign project or
+  configuration is named as kept rather than silently walked past.
 - **It reports and exits non-zero.** Every item left in place is printed with
   the reason, and the run exits `1`; a run that removed or confirmed the absence
   of everything exits `0`. A missing entity is a settled teardown, not a failure,
@@ -625,10 +682,21 @@ API":
   `a_system_administrator_is_authorized_without_any_grant` pins. So seeding a
   grant for `admin` would add an on-disk artifact the server never reads, and
   the grants the generator does write exist to give the *non-admin* account
-  reach. Row 27 therefore seeds exactly one grantee per project — the `viewer` —
-  and `GET /auth/me` intentionally reports `"roles": {}` for the admin: `me`
-  reports the account's grants, not its effective authority, so an admin with no
-  grant legitimately reports none.
+  reach. Row 27 therefore seeds exactly one grantee — the `viewer`, holding
+  `owner` on `checkout.json` — and `GET /auth/me` intentionally reports
+  `"roles": {}` for the admin: `me` reports the account's grants, not its
+  effective authority, so an admin with no grant legitimately reports none.
+- **A configuration needs a project role, which is why the grant is not
+  optional.** A configuration is a project resource, so reading one needs
+  `Viewer` in the project that holds it and creating one needs `Editor`;
+  `GET /configurations` answers with the configurations of the projects the
+  caller reaches, and a project the caller holds no grant in answers
+  `403 forbidden` to its own configuration listing. The seed's `viewer` holds
+  `owner` on `checkout.json`, which subsumes `editor`, and that single grant is
+  what lets it see `chrome-linux.json` and not `firefox-linux.json` — the
+  isolation [§3 step 12](#step-12--validation-of-the-seeded-environment)
+  asserts. The bootstrap account is the only caller that needs no grant for any
+  of this, by the short-circuit above.
 - **`GET /auth/me` is the assertion that closes the loop.** After the seed, the
   validation step reads each seeded account's `roles` map and `systemAdmin` flag
   through the API, which proves the files the generator wrote are the ones the
@@ -674,7 +742,7 @@ script refuses up front when its own identifiers are already present and points
 at `scripts/teardown.mjs`, which is the scoped "clear first" and leaves anything
 on the volume it did not create.
 
-The one exception is [§5](#5-known-gap-accounts-and-grants-have-no-http-route)'s
+The one exception is [§5](#5-known-gap-auth-accounts-and-role-grants)'s
 accounts and grants: the API publishes no route for either, so the server binary
 grows a `seed-auth` subcommand (`src/auth/seed.rs`) that writes them through the
 same `AuthStore` the running server reads. Unlike the dataset itself it *is*
