@@ -710,7 +710,10 @@ mod tests {
                 .collect::<BTreeSet<_>>()
         ));
         // One covered project the caller cannot reach hides the run.
-        assert!(!all_within(&[home(), "payments.json".to_owned()], &reachable));
+        assert!(!all_within(
+            &[home(), "payments.json".to_owned()],
+            &reachable
+        ));
         // An unreachable home hides it whatever else it covers.
         assert!(!all_within(&["payments.json".to_owned()], &reachable));
         assert!(!all_within(
@@ -754,8 +757,12 @@ mod tests {
         // configuration is now governed by its project like any other content.
         assert_eq!(write_role(Resource::Projects), Role::Owner);
         assert_eq!(write_role(Resource::Milestones), Role::Owner);
-        for resource in [Resource::Suites, Resource::Cases, Resource::Runs, Resource::Configurations]
-        {
+        for resource in [
+            Resource::Suites,
+            Resource::Cases,
+            Resource::Runs,
+            Resource::Configurations,
+        ] {
             assert_eq!(write_role(resource), Role::Editor, "{resource:?}");
         }
     }
