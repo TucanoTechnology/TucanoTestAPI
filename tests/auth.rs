@@ -566,13 +566,15 @@ async fn sign_in_token(app: &Router) -> String {
 }
 
 /// The identifiers of one seeded tree: a project, a suite and a case in it, a
-/// run covering the project, and a milestone referencing the run.
+/// run covering the project, and a milestone referencing the run, all of them
+/// stored in that one project, plus a configuration the project owns.
 struct Tree {
     project: String,
     suite: String,
     case: String,
     run: String,
     milestone: String,
+    configuration: String,
 }
 
 async fn seed_tree(app: &Router, token: Option<&str>) -> Tree {
@@ -611,7 +613,7 @@ async fn seed_tree(app: &Router, token: Option<&str>) -> Tree {
             app,
             token,
             "POST",
-            "/test_runs",
+            &format!("/projects/{project}/test_runs"),
             Some(run_body("nightly", &project)),
         )
         .await,
@@ -621,8 +623,18 @@ async fn seed_tree(app: &Router, token: Option<&str>) -> Tree {
             app,
             token,
             "POST",
-            "/milestones",
+            &format!("/projects/{project}/milestones"),
             Some(json!({ "name": "sprint-42", "testRunIds": [run] })),
+        )
+        .await,
+    );
+    let configuration = id_of(
+        &call_ok(
+            app,
+            token,
+            "POST",
+            &format!("/projects/{project}/configurations"),
+            Some(json!({ "name": "chrome-linux" })),
         )
         .await,
     );
@@ -632,6 +644,7 @@ async fn seed_tree(app: &Router, token: Option<&str>) -> Tree {
         case,
         run,
         milestone,
+        configuration,
     }
 }
 
@@ -808,6 +821,7 @@ async fn a_viewer_reads_the_projects_it_reaches_and_cannot_write() {
         case,
         run,
         milestone,
+        configuration,
     } = &tree;
     let token = token.as_str();
 
@@ -918,8 +932,28 @@ async fn a_viewer_reads_the_projects_it_reaches_and_cannot_write() {
     )
     .await;
 
+    // A configuration belongs to the project that stores it, so a viewer of that
+    // project reads it and its listing is no longer installation-wide.
     let configurations = call_ok(&app, Some(token), "GET", "/configurations", None).await;
-    assert_eq!(configurations, json!([]));
+    assert_eq!(configurations, json!([configuration]));
+    let scoped_configurations = call_ok(
+        &app,
+        Some(token),
+        "GET",
+        &format!("/projects/{project}/configurations"),
+        None,
+    )
+    .await;
+    assert_eq!(scoped_configurations, json!([configuration]));
+    let single_configuration = call_ok(
+        &app,
+        Some(token),
+        "GET",
+        &format!("/configurations/{configuration}"),
+        None,
+    )
+    .await;
+    assert_eq!(single_configuration["name"], json!("chrome-linux"));
 
     let coverage = call_ok(&app, Some(token), "GET", "/reports/coverage", None).await;
     assert_eq!(coverage["totalCases"], json!(1));
@@ -966,12 +1000,13 @@ async fn a_viewer_reads_the_projects_it_reaches_and_cannot_write() {
                 case.as_str(),
                 run.as_str(),
                 milestone.as_str(),
+                configuration.as_str(),
             )
         })
         .collect();
     assert_eq!(
         writes.len(),
-        33,
+        39,
         "the write surface changed; update this matrix with it"
     );
 
@@ -992,6 +1027,7 @@ async fn an_editor_writes_content_but_not_projects_or_milestones() {
         case,
         run,
         milestone,
+        ..
     } = &tree;
     let token = token.as_str();
 
@@ -1055,7 +1091,7 @@ async fn an_editor_writes_content_but_not_projects_or_milestones() {
             &app,
             Some(token),
             "POST",
-            "/test_runs",
+            &format!("/projects/{project}/test_runs"),
             Some(run_body("extra", project)),
         )
         .await,
@@ -1413,6 +1449,7 @@ async fn a_caller_with_no_grant_sees_nothing() {
         case,
         run,
         milestone,
+        configuration,
     } = &tree;
     let token = token.as_str();
 
@@ -1428,12 +1465,15 @@ async fn a_caller_with_no_grant_sees_nothing() {
         assert_eq!(listed, json!([]), "{uri}");
     }
 
+    // A configuration is a project resource now, so a caller that reaches no
+    // project is refused one exactly as it is refused a run or a milestone.
     for uri in [
         format!("/projects/{project}"),
         format!("/test_suites/{suite}"),
         format!("/test_cases/{case}"),
         format!("/test_runs/{run}"),
         format!("/milestones/{milestone}"),
+        format!("/configurations/{configuration}"),
     ] {
         assert_forbidden(&app, token, "GET", &uri, None).await;
     }
