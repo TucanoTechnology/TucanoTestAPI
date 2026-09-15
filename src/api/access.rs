@@ -38,7 +38,7 @@ use super::{
 use crate::{
     auth::{Principal, Role},
     domain::DomainError,
-    storage::{Repository, Resource},
+    storage::{Parent, Repository, Resource},
 };
 
 /// The projects `principal` may reach, or `None` when there is nothing to check.
@@ -150,61 +150,94 @@ fn effective_run_projects(document: &Value, body: &Value) -> Vec<String> {
     project_ids(body.get("projects").or_else(|| document.get("projects")))
 }
 
-/// The projects a milestone's references reach.
+/// The projects a milestone's references reach, resolved with the milestone's
+/// own project preferred.
 ///
 /// A reference the store cannot resolve is skipped, matching how progress
 /// tolerates a deleted suite or run: a dangling reference must not fail a
-/// request that the resource itself can still answer.
-// TODO(#219): a reference is resolved with the milestone's home preferred, so a
-// reference to an identifier the home also holds names that occurrence instead
-// of answering a conflict.
+/// request that the resource itself can still answer. An identifier two projects
+/// hold is not dangling, so it is read from `home` when the home holds it and
+/// only resolved globally otherwise — a milestone in one project means its own
+/// project's `nightly`, not a conflict. Skipping it instead would drop every
+/// project that run covers out of the authorization, leaving the milestone
+/// governed by its home alone.
 fn milestone_projects<R: Repository>(
     state: &AppState<R>,
+    home: &str,
     suites: &[String],
     runs: &[String],
 ) -> Vec<String> {
+    let parent = Parent::Project(home.to_owned());
     let mut projects = BTreeSet::new();
     for suite in suites {
+        // A suite the home holds lives in the home, which the caller requires
+        // anyway; one it does not hold is resolved globally, as before.
+        if state
+            .document_in(Resource::Suites, &parent, suite, missing(Resource::Suites))
+            .is_ok()
+        {
+            projects.insert(home.to_owned());
+            continue;
+        }
         if let Ok(project) = state.project_of(Resource::Suites, suite, missing(Resource::Suites)) {
             projects.insert(project);
         }
     }
     for run in runs {
-        if let Ok(document) = state.document(Resource::Runs, run) {
+        let document = state
+            .document_in(Resource::Runs, &parent, run, missing(Resource::Runs))
+            .or_else(|_| state.document(Resource::Runs, run));
+        if let Ok(document) = document {
             projects.extend(project_ids(document.get("projects")));
         }
     }
     projects.into_iter().collect()
 }
 
-/// `projects` plus the project `id` is stored in.
+/// Every project a run or a milestone reaches: the project that stores it, and
+/// the projects its own references name.
 ///
-/// The home anchors a document whose references name no project at all, and it
-/// is what makes a run that covers nothing still governed by someone.
+/// The home anchors a document whose references name no project at all, so a run
+/// that covers nothing is still governed by someone rather than open to every
+/// caller.
 ///
 /// # Errors
 ///
 /// [`DomainError::NotFound`] when nothing holds `id`, and
 /// [`DomainError::Conflict`] when two projects do.
-fn with_home<R: Repository>(
+fn reachable_projects<R: Repository>(
     state: &AppState<R>,
     resource: Resource,
     id: &str,
-    mut projects: Vec<String>,
 ) -> Result<Vec<String>, DomainError> {
     let home = state.project_of(resource, id, missing(resource))?;
+    let document = state.document(resource, id)?;
+    let references = match resource {
+        Resource::Runs => project_ids(document.get("projects")),
+        _ => milestone_projects(
+            state,
+            &home,
+            &string_array(document.get("testSuiteIds")),
+            &string_array(document.get("testRunIds")),
+        ),
+    };
+    Ok(with_home(home, references))
+}
+
+/// `projects` plus `home`, the project the document is stored in.
+fn with_home(home: String, mut projects: Vec<String>) -> Vec<String> {
     if !projects.contains(&home) {
         projects.push(home);
     }
-    Ok(projects)
+    projects
 }
 
 /// The projects a resource stored under `id` reaches.
 ///
 /// This is the resolution the guards run before the handler reads the document
-/// the request will read next. A project names itself; every other resource is
-/// governed by the project that holds it, and a run or a milestone additionally
-/// by every project its references reach.
+/// the request will read next. A project names itself; a suite, a case and a
+/// configuration are governed by the project that holds them; a run and a
+/// milestone additionally by every project their references reach.
 fn projects_of<R: Repository>(
     state: &AppState<R>,
     resource: Resource,
@@ -215,24 +248,7 @@ fn projects_of<R: Repository>(
         Resource::Suites | Resource::Cases | Resource::Configurations => {
             Ok(vec![state.project_of(resource, id, missing(resource))?])
         }
-        Resource::Runs => {
-            let document = state.document(Resource::Runs, id)?;
-            with_home(
-                state,
-                resource,
-                id,
-                project_ids(document.get("projects")),
-            )
-        }
-        Resource::Milestones => {
-            let document = state.document(Resource::Milestones, id)?;
-            let references = milestone_projects(
-                state,
-                &string_array(document.get("testSuiteIds")),
-                &string_array(document.get("testRunIds")),
-            );
-            with_home(state, resource, id, references)
-        }
+        Resource::Runs | Resource::Milestones => reachable_projects(state, resource, id),
     }
 }
 
@@ -360,8 +376,11 @@ pub(crate) fn guard_project_create<R: Repository>(
     authorize(auth, principal, project, required)?;
     let named = match resource {
         Resource::Runs => project_ids(body.get("projects")),
+        // The project being created in is the milestone's home, so its
+        // references resolve with that home preferred.
         Resource::Milestones => milestone_projects(
             state,
+            project,
             &string_array(body.get("testSuiteIds")),
             &string_array(body.get("testRunIds")),
         ),
@@ -395,19 +414,21 @@ pub(crate) fn guard_update<R: Repository>(
     }
     match resource {
         Resource::Runs => {
-            let document = state.document(Resource::Runs, id)?;
-            let projects =
-                with_home(state, resource, id, effective_run_projects(&document, body))?;
+            let home = state.project_of(resource, id, missing(resource))?;
+            let document = state.document(resource, id)?;
+            let projects = with_home(home, effective_run_projects(&document, body));
             require_every(auth, principal, &projects, Role::Editor)
         }
         Resource::Milestones => {
-            let document = state.document(Resource::Milestones, id)?;
+            let home = state.project_of(resource, id, missing(resource))?;
+            let document = state.document(resource, id)?;
             let references = milestone_projects(
                 state,
+                &home,
                 &effective_ids(&document, body, "testSuiteIds"),
                 &effective_ids(&document, body, "testRunIds"),
             );
-            let projects = with_home(state, resource, id, references)?;
+            let projects = with_home(home, references);
             require_every(auth, principal, &projects, Role::Owner)
         }
         _ => {
@@ -560,13 +581,7 @@ pub(crate) fn require_run<R: Repository>(
     if !state.auth().config.required {
         return Ok(());
     }
-    let document = state.document(Resource::Runs, run_id)?;
-    let projects = with_home(
-        state,
-        Resource::Runs,
-        run_id,
-        project_ids(document.get("projects")),
-    )?;
+    let projects = reachable_projects(state, Resource::Runs, run_id)?;
     require_every(state.auth(), principal, &projects, required)
 }
 
@@ -630,23 +645,7 @@ pub(crate) fn filter_list<R: Repository>(
                 .project_of(resource, &item, missing(resource))
                 .map(|project| allowed(Some(reachable), &project))
                 .unwrap_or(false),
-            Resource::Runs => state
-                .document(Resource::Runs, &item)
-                .and_then(|document| {
-                    with_home(state, resource, &item, project_ids(document.get("projects")))
-                })
-                .map(|projects| all_within(&projects, reachable))
-                .unwrap_or(false),
-            Resource::Milestones => state
-                .document(Resource::Milestones, &item)
-                .and_then(|document| {
-                    let references = milestone_projects(
-                        state,
-                        &string_array(document.get("testSuiteIds")),
-                        &string_array(document.get("testRunIds")),
-                    );
-                    with_home(state, resource, &item, references)
-                })
+            Resource::Runs | Resource::Milestones => reachable_projects(state, resource, &item)
                 .map(|projects| all_within(&projects, reachable))
                 .unwrap_or(false),
         };
@@ -659,8 +658,14 @@ pub(crate) fn filter_list<R: Repository>(
 
 /// Whether every project a document reaches falls inside `reachable`.
 ///
-/// The home is always among them, so a document that names no project of its own
-/// is kept when its home is reachable rather than hidden.
+/// This is the same rule `reports::run_reachable` applies to the summary
+/// report, stated over the identifiers a listing holds rather than over a
+/// deserialized `TestRun`: **the home is reachable and every project the
+/// document names is reachable**. The home is always among them, so a run that
+/// covers no project is kept when its home is reachable instead of hidden, and
+/// one unreachable covered project still hides it. The two must be changed
+/// together; `a_run_is_in_scope_when_its_home_and_every_project_it_names_are`
+/// and `reports`' own test pin the same three cases on each side.
 fn all_within(projects: &[String], reachable: &BTreeSet<String>) -> bool {
     projects.iter().all(|project| reachable.contains(project))
 }
@@ -687,16 +692,29 @@ mod tests {
         assert!(!allowed(Some(&scope), "checkout.json"));
     }
 
+    /// The same truth table `reports::run_reachable` pins on the domain side:
+    /// the home anchors a run that covers nothing, and one unreachable project
+    /// still hides it.
     #[test]
-    fn a_document_is_in_scope_when_every_project_it_reaches_is() {
+    fn a_run_is_in_scope_when_its_home_and_every_project_it_names_are() {
         let reachable: BTreeSet<String> = ["checkout.json".to_owned()].into_iter().collect();
-        assert!(all_within(&["checkout.json".to_owned()], &reachable));
-        // The home is always among them, so this set is never actually empty;
-        // an empty set is vacuously in scope rather than hidden.
-        assert!(all_within(&[], &reachable));
+        let home = || "checkout.json".to_owned();
+
+        // A run that covers no project is governed by its home alone.
+        assert!(all_within(&[home()], &reachable));
+        // Its home plus a project the caller also reaches.
+        assert!(all_within(
+            &[home(), "billing.json".to_owned()],
+            &["checkout.json".to_owned(), "billing.json".to_owned()]
+                .into_iter()
+                .collect::<BTreeSet<_>>()
+        ));
+        // One covered project the caller cannot reach hides the run.
+        assert!(!all_within(&[home(), "payments.json".to_owned()], &reachable));
+        // An unreachable home hides it whatever else it covers.
         assert!(!all_within(&["payments.json".to_owned()], &reachable));
         assert!(!all_within(
-            &["checkout.json".to_owned(), "payments.json".to_owned()],
+            &["payments.json".to_owned(), home()],
             &reachable
         ));
     }
