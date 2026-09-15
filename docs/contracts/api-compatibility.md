@@ -1416,7 +1416,7 @@ full rollback means restoring the pre-change snapshot the promotion runbook requ
   `<data>/projects/<project>/test_runs/<id>.json` and siblings, and their identifiers become unique per project
   instead of globally. **No stored document changes shape** — the home is the folder and is never written into
   the document, so no field is added to `TestRun`, `Milestone` or `TestConfiguration`, the legacy Draft 2020-12
-  schemas are untouched, and `SUPPORTED_FORMAT_VERSION` stays `1`. The wire change is not additive and has four
+  schemas are untouched, and `SUPPORTED_FORMAT_VERSION` stays `1`. The wire change is not additive and has five
   parts. (1) `POST /test_runs`, `POST /milestones` and `POST /configurations` no longer create: they answer
   `400 invalid_request` naming the parent-scoped replacement, and the three bare collection paths leave
   `openapi.json` as whole keys — which also withdraws the published `GET /test_runs`, `GET /milestones` and
@@ -1433,6 +1433,12 @@ full rollback means restoring the pre-change snapshot the promotion runbook requ
   least one project" and the `403` "This milestone is not linked to any project" are both withdrawn, making a
   reference-less milestone legal; configurations stop being installation-wide and need `viewer` to read and
   `editor` to write in their home project, so `GET /configurations` becomes filtered for a restricted caller.
+  (5) Report and listing scope **widens** for runs, because the home is now the ownership fact: `?projectId=`
+  on `GET /reports/summary` also matches a run stored in that project whose `projects` array omits it, and a
+  run naming no project at all is reachable — so it is counted by the report and listed for a restricted
+  caller — whenever its home is, where the withdrawn "must name at least one project" rule hid it. The summary
+  report also stops computing over the de-duplicated global listing and walks projects instead, so two runs
+  sharing an identifier in different projects are now **both** counted where one was silently dropped.
   Nothing is migrated: a volume holding documents in a legacy root collection makes `FileRepository::new` fail
   at startup with a message naming the directories and the manual recipe, and the service never deletes them.
   Rolling the image back against a v3 volume answers `404` for these resources and reports empty milestone
