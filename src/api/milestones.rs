@@ -1,21 +1,27 @@
 //! `/milestones` — progress derived from the runs it references.
+//!
+//! A milestone is created inside a project, through
+//! `/projects/{id}/milestones`; the bare collection route stays registered to
+//! explain that, and the document routes address a milestone by id and resolve
+//! the project holding it.
 
 use axum::{
     Json, Router,
     extract::{Path, State},
-    routing::{get, post},
+    routing::{delete, get, post},
 };
+use serde_json::{Value, json};
 
 use crate::{
     domain::{DomainError, duplicate},
     models::MilestoneProgress,
-    storage::{Repository, Resource},
+    storage::{Parent, Repository, Resource},
 };
 
 use super::{
     AppState,
     crud::prelude::*,
-    crud::{crud_handlers, duplicate_handler},
+    crud::{created_response, crud_handlers, duplicate_handler},
 };
 
 crud_handlers!(
@@ -29,6 +35,39 @@ crud_handlers!(
 
 duplicate_handler!(duplicate_milestone, duplicate::MILESTONE);
 
+async fn list_project_milestones<R: Repository>(
+    State(service): State<AppState<R>>,
+    principal: Principal,
+    Path(id): Path<String>,
+) -> Result<Json<Value>, DomainError> {
+    access::require(&service, &principal, &id, Role::Viewer)?;
+    let items = service.list_children(&Parent::Project(id), Resource::Milestones)?;
+    Ok(Json(json!(items)))
+}
+
+async fn create_project_milestone<R: Repository>(
+    State(service): State<AppState<R>>,
+    principal: Principal,
+    Path(id): Path<String>,
+    Json(body): Json<Value>,
+) -> Result<(StatusCode, Json<Value>), DomainError> {
+    access::guard_project_create(&service, &principal, Resource::Milestones, &id, &body)?;
+    let created = service.create_in(Resource::Milestones, &Parent::Project(id), &body)?;
+    Ok(created_response("Milestone", created.id))
+}
+
+/// Removes the occurrence the caller named, so an identifier two projects hold
+/// is deleted from the one the path says.
+async fn delete_project_milestone<R: Repository>(
+    State(service): State<AppState<R>>,
+    principal: Principal,
+    Path((id, milestone_id)): Path<(String, String)>,
+) -> Result<Json<Value>, DomainError> {
+    access::require(&service, &principal, &id, Role::Owner)?;
+    service.delete_in(Resource::Milestones, &Parent::Project(id), &milestone_id)?;
+    Ok(Json(json!({ "message": "Milestone deleted" })))
+}
+
 async fn get_milestone_progress<R: Repository>(
     State(service): State<AppState<R>>,
     principal: Principal,
@@ -40,6 +79,8 @@ async fn get_milestone_progress<R: Repository>(
 
 pub(crate) fn routes<R: Repository + 'static>() -> Router<AppState<R>> {
     Router::new()
+        // Retired: a milestone is created inside a project. The handler answers
+        // with an explanation rather than a document.
         .route(
             "/milestones",
             get(list_milestones::<R>).post(create_milestone::<R>),
@@ -54,5 +95,13 @@ pub(crate) fn routes<R: Repository + 'static>() -> Router<AppState<R>> {
         .route(
             "/milestones/{id}/progress",
             get(get_milestone_progress::<R>),
+        )
+        .route(
+            "/projects/{id}/milestones",
+            get(list_project_milestones::<R>).post(create_project_milestone::<R>),
+        )
+        .route(
+            "/projects/{id}/milestones/{milestone_id}",
+            delete(delete_project_milestone::<R>),
         )
 }

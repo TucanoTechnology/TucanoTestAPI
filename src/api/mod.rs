@@ -115,6 +115,12 @@ pub const ROUTES: &[&str] = &[
     "/projects/{id}/test_suites/{suite_id}",
     "/projects/{id}/test_cases",
     "/projects/{id}/test_cases/{case_id}",
+    "/projects/{id}/test_runs",
+    "/projects/{id}/test_runs/{run_id}",
+    "/projects/{id}/milestones",
+    "/projects/{id}/milestones/{milestone_id}",
+    "/projects/{id}/configurations",
+    "/projects/{id}/configurations/{config_id}",
     "/test_suites",
     "/test_suites/{id}",
     "/test_suites/{id}/duplicate",
@@ -158,10 +164,19 @@ pub const ROUTES: &[&str] = &[
 /// Paths that are served but have no separate entry in the published contract.
 ///
 /// The trailing-slash alias of the Swagger UI is a routing convenience, not a
-/// distinct operation. `POST /test_suites` and `POST /test_cases` are the
-/// retired flat creation routes: they survive only to explain where creation
-/// moved, so the published contract documents the parent-scoped routes alone.
-pub const UNDOCUMENTED_ROUTES: &[&str] = &["/api-docs/", "/test_suites", "/test_cases"];
+/// distinct operation. The five bare collection paths are the retired flat
+/// creation routes: they survive only to explain where creation moved, so the
+/// published contract documents the parent-scoped routes alone. Their global
+/// scans stay served — reads are global by design — and are undocumented for the
+/// same reason `GET /test_suites` and `GET /test_cases` are.
+pub const UNDOCUMENTED_ROUTES: &[&str] = &[
+    "/api-docs/",
+    "/test_suites",
+    "/test_cases",
+    "/test_runs",
+    "/milestones",
+    "/configurations",
+];
 
 /// Builds the application, backed by `repository` and authenticated with
 /// `auth`.
