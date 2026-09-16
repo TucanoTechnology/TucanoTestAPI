@@ -351,3 +351,4 @@ layout, the refusal and the operator recipe are recorded in
 | [`docs/deployment/canary-validation-and-rollback.md`](canary-validation-and-rollback.md) | Canary promotion, the scratch-CRUD smoke check, and the rollback procedure. |
 | [`docs/contracts/api-compatibility.md`](../contracts/api-compatibility.md) | The file-format and compatibility rules a rollback depends on. |
 | [`scripts/smoke.sh`](../../scripts/smoke.sh) | Scratch-CRUD smoke check used to validate a canary or a restored build. |
+| [`docs/wiki/operations-and-troubleshooting.md`](../wiki/operations-and-troubleshooting.md) | The operator-facing view of this guide: backup and restore, health and readiness, scaling, rollback, and a troubleshooting FAQ. |
