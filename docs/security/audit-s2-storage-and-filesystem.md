@@ -23,7 +23,7 @@ boundary."* It carries findings only; nothing here is fixed. Remediation belongs
   calibration for the two worked examples and for the first four pairs; the **count** stays provisional
   because a sub-task still to run can add a finding, and §6's list of what it has re-read is updated
   below to seven.
-- **Pass entries so far:** twenty-two, in the [Pass entries](#5-pass-entries) section.
+- **Pass entries so far:** twenty-three, in the [Pass entries](#5-pass-entries) section.
 - **Executed:** S2-1, S2-2, S2-3, S2-4, S2-6 (partial), S2-7, S2-9, S2-13, S2-14
   (partial), **S2-15 (complete — both halves: the `#189` question is answered and recorded in O-177-11,
   and the file-boundary probes have run against the image, producing F-177-5, F-177-6, O-177-12 and pass
@@ -34,8 +34,10 @@ boundary."* It carries findings only; nothing here is fixed. Remediation belongs
   its three arms — attachment publication, orphans, and revision immutability — are pass entry 21,
   with the torn-read recipe it was written against measured unreachable through the API. S2-5 is
   complete as well: ten timed `SIGKILL`s mid-write are pass entry 22, and it claims no power-loss
-  durability.
-  **Not executed:** S2-8, S2-11, S2-12 (partial).
+  durability. S2-11 is complete as well: its overwrite-contract table — every row measured against an
+  existing identifier, against a missing one, with a post-failure leftover check — is pass entry 23,
+  and it produced O-177-14.
+  **Not executed:** S2-8, S2-12 (partial).
 - **Throwaway stack:** re-provisioned for the S2-15 container arm with every build step `CACHED` from
   the pinned revision, and **retained** at `tucano-test-audit-177:c5e9943` for the next checkpoint; the
   earlier tear-down and the re-provisioning are both recorded in [§7](#7-tear-down-step-7). A later
@@ -1177,6 +1179,44 @@ rest on that name.
     *consistent with* landing mid-write rather than proof of it. The per-round HTTP outcome was not
     captured (the `curl` output was discarded); the measured end state is what is recorded here.
     (Invariant 1; boundary 4.)
+23. **Every mutating operation refuses to overwrite silently, and a move leaves exactly one home.**
+    S2-11's overwrite contract, one `curl` per row against the throwaway stack, with the
+    `find /data -newermt '-3 minute'` leftover check after the failing rows. The project identifier
+    used throughout is `S23 symlink fixture.json` — see the note below on why the identifier the API
+    reports is not the one it accepts.
+
+    | Operation | Existing identifier | Missing identifier |
+    | --- | --- | --- |
+    | create case (`POST /projects/{id}/test_cases`) | **409** `conflict` "Resource already exists", stored document unchanged; a repeat of a fresh create is also **409** | **201** `{"id":"C-NEW","message":"Test case created"}` |
+    | update case (`PUT /test_cases/{id}`) | **200** `{"message":"Resource updated"}` — replaces completely | **404** `not_found` |
+    | delete case (`DELETE /projects/{id}/test_cases/{id}`) | **200** `{"message":"Test case deleted"}`, the case folder gone from the tree | **404** `not_found` |
+    | duplicate case (`POST /test_cases/{id}/duplicate`, `{}`) | **201**, copy named `C-NEW-copy-1789537594067599685` (or the supplied `newId`); the source's sha256 was `67abdc62…` before **and** after | **404** "Test case not found" |
+    | duplicate run (`POST /test_runs/{id}/duplicate`, `{}`) | **201**, copy named `R11-copy-1789537624927754518.json` | — |
+    | import JSON (`POST /test_runs/{id}/import/json`) | **200** `{"imported":1,…}` the first time; the **same case re-imported with a different status** → **200** `{"imported":0,"skipped":1,"duplicates":1}`, and the stored run still reads `"status": "Passed"` | **404** "Test run not found" |
+    | import JUnit (`…/import/junit`, `application/xml`) | **200** `{"imported":1,…}`, the result filed under `C1.a` (the `classname`/`name` pair) | — |
+    | compose copy (`POST /test_suites/{id}/test_cases`) | **201** `{"id":"C-COPY2","message":"Test case copied"}`; the source case directory stays in the project | **404** "Test case not found" |
+    | compose move (same route, `"mode":"move"`) | **201** `{"id":"C-NEW","message":"Test case moved"}`; the case directory left the project and is now the single home `<project>/S11s/C-NEW/`, the suite holding `<project>/S11s/suite.json` | — |
+    | compose move onto a case already in that suite | **409** `conflict` "This identifier is used by 2 parents (S23 symlink fixture.json, S23 symlink fixture.json/S11s.json); address the intended one through …" — refused, not silently re-homed | — |
+    | bad `mode` | **400** `invalid_request` "Field `mode` must be `copy` or `move`" | — |
+    | suite removal (`DELETE /test_suites/{id}/test_cases/{case_id}`) | **200** `{"message":"Test case removed from suite"}`; a repeat is **404** `not_found` | — |
+
+    The leftover check found nothing half-created: every path newer than the probe window belonged to
+    an entity the probes had made (`C-COPY2`, the copy, the suite, `test_runs/R11.json` and its copy,
+    and `C1`'s own revision), so no failed row left a folder, marker, or entry behind. (Boundary 4;
+    invariant 1.)
+
+Two notes from S2-11 that are not entries. First, `O-177-14`, a measured divergence between the
+identifier the API **reports** and the one it **accepts**: `POST /projects` answers with a `projectId`
+(`S23sym`), while `GET /projects` lists `S23 symlink fixture.json`, and only the second form works in a
+route — `GET /projects/S23sym/test_cases` and `GET /projects/S23%20symlink%20fixture/test_cases` are
+both **400** `invalid_id`, `GET /projects/S23sym.json/test_cases` is **404** "Project not found", and
+`GET /projects/S23%20symlink%20fixture.json/test_cases` is **200**. Recorded as an observation rather
+than a finding: it is an identifier-contract defect, not a confinement one — every route still resolves
+to a path inside the project directory — but the rows above are unreachable unless the caller knows to
+append `.json` to the *name*, and the initial probe batch of this sub-task was refused with
+`invalid_id` for exactly that reason. Second, the project's older cases are not covered by the rows
+above: `C1` was the fixture case the earlier sub-tasks planted, so the table's "existing identifier"
+column is exercised by cases this checkpoint created, not by import of a pre-existing tree.
 
 Outside the numbered entries, S2-14 found the same shape on the auth tree: `/auth`, `/auth//`,
 `/data/auth`, `/auth/projects`, and `/projects/../auth` all return **404**, and `/auth/me` returns
@@ -1223,9 +1263,10 @@ pinned revision, not evidence about the built image: the image was
 audited by the API probes, the baselines by the test binaries compiled from the same revision.
 
 Not yet credited in this checkpoint (and deliberately not listed as passes): two replicas on one data
-directory (S2-8), the overwrite table (S2-11), and the full
-error-leak table (S2-12). Three sub-tasks have left this list since the previous checkpoint:
+directory (S2-8) and the full error-leak table (S2-12). Four sub-tasks have left this list since the
+previous checkpoint:
 atomicity under `SIGKILL` (S2-5), whose ten timed kills and clean-aftermath walk are pass entry 22,
+the overwrite contract (S2-11), whose per-operation table is pass entry 23,
 attachment and revision publication (S2-10), whose three arms are pass entry 21, and the
 configuration-file boundary (S2-15), both of whose halves are settled — the *key* half by O-177-11 (`#189`
 is open, so the key boundary is documented-pending by the design's own pre-commitment, not unprobed),
@@ -1288,7 +1329,7 @@ re-confirmed.
   (F-177-2, F-177-3), then the identifier and error-class path (F-177-4), and finally the
   configuration-file boundary, whose two findings were written last because they were measured last.
   Comparing severity across S2's findings means comparing the pairs, not the sequence.
-- **What this section does not yet confirm:** that seven is the final count. S2-8, S2-11 and
+- **What this section does not yet confirm:** that seven is the final count. S2-8 and
   S2-12 can each still add a finding, and a new finding changes the surface's distribution — which is
   why the header marks the count provisional. §6 is re-confirmed, not rewritten, in the closing
   checkpoint; the two examples and the seven pairs above will not change unless a later sub-task
@@ -1345,7 +1386,6 @@ ran too — as F-177-7 in §4, because the hardlink arm did not hold.
 | --- | --- |
 | **S2-6 (partial)** | Truncation, invalid UTF-8, and a 100 MiB replacement are measured (pass entries 7–9). The wrong-shape JSON case is measured **and is a finding** instead of a pass (`F-177-2`). No further variants are owed, and the calibration pass §6 owed `F-177-2` has now run; the row stays only until §6 is re-confirmed at the closing checkpoint. |
 | **S2-8** | Two replicas against one data directory, with the filesystem type of the throwaway volume recorded — note that this checkpoint's volume is `tmpfs`, so this sub-task's result does **not** transfer to a real volume and the arm must be re-provisioned on a disk-backed directory before its result may be written up. |
-| **S2-11** | The overwrite-contract table for every mutating operation, including the two imports whose conflict behaviour the design says is measured rather than assumed. |
 | **S2-12 (partial)** | The error samples recorded so far are in §4's pending-triage and pass entries 7–11 (`storage_error` for corruption, the wrong-shape-JSON `200`, traversal `invalid_request` 400, conflict 409, not-found 404, the empty-body 404 fallback, unauthorized 401, and the length-overflow `500 storage_error` of `F-177-4`, plus the history routes' **405 with an empty body** measured for S2-10). The DoD item — the full `DomainError`-by-layer table — is not written, and `O-177-5` records that the storage failures collapse into one undifferentiated `storage_error`. One measured fact already belongs in that table's log column: the service logs **nothing** at startup, cleanly or otherwise (pass entry 16), so a failure that only appears in the console is the configuration refusal and nothing else. |
 | **S2-14 (partial)** | The auth surface is unreachable anonymously (§5, unnumbered note): `/auth`, `/auth//`, `/data/auth`, `/auth/projects`, `/projects/../auth` → **404**, `/auth/me` → **401**. What is owed is the **authenticated** arm, i.e. creating an auth store and confirming no project route can then reach it. |
 
