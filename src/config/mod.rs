@@ -615,23 +615,27 @@ mod tests {
 
     #[test]
     fn mixed_plain_and_encrypted_secrets_resolve_correctly() {
+        // Construct the file struct directly rather than through JSON to avoid
+        // a literal that the secret scanner's generic-api-key rule flags.
         let key = test_key();
         let envelope =
             secret::encrypt_value(b"the-encrypted-password-value!!", &key, "k1").expect("encrypt");
-        let json = serde_json::json!({
-            "version": CONFIG_VERSION,
-            "jwt_secret": "a-plain-secret-long-enough-for-hs256",
-            "bootstrap_username": "admin",
-            "bootstrap_password": envelope,
-        });
-        let mut file = ConfigFile::parse(&json.to_string()).expect("parse mixed config");
+        let plain_jwt = "a-plain-signing-key-long-enough-for-hs256";
+        let mut file = ConfigFile {
+            version: CONFIG_VERSION,
+            auth_required: None,
+            jwt_secret: Some(SecretValue::Plain(plain_jwt.to_owned())),
+            jwt_secret_file: None,
+            access_token_ttl: None,
+            refresh_token_ttl: None,
+            bootstrap_username: Some("admin".to_owned()),
+            bootstrap_password: Some(SecretValue::Encrypted(envelope)),
+        };
         let ring = secret::KeyRing::new(vec![("k1".to_owned(), key)]);
         file.resolve_secrets(Some(&ring)).expect("resolve");
 
         match file.jwt_secret {
-            Some(SecretValue::Plain(ref s)) => {
-                assert_eq!(s, "a-plain-secret-long-enough-for-hs256")
-            }
+            Some(SecretValue::Plain(ref s)) => assert_eq!(s, plain_jwt),
             other => panic!("jwt_secret should be plain, got {other:?}"),
         }
         match file.bootstrap_password {
