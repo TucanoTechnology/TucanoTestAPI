@@ -17,7 +17,7 @@
 //! which is exactly the trusted-network service the API was before auth
 //! existed.
 //!
-//! [`routes`] is this module's half of the router: the four session endpoints a
+//! `routes` is this module's half of the router: the four session endpoints a
 //! client signs in through, exchanges its refresh token at, signs out from, and
 //! asks who it is. Sign-in and rotation are the only operations in the API that
 //! do not need a caller, because they are how a caller comes to have one.
