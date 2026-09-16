@@ -23,7 +23,7 @@ use crate::models::{
     MilestoneProgress, SummaryReport, TestCase, TestCaseResult, TestConfiguration, TestRun,
     TestSuite,
 };
-use crate::storage::{Parent, Placement, Repository, Resource, unique_suffix};
+use crate::storage::{Parent, Placement, Repository, Resource, StorageProbe, unique_suffix};
 
 use super::duplicate::{self, DuplicateSpec};
 use super::error::{self, DomainError};
@@ -80,6 +80,17 @@ impl<R: Repository> TestService<R> {
     /// Wraps a repository in the domain rules.
     pub fn new(repository: R) -> Self {
         Self { repository }
+    }
+
+    // --- operations ----------------------------------------------------
+
+    /// Reports what a readiness or diagnostics probe can learn about the store.
+    ///
+    /// The storage boundary is only reachable through this service, so this is
+    /// a passthrough with no rule of its own: what counts as ready is a
+    /// property of the store, not a judgement the domain makes.
+    pub fn probe_storage(&self) -> StorageProbe {
+        self.repository.probe_readiness()
     }
 
     // --- generic CRUD --------------------------------------------------

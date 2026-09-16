@@ -22,6 +22,78 @@ async fn health_reports_filesystem_storage() {
 }
 
 #[tokio::test]
+async fn ready_reports_the_store_behind_a_live_process() {
+    let (_directory, app) = test_app();
+    let (status, body) = send_json(&app, get("/ready")).await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["status"], "ready");
+    assert_eq!(body["storage"], "filesystem");
+}
+
+#[tokio::test]
+async fn diagnostics_reports_the_probe_and_names_no_path() {
+    let (directory, app) = test_app();
+    let (status, bytes) = send(&app, get("/diagnostics")).await;
+    let body: Value = serde_json::from_slice(&bytes).expect("diagnostics body");
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["storage"], "filesystem");
+    assert_eq!(body["ready"], true);
+    assert_eq!(body["exists"], true);
+    assert_eq!(body["writable"], true);
+    assert_eq!(body["lockable"], true);
+    assert_eq!(body["lockHeld"], false);
+    assert!(body["lastWriteUnix"].is_number());
+
+    // The storage-security rule keeps deployment layout out of responses: the
+    // probe describes the store without ever naming where it is.
+    let root = directory.path().to_string_lossy().into_owned();
+    let rendered = String::from_utf8(bytes).expect("utf-8 body");
+    assert!(
+        !rendered.contains(&root),
+        "the probe leaked the data directory: {rendered}"
+    );
+}
+
+#[tokio::test]
+async fn ready_answers_503_when_the_store_cannot_take_writes() {
+    let directory = TempDir::new().expect("temp dir");
+    let app = app_at(directory.path());
+    std::fs::remove_dir_all(directory.path()).expect("remove the data directory");
+
+    // Liveness is not readiness: the process still serves, so `/health` is
+    // untouched by a store that is gone.
+    let (status, _) = send_json(&app, get("/health")).await;
+    assert_eq!(status, StatusCode::OK);
+
+    let (status, body) = send_json(&app, get("/ready")).await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    assert_error_envelope(&body, "not_ready");
+    let message = body["error"]["message"]
+        .as_str()
+        .expect("readiness message");
+    assert!(
+        message.contains("missing"),
+        "the message must say which check failed: {message}"
+    );
+    assert!(
+        !message.contains(&directory.path().to_string_lossy().into_owned()),
+        "the message leaked the data directory: {message}"
+    );
+
+    // The report is the operator's half: it answers `200` with the failing
+    // checks visible, which is what a `503` from `/ready` cannot say.
+    let (status, body) = send_json(&app, get("/diagnostics")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["ready"], false);
+    assert_eq!(body["exists"], false);
+    assert_eq!(body["writable"], false);
+    assert_eq!(body["lockable"], false);
+    assert_eq!(body["lastWriteUnix"], Value::Null);
+}
+
+#[tokio::test]
 async fn openapi_document_matches_the_registered_routes() {
     let (_directory, app) = test_app();
     let (status, body) = send_json(&app, get("/openapi.json")).await;
@@ -711,9 +783,14 @@ async fn openapi_declares_the_security_posture_of_every_operation() {
 
     // The endpoints that exist before a caller does, and the two it signs in
     // through: none of them names a token, and the sign-in routes answer their
-    // own documented failure instead.
-    const UNGUARDED: [&str; 5] = [
+    // own documented failure instead. The readiness and diagnostics probes are
+    // unguarded by the same argument as `/health`: an orchestrator that cannot
+    // authenticate is exactly the caller that has to ask whether the process is
+    // ready, and neither probe reports anything a caller may not see.
+    const UNGUARDED: [&str; 7] = [
         "get /health",
+        "get /ready",
+        "get /diagnostics",
         "get /openapi.json",
         "get /api-docs",
         "post /auth/login",
@@ -721,7 +798,7 @@ async fn openapi_declares_the_security_posture_of_every_operation() {
     ];
 
     let operations = documented_operations(&document);
-    assert_eq!(operations.len(), 71, "the documented surface changed");
+    assert_eq!(operations.len(), 73, "the documented surface changed");
 
     for (label, operation) in &operations {
         let responses = operation["responses"].as_object().expect("responses");
@@ -987,7 +1064,7 @@ async fn openapi_operations_carry_stable_ids_and_resource_tags() {
             "{label} carries an undeclared tag: {tag}"
         );
     }
-    assert_eq!(ids.len(), 71, "every documented operation is named");
+    assert_eq!(ids.len(), 73, "every documented operation is named");
 }
 
 #[tokio::test]
@@ -1075,6 +1152,7 @@ const ERROR_CODES: &[&str] = &[
     "invalid_credentials",
     "invalid_refresh_token",
     "forbidden",
+    "not_ready",
 ];
 
 /// Every `$ref` the document contains, wherever it sits.
