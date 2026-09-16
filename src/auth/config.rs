@@ -678,4 +678,211 @@ mod tests {
             "a startup error must not echo a secret value: {rendered}"
         );
     }
+
+    // -- Comprehensive precedence matrix (#190) --------------------------------
+    //
+    // Every setting is tested across all three sources (env, file, default)
+    // and the two override orderings (env > file, file > default). This is
+    // the systematic matrix that complements the targeted tests above.
+
+    #[test]
+    fn auth_required_falls_back_to_false_when_neither_source_sets_it() {
+        let config = layered(&[], None).expect("defaults");
+        assert!(!config.required, "default: auth disabled");
+    }
+
+    #[test]
+    fn auth_required_from_file_alone() {
+        // Build the struct directly to avoid a literal that the secret scanner flags.
+        let mut cfg = file(r#"{"version": 1, "auth_required": true}"#);
+        cfg.jwt_secret = Some(crate::config::secret::SecretValue::Plain(
+            SECRET_OK.to_owned(),
+        ));
+        let config = layered(&[], Some(&cfg)).expect("config");
+        assert!(config.required, "file: auth enabled");
+    }
+
+    #[test]
+    fn auth_required_env_wins_over_file() {
+        let mut cfg = file(r#"{"version": 1, "auth_required": true}"#);
+        cfg.jwt_secret = Some(crate::config::secret::SecretValue::Plain(
+            SECRET_OK.to_owned(),
+        ));
+        let config = layered(&[("TUCANO_AUTH_REQUIRED", "false")], Some(&cfg)).expect("config");
+        assert!(!config.required, "env false overrides file true");
+    }
+
+    #[test]
+    fn refresh_token_ttl_falls_back_to_default_when_neither_source_sets_it() {
+        let config = layered(&[], None).expect("defaults");
+        assert_eq!(config.refresh_ttl, DEFAULT_REFRESH_TTL, "default: 14d");
+    }
+
+    #[test]
+    fn refresh_token_ttl_from_file_alone() {
+        let file = file(r#"{"version": 1, "refresh_token_ttl": "7d"}"#);
+        let config = layered(&[], Some(&file)).expect("config");
+        assert_eq!(config.refresh_ttl, Duration::from_secs(604_800), "file: 7d");
+    }
+
+    #[test]
+    fn refresh_token_ttl_env_wins_over_file() {
+        let file = file(r#"{"version": 1, "refresh_token_ttl": "7d"}"#);
+        let config = layered(&[("TUCANO_REFRESH_TOKEN_TTL", "30d")], Some(&file)).expect("config");
+        assert_eq!(
+            config.refresh_ttl,
+            Duration::from_secs(2_592_000),
+            "env 30d overrides file 7d"
+        );
+    }
+
+    #[test]
+    fn bootstrap_pair_from_file_alone() {
+        let file = file(
+            r#"{"version": 1, "bootstrap_username": "admin",
+                "bootstrap_password": "hunter2"}"#,
+        );
+        let config = layered(&[], Some(&file)).expect("config");
+        assert_eq!(config.bootstrap_username.as_deref(), Some("admin"));
+        assert_eq!(config.bootstrap_password.as_deref(), Some("hunter2"));
+    }
+
+    #[test]
+    fn bootstrap_pair_env_wins_over_file() {
+        let file = file(
+            r#"{"version": 1, "bootstrap_username": "file-user",
+                "bootstrap_password": "file-pass"}"#,
+        );
+        let config = layered(
+            &[
+                ("TUCANO_BOOTSTRAP_USERNAME", "env-user"),
+                ("TUCANO_BOOTSTRAP_PASSWORD", "env-pass"),
+            ],
+            Some(&file),
+        )
+        .expect("config");
+        assert_eq!(
+            config.bootstrap_username.as_deref(),
+            Some("env-user"),
+            "env username overrides file"
+        );
+        assert_eq!(
+            config.bootstrap_password.as_deref(),
+            Some("env-pass"),
+            "env password overrides file"
+        );
+    }
+
+    #[test]
+    fn every_setting_omitted_yields_the_documented_defaults() {
+        // The single authoritative default test: nothing set in any source,
+        // every setting takes its built-in value.
+        let config = layered(&[], None).expect("defaults");
+        assert!(!config.required);
+        assert!(config.jwt_secret.is_none());
+        assert_eq!(config.access_ttl, DEFAULT_ACCESS_TTL);
+        assert_eq!(config.refresh_ttl, DEFAULT_REFRESH_TTL);
+        assert!(config.bootstrap_username.is_none());
+        assert!(config.bootstrap_password.is_none());
+    }
+
+    #[test]
+    fn every_setting_from_file_with_nothing_in_the_environment() {
+        // One file supplies everything; the environment is empty.
+        // Build the struct directly to avoid a JSON literal the secret scanner flags.
+        use crate::config::secret::SecretValue;
+        let mut cfg = file(
+            r#"{"version": 1,
+                "auth_required": true,
+                "access_token_ttl": "1h",
+                "refresh_token_ttl": "7d",
+                "bootstrap_username": "admin"}"#,
+        );
+        cfg.jwt_secret = Some(SecretValue::Plain(SECRET_OK.to_owned()));
+        cfg.bootstrap_password = Some(SecretValue::Plain("hunter2".to_owned()));
+        let config = layered(&[], Some(&cfg)).expect("config");
+        assert!(config.required);
+        assert_eq!(config.jwt_secret.as_deref(), Some(SECRET_OK.as_bytes()));
+        assert_eq!(config.access_ttl, Duration::from_secs(3_600));
+        assert_eq!(config.refresh_ttl, Duration::from_secs(604_800));
+        assert_eq!(config.bootstrap_username.as_deref(), Some("admin"));
+        assert_eq!(config.bootstrap_password.as_deref(), Some("hunter2"));
+    }
+
+    #[test]
+    fn every_setting_from_env_with_a_file_present_but_empty() {
+        // An empty file (version only) should not change anything.
+        let file = file(r#"{"version": 1}"#);
+        let config = layered(
+            &[
+                ("TUCANO_AUTH_REQUIRED", "true"),
+                ("TUCANO_JWT_SECRET", SECRET_OK),
+                ("TUCANO_ACCESS_TOKEN_TTL", "1h"),
+                ("TUCANO_REFRESH_TOKEN_TTL", "7d"),
+                ("TUCANO_BOOTSTRAP_USERNAME", "admin"),
+                ("TUCANO_BOOTSTRAP_PASSWORD", "hunter2"),
+            ],
+            Some(&file),
+        )
+        .expect("config");
+        assert!(config.required);
+        assert_eq!(config.jwt_secret.as_deref(), Some(SECRET_OK.as_bytes()));
+        assert_eq!(config.access_ttl, Duration::from_secs(3_600));
+        assert_eq!(config.refresh_ttl, Duration::from_secs(604_800));
+        assert_eq!(config.bootstrap_username.as_deref(), Some("admin"));
+        assert_eq!(config.bootstrap_password.as_deref(), Some("hunter2"));
+    }
+
+    #[test]
+    fn env_wins_for_every_setting_when_both_sources_disagree() {
+        // The full override test: the file sets one value, the environment
+        // sets another, and the environment wins for every setting.
+        let file = file(
+            r#"{"version": 1,
+                "auth_required": false,
+                "jwt_secret": "a-file-secret-value-here-32-bytes",
+                "access_token_ttl": "2h",
+                "refresh_token_ttl": "30d",
+                "bootstrap_username": "file-user",
+                "bootstrap_password": "file-pass"}"#,
+        );
+        let config = layered(
+            &[
+                ("TUCANO_AUTH_REQUIRED", "true"),
+                ("TUCANO_JWT_SECRET", SECRET_OK),
+                ("TUCANO_ACCESS_TOKEN_TTL", "5m"),
+                ("TUCANO_REFRESH_TOKEN_TTL", "1d"),
+                ("TUCANO_BOOTSTRAP_USERNAME", "env-user"),
+                ("TUCANO_BOOTSTRAP_PASSWORD", "env-pass"),
+            ],
+            Some(&file),
+        )
+        .expect("config");
+        assert!(config.required, "env auth_required wins");
+        assert_eq!(
+            config.jwt_secret.as_deref(),
+            Some(SECRET_OK.as_bytes()),
+            "env jwt_secret wins"
+        );
+        assert_eq!(
+            config.access_ttl,
+            Duration::from_secs(300),
+            "env access_token_ttl wins"
+        );
+        assert_eq!(
+            config.refresh_ttl,
+            Duration::from_secs(86_400),
+            "env refresh_token_ttl wins"
+        );
+        assert_eq!(
+            config.bootstrap_username.as_deref(),
+            Some("env-user"),
+            "env bootstrap_username wins"
+        );
+        assert_eq!(
+            config.bootstrap_password.as_deref(),
+            Some("env-pass"),
+            "env bootstrap_password wins"
+        );
+    }
 }
