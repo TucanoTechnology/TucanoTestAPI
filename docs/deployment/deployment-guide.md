@@ -208,8 +208,54 @@ cannot drift from the schema the server implements.
 `TUCANO_DATA_DIR`, `PORT` and `TUCANO_CONFIG_FILE` itself stay environment-only: all three must be
 readable *before* the file can be located, and the orchestrator owns them. Mounting the file
 read-only matches the secret-file pattern above; a deployment that keeps all settings in the
-environment simply leaves `TUCANO_CONFIG_FILE` unset. Encrypted configuration files are decided but
-deferred — see the decision document.
+environment simply leaves `TUCANO_CONFIG_FILE` unset.
+
+Secret fields (`jwt_secret`, `bootstrap_password`) may be stored as AES-256-GCM encrypted
+envelopes in the file, with the decryption key supplied through a separate read-only key file
+(`TUCANO_CONFIG_KEY_FILE`). Key rotation is supported through a multi-key ring. See the
+[configuration reference](configuration-reference.md#encrypted-secrets) and the
+[decision document](../security/configuration-decision.md#key-management) for the envelope format
+and rotation procedure.
+
+### Migrating from env-only configuration
+
+An existing env-only deployment keeps working unchanged: `TUCANO_CONFIG_FILE` unset means no file
+is consulted. Migration to a configuration file is optional and incremental — there is no flag day.
+
+**Step 1 — create the file.** Copy the values you want to move from the Compose `environment:`
+block into a JSON file based on [`config.example.json`](config.example.json). Settings left in
+the environment continue to take precedence over the file, so you can move them one at a time.
+
+```json
+{
+  "version": 1,
+  "auth_required": true,
+  "access_token_ttl": "15m",
+  "refresh_token_ttl": "14d"
+}
+```
+
+**Step 2 — mount it read-only.** Add the file and the environment variable to your Compose
+service or `docker run`:
+
+```yaml
+environment:
+  TUCANO_CONFIG_FILE: /etc/tucano-test/config.json
+volumes:
+  - ./config.json:/etc/tucano-test/config.json:ro
+```
+
+**Step 3 — move secrets.** For secrets, prefer the encrypted envelope form with a key file
+mounted via `TUCANO_CONFIG_KEY_FILE`, or keep them in the environment and let the file hold
+only non-sensitive settings. Either way, the environment still wins per key, so a secret left
+in `TUCANO_JWT_SECRET` overrides whatever the file holds.
+
+**Step 4 — remove redundant variables.** Once a setting is confirmed in the file and the service
+starts correctly, remove it from the Compose `environment:` block. The `TUCANO_DATA_DIR`, `PORT`
+and `TUCANO_CONFIG_FILE` variables must always stay in the environment.
+
+No restart is required between steps: the file is read once at startup, and each change takes
+effect on the next `docker compose up -d`.
 
 ## Container hardening
 
