@@ -752,6 +752,7 @@ Repository contribution and agent workflow rules are documented in [AGENTS.md](A
 | [docs/wiki/api-and-authentication.md](docs/wiki/api-and-authentication.md) | Zero to an authenticated call, the error envelope, request limits, and why Swagger is the contract (#173) |
 | [docs/wiki/operations-and-troubleshooting.md](docs/wiki/operations-and-troubleshooting.md) | Running the service: the data directory as the only state, health and readiness, scaling, backup and restore, rollback, and a troubleshooting FAQ (#174) |
 | [docs/roadmap.md](docs/roadmap.md) | The roadmap ordered by delivery priority, with the tracking issue for each item |
+| [docs/roadmap-v1-gap-analysis.md](docs/roadmap-v1-gap-analysis.md) | V1 release gate: gap taxonomy, P0/P1 re-verification, startable frontier, v1 blocker set and sub-task decomposition (#241) |
 | [docs/SUMMARY.md](docs/SUMMARY.md) | The table of contents of the published documentation site — the entry point that lists every page |
 | [docs/generated/operations-reference.md](docs/generated/operations-reference.md) | Generated from `openapi.json`: the index of every route, method, `operationId` and summary |
 | [AgentRules/](AgentRules/) | Organisation-wide engineering and process rules |

@@ -322,10 +322,10 @@ flow top to bottom.
 | Priority | Ticket | Title | Depends On | Complexity | Model |
 |----------|--------|-------|------------|------------|-------|
 | 1 | #241 | V1 release gate (this epic) | — | L | high |
-| 2 | sub-1 | Commit gap analysis and open PR | #241 | S | mid |
-| 3 | sub-2 | Triage #214: labels, milestone, assignee | #241 | S | mid |
-| 4 | sub-3 | Create v1.0 milestone and assign closed roadmap items | sub-1 | S | mid |
-| 5 | sub-4 | Tag v1.0.0 on main and verify GHCR publish | sub-1, sub-3 | S | mid |
+| 2 | #242 (PR) | Commit gap analysis and open PR | #241 | S | mid |
+| 3 | #243 ✅ | Triage #214: labels, milestone, assignee | #241 | S | mid |
+| 4 | #244 ✅ | Create v1.0 milestone and assign closed roadmap items | #242 | S | mid |
+| 5 | #245 | Tag v1.0.0 on main and verify GHCR publish | #242, #244 | S | mid |
 
 **Dependency graph:**
 
