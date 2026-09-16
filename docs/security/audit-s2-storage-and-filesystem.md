@@ -23,15 +23,17 @@ boundary."* It carries findings only; nothing here is fixed. Remediation belongs
   calibration for the two worked examples and for the first four pairs; the **count** stays provisional
   because a sub-task still to run can add a finding, and §6's list of what it has re-read is updated
   below to seven.
-- **Pass entries so far:** twenty, in the [Pass entries](#5-pass-entries) section.
+- **Pass entries so far:** twenty-one, in the [Pass entries](#5-pass-entries) section.
 - **Executed:** S2-1, S2-2, S2-3, S2-4, S2-6 (partial), S2-7, S2-9, S2-13, S2-14
   (partial), **S2-15 (complete — both halves: the `#189` question is answered and recorded in O-177-11,
   and the file-boundary probes have run against the image, producing F-177-5, F-177-6, O-177-12 and pass
   entries 15–17)**. S2-3 is complete rather than partial as of this checkpoint: its owed symlinked
   *attachment* fixtures were planted and refused at the API (pass entries 18–19, O-177-13) and its
   fixture 6, the outside-file hardlink, was planted too and did not hold — that is F-177-7. S2-9 is
-  complete as well: its third arm, the revision write, is pass entry 20.
-  **Not executed:** S2-5, S2-8, S2-10, S2-11, S2-12 (partial).
+  complete as well: its third arm, the revision write, is pass entry 20. S2-10 is complete as well:
+  its three arms — attachment publication, orphans, and revision immutability — are pass entry 21,
+  with the torn-read recipe it was written against measured unreachable through the API.
+  **Not executed:** S2-5, S2-8, S2-11, S2-12 (partial).
 - **Throwaway stack:** re-provisioned for the S2-15 container arm with every build step `CACHED` from
   the pinned revision, and **retained** at `tucano-test-audit-177:c5e9943` for the next checkpoint; the
   earlier tear-down and the re-provisioning are both recorded in [§7](#7-tear-down-step-7). A later
@@ -1120,6 +1122,42 @@ Controls tested **and not broken** in this checkpoint:
     `-rw-rw-rw-` (0666), the same file mode F-177-1 records for stored material — noted here so that
     finding's scope is not read as documents only, and not raised as a second finding. (Boundary 5;
     invariants 1 and 5.)
+21. **A stored attachment name is never rewritten, a published revision is never rewritten, and a
+    DELETE through the API leaves no orphan.** S2-10's three arms, run against the live stack.
+    *Publication.* The design's torn-read recipe — re-uploading a larger file over the same stored
+    name — is **unreachable through the API**: `POST /test_cases/C1/attachments` with
+    `filename=1789536837251789433-escape.txt` returned **201** and de-collided to
+    `1789537395849300108-1789536837251789433-escape.txt`, and `src/storage/fs.rs:511`'s
+    `save_attachment` opens its destination with `.write(true).create_new(true)`, so an existing stored
+    name is never opened for rewriting. What was measured instead is the *client-side consequence*:
+    with a 3-byte file planted under a name the document declares as 8 bytes, `GET` returned **200**
+    with `content-length: 3` and body `abc`. Nothing cross-checks the body against the document's
+    recorded `size`, so a body shorter than what the document claims is served as a complete,
+    successful response — the size in the document is a client-side convenience, not an enforced
+    integrity check. (Boundary 4; invariants 1 and 5.)
+    *Orphans.* `DELETE /test_cases/C1/attachments/<name>` returned **200**
+    `{"message":"File deleted successfully"}` and removed **both** the file and its document entry
+    (`version` 3→4) — no orphan — with the case's outside hardlink source still `2 links / 51 bytes`
+    afterwards, so a delete neither follows nor damages a link out of the tree. A file removed
+    *behind the API's back* leaves the document entry dangling (observable through the case document),
+    and the read then returns a clean **404** `{"code":"not_found","message":"File not found"}`: no
+    reconciliation pass notices the divergence. (Boundary 4.)
+    *Revision immutability.* `revisions/v1.json`'s sha256
+    (`dd51eaa2710b03d0eb1d03fb96bfd8dbd00908f1fb7a0cab1d36be67fbd4e1a3`) was unchanged across two
+    further revisions (`v2.json` `e4e3b881314c41892e982e76d960c7e1ecea8c5b12bb242e71ca799b246480e0`),
+    and the history endpoint grew `[1]` → `[1,2]` → `[1,2,3]` without any snapshot being rewritten —
+    the immutability `src/storage/fs.rs:546` asserts with its early return on `revision.exists()`.
+    (Boundary 5.)
+
+Two S2-10 notes that are not entries. First, the history routes answer every write method with
+**405 and an empty body**, in contrast to the `{"code":…,"message":…,"requestId":…}` shape every other
+refusal in this report uses; the API's error contract expects a `code`, so this is a gap for S2-12's
+table rather than a control. Second, a fixture caveat for any later comparison: the case file
+`…/C1/1789536837251789433-escape.txt` was restored by hand after the short-body probe, from
+`/etc/hostname`, and is **not** byte-identical to the original — sha256
+`c5194672d129fc5ad717be5ee1cd7dea3bacc28e61f262b410a5dbb5c0868c74` against the original's
+`c1d961124938394e3f5a6646de88e69535ad4d28799bcb987462a334fb574b21` — so no later hash comparison may
+rest on that name.
 
 Outside the numbered entries, S2-14 found the same shape on the auth tree: `/auth`, `/auth//`,
 `/data/auth`, `/auth/projects`, and `/projects/../auth` all return **404**, and `/auth/me` returns
@@ -1166,9 +1204,10 @@ pinned revision, not evidence about the built image: the image was
 audited by the API probes, the baselines by the test binaries compiled from the same revision.
 
 Not yet credited in this checkpoint (and deliberately not listed as passes): atomicity under `SIGKILL`
-(S2-5), two replicas on one data directory (S2-8), attachment and revision publication (S2-10), the
-overwrite table (S2-11), and the full error-leak table (S2-12). The configuration-file boundary
-(S2-15) is no longer on this list: both of its halves are settled — the *key* half by O-177-11 (`#189`
+(S2-5), two replicas on one data directory (S2-8), the overwrite table (S2-11), and the full
+error-leak table (S2-12). Two sub-tasks have left this list since the previous checkpoint: attachment
+and revision publication (S2-10), whose three arms are pass entry 21, and the configuration-file
+boundary (S2-15), both of whose halves are settled — the *key* half by O-177-11 (`#189`
 is open, so the key boundary is documented-pending by the design's own pre-commitment, not unprobed),
 the *file* half by pass entries 15–17 after the container arm ran. The three symlink baselines
 correspond to the fixtures measured in entries 5–6 above; the symlinked-*attachment* fixture S2-3 also
@@ -1229,7 +1268,7 @@ re-confirmed.
   (F-177-2, F-177-3), then the identifier and error-class path (F-177-4), and finally the
   configuration-file boundary, whose two findings were written last because they were measured last.
   Comparing severity across S2's findings means comparing the pairs, not the sequence.
-- **What this section does not yet confirm:** that seven is the final count. S2-5, S2-8, S2-10, S2-11 and
+- **What this section does not yet confirm:** that seven is the final count. S2-5, S2-8, S2-11 and
   S2-12 can each still add a finding, and a new finding changes the surface's distribution — which is
   why the header marks the count provisional. §6 is re-confirmed, not rewritten, in the closing
   checkpoint; the two examples and the seven pairs above will not change unless a later sub-task
@@ -1270,9 +1309,12 @@ The following sub-tasks of [audit-design-176-178.md](audit-design-176-178.md) §
 to completion. Each names what it is for, so a reader can see the shape of what is missing rather
 than only its absence. Rows marked **partial** have measured results in §4/§5; what they still owe is
 in the second column. S2-6 and S2-14 have run and keep a row only to name what their run
-did **not** cover; S2-1, S2-3, S2-4, S2-7, S2-9 and S2-13 have now run in full, so their rows are gone
+did **not** cover; S2-1, S2-3, S2-4, S2-7, S2-9, S2-10 and S2-13 have now run in full, so their rows are gone
 (S2-9's third arm, the revision write, is pass entry 20; what S2-9 still cannot
-show is a lock observed *held* — its probes measure release, not exclusion), and
+show is a lock observed *held* — its probes measure release, not exclusion; S2-10's three arms are
+pass entry 21, and what S2-10 still cannot show is a torn body: the recipe that was to produce one
+turned out unreachable, so the *consequence* of a short body was measured instead, not its
+production), and
 S2-15 has now run both halves — the `#189` question in O-177-11 and the file-boundary probes in pass
 entries 15–17 — so its row is gone as well (its two findings and one observation are in §4). S2-3's row
 is gone for the same reason: the attachment fixtures it owed are pass entries 18–19, and its fixture 6
@@ -1283,9 +1325,8 @@ ran too — as F-177-7 in §4, because the hardlink arm did not hold.
 | **S2-5** | Atomicity: ten `SIGKILL`s of the container process mid-write, then a JSON validation pass over every stored document and an inspection of leftover `.tucano-*.tmp` files. No power-loss durability is claimed either way; a missing parent-directory `fsync` is an observation by pre-commitment, never a finding. |
 | **S2-6 (partial)** | Truncation, invalid UTF-8, and a 100 MiB replacement are measured (pass entries 7–9). The wrong-shape JSON case is measured **and is a finding** instead of a pass (`F-177-2`). No further variants are owed, and the calibration pass §6 owed `F-177-2` has now run; the row stays only until §6 is re-confirmed at the closing checkpoint. |
 | **S2-8** | Two replicas against one data directory, with the filesystem type of the throwaway volume recorded — note that this checkpoint's volume is `tmpfs`, so this sub-task's result does **not** transfer to a real volume and the arm must be re-provisioned on a disk-backed directory before its result may be written up. |
-| **S2-10** | Attachment publication in place (torn read), orphan handling, and revision immutability. Only the attachment lock half has run. |
 | **S2-11** | The overwrite-contract table for every mutating operation, including the two imports whose conflict behaviour the design says is measured rather than assumed. |
-| **S2-12 (partial)** | The error samples recorded so far are in §4's pending-triage and pass entries 7–11 (`storage_error` for corruption, the wrong-shape-JSON `200`, traversal `invalid_request` 400, conflict 409, not-found 404, the empty-body 404 fallback, unauthorized 401, and the length-overflow `500 storage_error` of `F-177-4`). The DoD item — the full `DomainError`-by-layer table — is not written, and `O-177-5` records that the storage failures collapse into one undifferentiated `storage_error`. One measured fact already belongs in that table's log column: the service logs **nothing** at startup, cleanly or otherwise (pass entry 16), so a failure that only appears in the console is the configuration refusal and nothing else. |
+| **S2-12 (partial)** | The error samples recorded so far are in §4's pending-triage and pass entries 7–11 (`storage_error` for corruption, the wrong-shape-JSON `200`, traversal `invalid_request` 400, conflict 409, not-found 404, the empty-body 404 fallback, unauthorized 401, and the length-overflow `500 storage_error` of `F-177-4`, plus the history routes' **405 with an empty body** measured for S2-10). The DoD item — the full `DomainError`-by-layer table — is not written, and `O-177-5` records that the storage failures collapse into one undifferentiated `storage_error`. One measured fact already belongs in that table's log column: the service logs **nothing** at startup, cleanly or otherwise (pass entry 16), so a failure that only appears in the console is the configuration refusal and nothing else. |
 | **S2-14 (partial)** | The auth surface is unreachable anonymously (§5, unnumbered note): `/auth`, `/auth//`, `/data/auth`, `/auth/projects`, `/projects/../auth` → **404**, `/auth/me` → **401**. What is owed is the **authenticated** arm, i.e. creating an auth store and confirming no project route can then reach it. |
 
 Also outstanding for the finished report: the full local gate (`actionlint`, `node
