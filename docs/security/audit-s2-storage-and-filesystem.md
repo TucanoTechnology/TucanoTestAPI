@@ -23,12 +23,14 @@ boundary."* It carries findings only; nothing here is fixed. Remediation belongs
   calibration for the two worked examples and for the first four pairs; the **count** stays provisional
   because a sub-task still to run can add a finding, and §6's list of what it has re-read is updated
   below to seven.
-- **Pass entries so far:** nineteen, in the [Pass entries](#5-pass-entries) section.
-- **Executed:** S2-1, S2-2, S2-3, S2-4, S2-6 (partial), S2-7, S2-9 (partial), S2-13, S2-14
+- **Pass entries so far:** twenty, in the [Pass entries](#5-pass-entries) section.
+- **Executed:** S2-1, S2-2, S2-3, S2-4, S2-6 (partial), S2-7, S2-9, S2-13, S2-14
   (partial), **S2-15 (complete — both halves: the `#189` question is answered and recorded in O-177-11,
   and the file-boundary probes have run against the image, producing F-177-5, F-177-6, O-177-12 and pass
   entries 15–17)**. S2-3 is complete rather than partial as of this checkpoint: its owed symlinked
-  *attachment* fixtures were planted and refused at the API, producing pass entries 18–19 and O-177-13.
+  *attachment* fixtures were planted and refused at the API (pass entries 18–19, O-177-13) and its
+  fixture 6, the outside-file hardlink, was planted too and did not hold — that is F-177-7. S2-9 is
+  complete as well: its third arm, the revision write, is pass entry 20.
   **Not executed:** S2-5, S2-8, S2-10, S2-11, S2-12 (partial).
 - **Throwaway stack:** re-provisioned for the S2-15 container arm with every build step `CACHED` from
   the pinned revision, and **retained** at `tucano-test-audit-177:c5e9943` for the next checkpoint; the
@@ -815,7 +817,8 @@ consistent with "nothing outside the mounts is written", but only for the curren
 cannot distinguish "never wrote" from "wrote, then restarted". S2-13 therefore requires a controlled
 before/after filesystem hash and `docker diff` on a container with a known, unbroken uptime; the empty
 `docker diff` in this checkpoint is corroboration, not the probe. The read-only-directory probes
-(S2-9) show that the write paths that can fail do fail cleanly, which is the part of writable-layer
+(S2-9) show that the write paths that can fail do fail cleanly — including the revision snapshot, the
+arm added at this checkpoint (pass entry 20) — which is the part of writable-layer
 behaviour this checkpoint *can* speak to.
 
 **O-177-7 — The S2-9 probe was corrected mid-run, and the first attempt is recorded because it is
@@ -1101,6 +1104,22 @@ Controls tested **and not broken** in this checkpoint:
     `escapee.txt` reading `SENTINEL-ESCAPED` — the response body carries no trace of it
     (`grep -c SENTINEL` = 0). The container's `/tmp` was unchanged afterwards: no upload landed in it,
     and the outside file still read `ORIGINAL`. (Boundary 3; invariant 1.)
+20. **A failed revision write releases the lock, and leaves no partial history behind.** S2-9's third
+    arm, the revision path: with `revisions/` replaced by a root-owned regular file — the design's own
+    recipe for making the destination unwritable — `PUT /test_cases/C1` with a changed field returned
+    **500** `{"code":"storage_error","message":"Storage operation failed"}`, and the stored document was
+    left untouched (`"title": "t"`, `"version": 1`), so the failed write is not half-applied. A
+    `find /data -newermt '-1 minute'` ran immediately after the refusal and found no half-created
+    folder, marker or entry — only the planted file and the case folder's own bumped mtime. Removing
+    the plant and repeating the same `PUT` at once (`curl --max-time 10`) returned **200** in
+    **0.0017 s**, which is the measurement that matters: the failing path had released the lock, so a
+    later write does not wedge. That write then created `revisions/v1.json` holding the *pre-update*
+    document (`"title": "t"`, `"version": 1`) and `GET /test_cases/C1/history` returned
+    `[{"changedFields":["title"],"lastModified":"2026-09-16T05:32:26Z","version":1}]`, so the snapshot
+    is of the version being replaced rather than of the incoming one. The snapshot lands
+    `-rw-rw-rw-` (0666), the same file mode F-177-1 records for stored material — noted here so that
+    finding's scope is not read as documents only, and not raised as a second finding. (Boundary 5;
+    invariants 1 and 5.)
 
 Outside the numbered entries, S2-14 found the same shape on the auth tree: `/auth`, `/auth//`,
 `/data/auth`, `/auth/projects`, and `/projects/../auth` all return **404**, and `/auth/me` returns
@@ -1250,8 +1269,10 @@ than by editing that table, which keeps the record of what the tear-down did.
 The following sub-tasks of [audit-design-176-178.md](audit-design-176-178.md) §"#177" §3 have not run
 to completion. Each names what it is for, so a reader can see the shape of what is missing rather
 than only its absence. Rows marked **partial** have measured results in §4/§5; what they still owe is
-in the second column. S2-6, S2-9 and S2-14 have run and keep a row only to name what their run
-did **not** cover; S2-1, S2-3, S2-4, S2-7 and S2-13 have now run in full, so their rows are gone, and
+in the second column. S2-6 and S2-14 have run and keep a row only to name what their run
+did **not** cover; S2-1, S2-3, S2-4, S2-7, S2-9 and S2-13 have now run in full, so their rows are gone
+(S2-9's third arm, the revision write, is pass entry 20; what S2-9 still cannot
+show is a lock observed *held* — its probes measure release, not exclusion), and
 S2-15 has now run both halves — the `#189` question in O-177-11 and the file-boundary probes in pass
 entries 15–17 — so its row is gone as well (its two findings and one observation are in §4). S2-3's row
 is gone for the same reason: the attachment fixtures it owed are pass entries 18–19, and its fixture 6
@@ -1262,7 +1283,6 @@ ran too — as F-177-7 in §4, because the hardlink arm did not hold.
 | **S2-5** | Atomicity: ten `SIGKILL`s of the container process mid-write, then a JSON validation pass over every stored document and an inspection of leftover `.tucano-*.tmp` files. No power-loss durability is claimed either way; a missing parent-directory `fsync` is an observation by pre-commitment, never a finding. |
 | **S2-6 (partial)** | Truncation, invalid UTF-8, and a 100 MiB replacement are measured (pass entries 7–9). The wrong-shape JSON case is measured **and is a finding** instead of a pass (`F-177-2`). No further variants are owed, and the calibration pass §6 owed `F-177-2` has now run; the row stays only until §6 is re-confirmed at the closing checkpoint. |
 | **S2-8** | Two replicas against one data directory, with the filesystem type of the throwaway volume recorded — note that this checkpoint's volume is `tmpfs`, so this sub-task's result does **not** transfer to a real volume and the arm must be re-provisioned on a disk-backed directory before its result may be written up. |
-| **S2-9 (partial)** | Lock release is measured for the **document** and **attachment** failure paths (pass entries 10–11). The revision path's failure-then-success pair has not been run, and no lock was observed *held* at any point (the probes measure release, not exclusion). |
 | **S2-10** | Attachment publication in place (torn read), orphan handling, and revision immutability. Only the attachment lock half has run. |
 | **S2-11** | The overwrite-contract table for every mutating operation, including the two imports whose conflict behaviour the design says is measured rather than assumed. |
 | **S2-12 (partial)** | The error samples recorded so far are in §4's pending-triage and pass entries 7–11 (`storage_error` for corruption, the wrong-shape-JSON `200`, traversal `invalid_request` 400, conflict 409, not-found 404, the empty-body 404 fallback, unauthorized 401, and the length-overflow `500 storage_error` of `F-177-4`). The DoD item — the full `DomainError`-by-layer table — is not written, and `O-177-5` records that the storage failures collapse into one undifferentiated `storage_error`. One measured fact already belongs in that table's log column: the service logs **nothing** at startup, cleanly or otherwise (pass entry 16), so a failure that only appears in the console is the configuration refusal and nothing else. |
