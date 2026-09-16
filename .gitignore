@@ -4,6 +4,13 @@
 /sbom.json
 .continue/
 
+# The mdBook build output. The book's source is docs/ itself (see docs/book.toml
+# and docs/architecture/wiki-structure-and-publication.md); the rendered site is
+# a build artifact, never committed. With src = "." mdBook writes the rendered
+# index.html next to the sources as well as into the book directory.
+/docs/book/
+/docs/index.html
+
 # A real configuration file is deployment-specific and may hold secrets. The
 # service never creates one, so anything matching these is one an operator
 # wrote; it belongs on the deployment, not in a commit. The documented template
