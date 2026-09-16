@@ -247,6 +247,15 @@ storage:
   replica would serve a different partial view of the data, and a create would be invisible to the
   others. Use platform-provided shared storage (or a single node with one shared volume) instead.
 
+The filesystem is the only storage backend. Object storage (S3) was declined as a persistence
+backend by [`docs/architecture/adr-object-storage.md`](../architecture/adr-object-storage.md), so
+there is no backend to select: a platform that offers object storage but no shared POSIX volume
+cannot host a multi-replica Tucano Test, and the supported answer there is a single node with one
+shared volume. A bucket may be used only as an out-of-process mirror the API never reads from or
+writes to, under the caveats the ADR states. The backend inventory, its guarantees, and the full
+operational consequences are in
+[`docs/architecture/storage-backends.md`](../architecture/storage-backends.md).
+
 Tune `deploy.replicas` and the resource limits per deployment; the checked-in values (`replicas: 1`,
 `1.0` CPU, `512M`) are a local default, not a sizing recommendation.
 
