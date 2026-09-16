@@ -1,5 +1,9 @@
 # Tucano Test API
 
+[![CI](https://github.com/TucanoTechnology/TucanoTestAPI/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/TucanoTechnology/TucanoTestAPI/actions/workflows/ci.yml)
+[![Security](https://github.com/TucanoTechnology/TucanoTestAPI/actions/workflows/security.yml/badge.svg?branch=main)](https://github.com/TucanoTechnology/TucanoTestAPI/actions/workflows/security.yml)
+[![Release](https://github.com/TucanoTechnology/TucanoTestAPI/actions/workflows/release.yml/badge.svg?branch=main)](https://github.com/TucanoTechnology/TucanoTestAPI/actions/workflows/release.yml)
+
 The Tucano Test API is the file-based test case management service for TucanoTCM: a Rust service
 built on Axum that stores projects, suites, cases, runs, milestones, and configurations as JSON
 documents on disk — no database — and exposes every operation through the documented HTTP contract
