@@ -57,6 +57,11 @@ When making decisions about features, architecture, or implementation:
   top-level pool, and the on-disk tree mirrors the homes: a suite folder lives under its project, a
   case folder under its project or under one suite. Reads stay global — listing and retrieval
   search the whole tree, so an entity is always findable regardless of home.
+- **Runs, milestones and configurations have one home too — their project folder.** Each is a flat
+  `<id>.json` document inside `projects/<project>/{test_runs,milestones,configurations}/`, created
+  through the project-scoped `POST /projects/{id}/…` route, and governed by the role grants of the
+  project that holds it — a configuration is no longer installation-wide. See
+  [`docs/architecture/adr-storage-layout-v3.md`](docs/architecture/adr-storage-layout-v3.md).
 - **Placing an existing entity elsewhere is copy by default, move opt-in.** Composition requests
   accept `"mode": "copy" | "move"` and default to `copy`: `copy` duplicates the entity into the
   target parent (duplicate-on-include — the source keeps its home and both copies are editable
