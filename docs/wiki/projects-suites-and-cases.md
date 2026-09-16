@@ -17,21 +17,28 @@ TUCANO_DATA_DIR/
         ├── project.json                 project details
         ├── <test case>/                 a case owned directly by the project
         │   └── test-case.json
-        └── <test suite>/
-            ├── suite.json              suite details
-            └── <test case>/
-                └── test-case.json
+        ├── <test suite>/
+        │   ├── suite.json              suite details
+        │   └── <test case>/
+        │       └── test-case.json
+        ├── test_runs/<id>.json          the project's runs
+        ├── milestones/<id>.json         the project's milestones
+        └── configurations/<id>.json     the project's configurations
 ```
 
 Each entity is a **folder** holding a JSON document plus any supplementary files of its own.
-Test runs, milestones, and configuration documents are not folders — they are flat
-`<id>.json` files under `test_runs/`, `milestones/` and `configurations/`.
+Test runs, milestones, and configuration documents are not folders — they are flat `<id>.json`
+files inside the project that owns them, under `projects/<project>/test_runs/`,
+`projects/<project>/milestones/` and `projects/<project>/configurations/`. The `test_runs`,
+`milestones` and `configurations` names are reserved inside a project: a suite or a case created
+directly in a project cannot take one, and an attempt is refused as `409 conflict`.
 
 | Concept | What it contains | Where it lives |
 | --- | --- | --- |
 | **Project** | The container for the work under test. Holds suites and may hold cases directly. | `projects/<project>/` |
 | **Test suite** | A reusable grouping of cases, with its own suite-level data. Always inside a project. | `projects/<project>/<suite>/` |
 | **Test case** | One test: details, steps, expected results, supplementary files. Inside a project or a suite. | `<case>/` |
+| **Test run**, **milestone**, **configuration** | Flat documents, not containers. | `projects/<project>/{test_runs,milestones,configurations}/<id>.json` |
 
 A case is not required to belong to a suite. A project can own cases directly — handy for
 one-off checks that do not belong in a reusable group.
@@ -57,8 +64,9 @@ project document.
 
 ## Creating things: the parent is in the route
 
-There is no top-level `POST /test_suites` or `POST /test_cases`. A suite or case is created by
-posting to its parent's collection route:
+There is no top-level `POST /test_suites`, `POST /test_cases`, `POST /test_runs`,
+`POST /milestones` or `POST /configurations`. A suite, case, run, milestone or configuration is
+created by posting to its parent project's collection route:
 
 | Route | Creates |
 | --- | --- |
@@ -66,6 +74,9 @@ posting to its parent's collection route:
 | `POST /projects/{id}/test_suites` (`addProjectTestSuite`) | A suite in a project, or places an existing suite there |
 | `POST /projects/{id}/test_cases` (`addProjectTestCase`) | A case directly in a project, or places an existing case there |
 | `POST /test_suites/{id}/test_cases` (`addTestSuiteCase`) | A case in a suite, or places an existing case there |
+| `POST /projects/{id}/test_runs` (`addProjectTestRun`) | A run in a project |
+| `POST /projects/{id}/milestones` (`addProjectMilestone`) | A milestone in a project |
+| `POST /projects/{id}/configurations` (`addProjectConfiguration`) | A configuration in a project |
 
 The retired flat routes answer `400 invalid_request` naming their replacement, so an old client
 fails loudly instead of writing to a tree the API no longer maintains.
@@ -223,6 +234,7 @@ project removes everything under it.
 | Project | Globally unique |
 | Suite | Unique inside its project |
 | Case | Unique inside its parent (project or suite) |
+| Test run, milestone, configuration | Unique inside the project that holds it |
 
 Copy-on-include can put the **same** case id under several parents, so a document-level route such
 as `GET /test_cases/{id}` (`getTestCase`) operates on the single occurrence when the id resolves to
@@ -240,6 +252,9 @@ through a project or a suite.
 | `GET /projects` (`listProjects`) | `?filter=`, `?tags=` |
 | `GET /projects/{id}/test_suites` (`listProjectTestSuites`) | — |
 | `GET /projects/{id}/test_cases` (`listProjectTestCases`) | — |
+| `GET /projects/{id}/test_runs` (`listProjectTestRuns`) | — |
+| `GET /projects/{id}/milestones` (`listProjectMilestones`) | — |
+| `GET /projects/{id}/configurations` (`listProjectConfigurations`) | — |
 | `GET /test_suites/{id}/test_cases` (`listTestSuiteCases`) | — |
 
 `?filter=` is a case-insensitive substring match on resource **identifiers**. The parent-scoped
@@ -270,7 +285,10 @@ the copy is derived.
 ---
 
 *Sources of truth: the storage concept in the [repository README](../../README.md#storage-concept)
-for the folder layout and the three composition semantics; [`openapi.json`](../../openapi.json) for
+for the folder layout and the three composition semantics;
+[`docs/architecture/adr-storage-layout-v3.md`](../architecture/adr-storage-layout-v3.md) for why
+runs, milestones and configurations live inside their project;
+[`openapi.json`](../../openapi.json) for
 every route, parameter and schema named here; the
 [compatibility contract](../contracts/api-compatibility.md) for the real-home storage plan and the
 copy/move-include decisions. Where this page and one of those disagree, the source wins and this

@@ -10,7 +10,8 @@ Exact schemas and status codes live in the Swagger UI at `/api-docs` and
 
 ## What a run is
 
-Not a folder — a single flat document, `test_runs/<testRunId>.json`:
+Not a folder — a single flat document, inside the project that owns it, at
+`projects/<project>/test_runs/<testRunId>.json`:
 
 | Field | Notes |
 | --- | --- |
@@ -28,23 +29,38 @@ Not a folder — a single flat document, `test_runs/<testRunId>.json`:
 > **A run never owns a case.** Inclusion embeds a copy; the live case stays where it is. This is why
 > a run is a snapshot and why deleting the source case leaves the run intact.
 
+A run also has a **home project**: the project it is created in, whose `test_runs/` folder holds the
+document. The `projects` array is the coverage list — the projects whose suites and cases the run
+executed — and it need not contain the home. A run id is unique within its home project, so two
+projects may each hold a `run-2026-09-14.json`; the document routes under `/test_runs/{id}` answer
+`409 conflict` when they cannot tell which one you mean, and name the parent-scoped route to use
+instead. See [Storage layout v3](../architecture/adr-storage-layout-v3.md) for the decision.
+
 ## Creating a run and filling it
 
 | Route | Operation id | What it does |
 | --- | --- | --- |
-| `POST /test_runs` | `createTestRun` | Creates the run from a `TestRunCreateRequest` |
-| `GET /test_runs` | `listTestRuns` | Lists runs; supports `?filter=`, `?tags=`, `?configuration=` |
+| `GET /projects/{id}/test_runs` | `listProjectTestRuns` | Lists one project's runs, as a sorted array of ids |
+| `POST /projects/{id}/test_runs` | `addProjectTestRun` | Creates the run inside the project, from a `TestRunCreateRequest` |
+| `DELETE /projects/{id}/test_runs/{run_id}` | `removeProjectTestRun` | Removes the run from the project |
+| `GET /test_runs` | `listTestRuns` | Lists runs across every project; supports `?filter=`, `?tags=`, `?configuration=` |
 | `GET /test_runs/{id}` | `getTestRun` | Reads one |
 | `PUT /test_runs/{id}` | `updateTestRun` | Partial update |
 | `DELETE /test_runs/{id}` | `deleteTestRun` | Removes one |
 | `POST /test_runs/{id}/test_suites` | `addTestRunTestSuite` | Includes a suite, by `{"suiteId": …}` |
 | `POST /test_runs/{id}/test_cases` | `addTestRunTestCase` | Includes a case, by `{"testCaseId": …}` |
 
-There is **no `mode`** on those two inclusion routes: a run always copies. See
-[Composing and duplicating](composing-and-duplicating.md).
+Creation is project-scoped: `POST /projects/{id}/test_runs` creates the run in that project and
+answers `201` with `{"message": "Test run created", "id": …}`; an unknown project answers
+`404 not_found` and an id already taken in that project answers `409 conflict`. The flat
+`POST /test_runs` is retired and answers `400 invalid_request` naming the replacement. The bare
+`GET /test_runs` stays served for compatibility but is deliberately absent from `openapi.json`.
+
+There is **no `mode`** on the two inclusion routes — or on the creation route: a run always copies.
+See [Composing and duplicating](composing-and-duplicating.md).
 
 ```sh
-curl -s -X POST http://localhost:3100/test_runs \
+curl -s -X POST http://localhost:3100/projects/Payments.json/test_runs \
   -H 'Content-Type: application/json' \
   -d '{"testRunId":"run-2026-09-14.json","name":"Release 4.2 regression","projects":["Payments.json"]}'
 ```
@@ -137,10 +153,10 @@ Starting from a running instance on `http://localhost:3100` (see
 [Projects, suites, and cases](projects-suites-and-cases.md) present. Authentication is assumed off;
 with it on, add `-H "Authorization: Bearer $TOKEN"`.
 
-**1. Create a run and include the suite.**
+**1. Create a run in the project and include the suite.**
 
 ```sh
-curl -s -X POST http://localhost:3100/test_runs \
+curl -s -X POST http://localhost:3100/projects/Payments.json/test_runs \
   -H 'Content-Type: application/json' \
   -d '{"testRunId":"run-2026-09-14.json","name":"Release 4.2 regression","projects":["Payments.json"],"tags":["regression"]}'
 
@@ -198,7 +214,10 @@ See [Result imports and reports](imports-and-reports.md) for what those numbers 
 | `404 not_found` deleting a defect link | The link was already removed, or never existed |
 | `400` on `defectUrl` | The URL does not match the shape required by the chosen `trackerType` |
 | A run is missing from `GET /test_runs` | The listing can be filtered by `?tags=` or `?configuration=`; check what you sent |
-| `403 forbidden` on a run that names projects | Writing a run requires `editor` in **every** project it names; reading requires `viewer`. A run naming no project is readable by any authenticated caller, yet appears in no listing |
+| `400 invalid_request` on `POST /test_runs` | The flat creation route is retired: create the run inside its project with `POST /projects/{id}/test_runs` |
+| `404 not_found` on `POST /projects/{id}/test_runs` | No project has that `id` — a run is created inside a project that exists |
+| `409 conflict` on `GET /test_runs/{id}` | Two or more projects hold a run with that id; name the home with `GET`/`PUT`/`DELETE /projects/{id}/test_runs/{run_id}` |
+| `403 forbidden` on a run | Writing a run requires `editor` in its **home project** and in **every** project its `projects` array names; reading requires `viewer` in the same set. A run that names no project is governed by its home alone — it is not thereby open to every caller |
 
 ## Next
 
@@ -213,7 +232,9 @@ See [Result imports and reports](imports-and-reports.md) for what those numbers 
 
 *Sources of truth: [`openapi.json`](../../openapi.json) for every run, result and defect-link route,
 parameter and schema named here; the storage concept in the
-[repository README](../../README.md#storage-concept) for the flat `test_runs/<id>.json` layout and
-the point-in-time rule; the [compatibility contract](../contracts/api-compatibility.md) for the
+[repository README](../../README.md#storage-concept) for the `projects/<project>/test_runs/<id>.json`
+layout and the point-in-time rule; [`docs/architecture/adr-storage-layout-v3.md`](../architecture/adr-storage-layout-v3.md)
+for why runs live inside their project and are governed by it; the
+[compatibility contract](../contracts/api-compatibility.md) for the
 defect-link plans (#87, #88) and the run case-version capture plan (#92). Where this page and one of
 those disagree, the source wins and this page is a bug.*

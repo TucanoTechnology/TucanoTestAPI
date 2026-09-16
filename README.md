@@ -19,25 +19,29 @@ back: see [Test-data generator](#test-data-generator).
 
 ```text
 TUCANO_DATA_DIR/
-├── projects/
-│   └── <project>/
-│       ├── project.json                 project details
-│       ├── <test case>/                 case data directly in the project
-│       │   ├── test-case.json           case details, steps, expected results
-│       │   ├── revisions/v<n>.json      snapshots written by a qualifying update
-│       │   ├── steps/<n>/               attachments of one structured step
-│       │   └── <attachments>
-│       └── <test suite>/
-│           ├── suite.json               suite details
-│           └── <test case>/
-│               ├── test-case.json
-│               ├── revisions/v<n>.json
-│               ├── steps/<n>/
-│               └── <attachments>
-├── test_runs/<id>.json                  point-in-time runs and their results
-├── milestones/<id>.json                 milestone details
-└── configurations/<id>.json             environment configurations
+└── projects/
+    └── <project>/
+        ├── project.json                 project details
+        ├── test_runs/<id>.json          point-in-time runs and their results
+        ├── milestones/<id>.json         milestone details
+        ├── configurations/<id>.json     environment configurations
+        ├── <test case>/                 case data directly in the project
+        │   ├── test-case.json           case details, steps, expected results
+        │   ├── revisions/v<n>.json      snapshots written by a qualifying update
+        │   ├── steps/<n>/               attachments of one structured step
+        │   └── <attachments>
+        └── <test suite>/
+            ├── suite.json               suite details
+            └── <test case>/
+                ├── test-case.json
+                ├── revisions/v<n>.json
+                ├── steps/<n>/
+                └── <attachments>
 ```
+
+Runs, milestones and configurations are stored as a single flat `<id>.json` file inside their
+project, in a reserved subfolder per resource — `test_runs/`, `milestones/` and `configurations/`
+are not suite or case names. The project folder is their only home, and it is what governs them.
 
 A parent marker keeps the legacy document shape with an empty child array (`project.json` stores
 `testSuites: []`, `suite.json` stores `testCases: []`); membership is the folders themselves.
@@ -50,8 +54,8 @@ Every document the API writes also carries the identity field its model requires
 body omits the `projectId`, `suiteId`, `testRunId`, `milestoneId`, or `configId` that its id is
 derived from, the stored document records it, and a test run stored without a `timestamp` records
 when it was written. A value the body did supply is never overwritten, so a name-only create such
-as `POST /test_runs {"name": "nightly"}` stores a run that reads back as its typed model instead of
-one that fails to load. The rules are recorded in
+as `POST /projects/{id}/test_runs {"name": "nightly"}` stores a run that reads back as its typed
+model instead of one that fails to load. The rules are recorded in
 [docs/contracts/api-compatibility.md](docs/contracts/api-compatibility.md).
 
 The conceptual hierarchy, as distinct from the exact on-disk encoding:
@@ -74,8 +78,8 @@ Three properties follow from the concept and are binding on any implementation:
    multiple test runs with different results, and later edits to a case or suite never rewrite what
    a finished run recorded.
 3. **Supplementary files live with their entity.** Attachments are stored inside their test case
-   folder; run results are recorded inside the run's own document under `test_runs/` — a run is one
-   flat `<id>.json` file, not a folder.
+   folder; run results are recorded inside the run's own document under the project's `test_runs/`
+   — a run is one flat `<id>.json` file, not a folder.
 
 Milestones and test runs must never go silently stale when the source cases or suites they refer to
 change: they either carry their own snapshot at inclusion time or record the history of the runs
@@ -85,27 +89,37 @@ captured, so reading a finished run back never shows a version its source case n
 Three API semantics follow from this concept and apply to every composition request:
 
 - **A real parent is required at creation.** A test suite is created inside its project and a test
-  case inside its project or a test suite; nothing is created in a standalone top-level pool. The
-  on-disk tree mirrors these homes: a suite folder lives under its project and a case folder under
-  its project or its suite. The creation endpoints are parent-scoped —
-  `POST /projects/{id}/test_suites`, `POST /projects/{id}/test_cases`, and
-  `POST /test_suites/{id}/test_cases`; the retired flat `POST /test_suites` and `POST /test_cases`
-  answer `400 Bad Request` naming their replacement. Reads remain global — listing and retrieval
-  search the whole tree, so cases and suites are always findable regardless of home.
+  case inside its project or a test suite; a test run, milestone and configuration are created
+  inside the project that owns them too. Nothing is created in a standalone top-level pool. The
+  on-disk tree mirrors these homes: a suite folder lives under its project, a case folder under its
+  project or its suite, and a run, milestone or configuration is one flat `<id>.json` in the
+  reserved subfolder of its project. The creation endpoints are parent-scoped —
+  `POST /projects/{id}/test_suites`, `POST /projects/{id}/test_cases`,
+  `POST /test_suites/{id}/test_cases`, `POST /projects/{id}/test_runs`,
+  `POST /projects/{id}/milestones` and `POST /projects/{id}/configurations`; the retired flat
+  `POST /test_suites`, `POST /test_cases`, `POST /test_runs`, `POST /milestones` and
+  `POST /configurations` answer `400 Bad Request` naming their replacement. Reads remain global —
+  listing and retrieval search the whole tree, so an entity is always findable regardless of home,
+  and each project also publishes a parent-scoped list of the runs, milestones and configurations
+  it holds.
 - **Inclusion is copy by default and move opt-in.** Adding an existing case or suite to another
   parent accepts `"mode": "copy" | "move"` and defaults to `copy`: `copy` duplicates the entity
   under the target parent (duplicate-on-include) while the source keeps its home and both copies
   are editable independently; `move` relocates the entity so the target parent becomes its only
   home. Test runs always copy at inclusion — they snapshot the selected cases and suites and never
   own them.
-- **Identifiers are unique where they live.** A project id is globally unique, a suite id is unique
-  within its project, and a case id is unique within its parent. Copy-on-include may therefore place
-  the same id under several parents; a document-level route (`GET`/`PUT`/`DELETE /test_cases/{id}`,
+- **Identifiers are unique where they live.** A project id is globally unique; a suite id is unique
+  within its project, and a case id is unique within its parent. A run, milestone and configuration
+  id is unique within the project that holds it. Copy-on-include may therefore place the same id
+  under several parents; a document-level route (`GET`/`PUT`/`DELETE /test_cases/{id}`,
   attachments, duplicate) operates on the one occurrence when it is unique and answers
-  `409 Conflict`, naming the parent-scoped routes, when it is ambiguous. Listing routes never fail on
+  `409 Conflict`, naming the parent-scoped routes, when it is ambiguous. The global document routes
+  for runs, milestones and configurations resolve the same way. Listing routes never fail on
   duplicates; they de-duplicate.
 
-This concept is enforced for agent work in [AGENTS.md](AGENTS.md).
+This concept is enforced for agent work in [AGENTS.md](AGENTS.md); the storage layout it describes
+is recorded in
+[docs/architecture/adr-storage-layout-v3.md](docs/architecture/adr-storage-layout-v3.md).
 
 ## HTTP API
 
@@ -118,16 +132,22 @@ surface is:
 | --- | --- |
 | Health, readiness and contract | `GET /health`, `GET /ready`, `GET /diagnostics`, `GET /openapi.json`, `GET /api-docs` |
 | Authentication | `POST /auth/login`, `POST /auth/refresh`, `POST /auth/logout`, `GET /auth/me` |
-| Projects | `GET`/`POST /projects`, `GET`/`PUT`/`DELETE /projects/{id}`, `POST /projects/{id}/duplicate`, parent-scoped suite and case creation (`/projects/{id}/test_suites`, `/projects/{id}/test_cases`) |
+| Projects | `GET`/`POST /projects`, `GET`/`PUT`/`DELETE /projects/{id}`, `POST /projects/{id}/duplicate`, and the project's own children: suite and case creation (`POST /projects/{id}/test_suites`, `POST /projects/{id}/test_cases`), run, milestone and configuration creation (`POST /projects/{id}/test_runs`, `POST /projects/{id}/milestones`, `POST /projects/{id}/configurations`) with their parent-scoped lists and deletes (`GET`/`DELETE` on `/projects/{id}/test_runs`, `/projects/{id}/milestones`, `/projects/{id}/configurations`, and each `/{child_id}`) |
 | Suites | `GET /test_suites`, `GET`/`PUT`/`DELETE /test_suites/{id}`, `POST /test_suites/{id}/duplicate`, parent-scoped case creation (`POST /test_suites/{id}/test_cases`) |
 | Cases | `GET`/`PUT`/`DELETE /test_cases/{id}`, `POST /test_cases/{id}/duplicate`, attachments (`/test_cases/{id}/attachments`), step attachments (`/test_cases/{id}/steps/{step_index}/attachments`), revision history (`GET /test_cases/{id}/history`, `GET /test_cases/{id}/history/{version}`) |
-| Runs | `GET`/`POST /test_runs`, `GET`/`PUT`/`DELETE /test_runs/{id}`, `POST /test_runs/{id}/duplicate`, suite and case inclusion (`/test_runs/{id}/test_suites`, `/test_runs/{id}/test_cases`), result recording (`POST /test_runs/{id}/results`), defect links (`/test_runs/{id}/results/{case_id}/defects`), imports (`POST /test_runs/{id}/import/junit`, `POST /test_runs/{id}/import/json`), configuration links (`/test_runs/{id}/configurations`) |
-| Milestones | `GET`/`POST /milestones`, `GET`/`PUT`/`DELETE /milestones/{id}`, `POST /milestones/{id}/duplicate`, `GET /milestones/{id}/progress` |
-| Configurations | `GET`/`POST /configurations`, `GET`/`PUT`/`DELETE /configurations/{id}` |
+| Runs | `GET /test_runs`, parent-scoped creation, listing and deletion (`GET`/`POST /projects/{id}/test_runs`, `DELETE /projects/{id}/test_runs/{run_id}`), `GET`/`PUT`/`DELETE /test_runs/{id}`, `POST /test_runs/{id}/duplicate`, suite and case inclusion (`/test_runs/{id}/test_suites`, `/test_runs/{id}/test_cases`), result recording (`POST /test_runs/{id}/results`), defect links (`/test_runs/{id}/results/{case_id}/defects`), imports (`POST /test_runs/{id}/import/junit`, `POST /test_runs/{id}/import/json`), configuration links (`/test_runs/{id}/configurations`) |
+| Milestones | `GET /milestones`, parent-scoped creation, listing and deletion (`GET`/`POST /projects/{id}/milestones`, `DELETE /projects/{id}/milestones/{milestone_id}`), `GET`/`PUT`/`DELETE /milestones/{id}`, `POST /milestones/{id}/duplicate`, `GET /milestones/{id}/progress` |
+| Configurations | `GET /configurations`, parent-scoped creation, listing and deletion (`GET`/`POST /projects/{id}/configurations`, `DELETE /projects/{id}/configurations/{config_id}`), `GET`/`PUT`/`DELETE /configurations/{id}` |
 | Reports | `GET /reports/coverage`, `GET /reports/summary` |
 
 List endpoints share `?filter=`, `?tags=` (matched as an OR set), and — for runs, the only
-collection with configuration references — `?configuration=`.
+collection with configuration references — `?configuration=`. The retired flat creation routes
+(`POST /test_suites`, `POST /test_cases`, `POST /test_runs`, `POST /milestones`,
+`POST /configurations`) are still registered, but only to answer `400 Bad Request` with the route
+that replaced them. The bare global scans (`GET /test_suites`, `GET /test_cases`, `GET /test_runs`,
+`GET /milestones`, `GET /configurations`) also stay served for compatibility and are deliberately
+absent from `openapi.json`; the documented way to list a project's runs, milestones and
+configurations is the parent-scoped route.
 
 ## Prerequisites
 
@@ -206,9 +226,11 @@ authorized against **project-scoped RBAC**: a role (`viewer`, `editor`, `owner`)
 plus a `systemAdmin` account that reaches everything. A caller reaches only the projects it was
 granted; listings are filtered down to them rather than refused, and direct reads or writes of a
 project it does not reach answer `403`. Creating a project and duplicating one require the system
-administrator. `POST /milestones` and `PUT /milestones/{id}` must name a project-bearing reference,
-because a milestone is a project resource. Configurations are installation-wide and readable and
-writable by any authenticated caller.
+administrator. A milestone and a configuration are project resources like everything else: creating
+one needs `editor` in the project it is created in (`owner` for a milestone), reading one needs
+`viewer` there, and a run may reference a suite, case or configuration from any project the caller
+reaches. Writing a run needs the role in its home project and in every project its `projects` array
+names.
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
@@ -695,6 +717,7 @@ Repository contribution and agent workflow rules are documented in [AGENTS.md](A
 | [docs/architecture/rust-service-core.md](docs/architecture/rust-service-core.md) | Why Rust, the layered service design, and delivery status |
 | [docs/architecture/gui-client-boundary.md](docs/architecture/gui-client-boundary.md) | The GUI client boundary and the generated-client strategy driven by `openapi.json` |
 | [docs/architecture/adr-object-storage.md](docs/architecture/adr-object-storage.md) | ADR: why object storage (S3) is declined as a persistence backend and the file-based invariant is upheld (#181) |
+| [docs/architecture/adr-storage-layout-v3.md](docs/architecture/adr-storage-layout-v3.md) | ADR: storage layout v3 (#215) — runs, milestones and configurations live inside their project and are governed by it |
 | [docs/architecture/wiki-structure-and-publication.md](docs/architecture/wiki-structure-and-publication.md) | The wiki decision: source of truth, publication mechanism, page inventory, and the drift-prevention rule |
 | [docs/contracts/api-compatibility.md](docs/contracts/api-compatibility.md) | File-format and endpoint compatibility rules against the legacy implementation |
 | [docs/contracts/test-case-versioning-plan.md](docs/contracts/test-case-versioning-plan.md) | Field names, snapshot shape, trigger rules, and addressing for test-case versioning and revision history |

@@ -67,11 +67,12 @@ empty or unhelpful listing:
 | --- | --- |
 | `GET /milestones`, `GET /configurations` | These documents carry no `tags` field, so no tag filter is offered |
 | `GET /projects/{id}/test_suites`, `GET /projects/{id}/test_cases`, `GET /test_suites/{id}/test_cases` | Parent-scoped listings are exhaustive for that parent; no query parameters |
+| `GET /projects/{id}/test_runs`, `GET /projects/{id}/milestones`, `GET /projects/{id}/configurations` | The same rule for the project-scoped collections: a sorted array of ids, no `?filter=`, `?tags=` or `?configuration=` |
 
 ## Configurations
 
-A configuration is a flat document — `<configId>.json` under `configurations/` — not a folder. It
-names an environment:
+A configuration is a flat document, inside the project that owns it, at
+`projects/<project>/configurations/<configId>.json` — not a folder. It names an environment:
 
 | Field | Notes |
 | --- | --- |
@@ -84,26 +85,39 @@ names an environment:
 
 | Route | Operation id | What it does |
 | --- | --- | --- |
-| `GET /configurations` | `listConfigurations` | Lists them; supports `?filter=` only |
-| `POST /configurations` | `createConfiguration` | Creates one from a `TestConfigurationCreateRequest` |
+| `GET /projects/{id}/configurations` | `listProjectConfigurations` | Lists one project's configurations, as a sorted array of ids |
+| `POST /projects/{id}/configurations` | `addProjectConfiguration` | Creates the configuration inside the project |
+| `DELETE /projects/{id}/configurations/{config_id}` | `removeProjectConfiguration` | Removes the configuration from the project |
+| `GET /configurations` | `listConfigurations` | Lists them across every project; supports `?filter=` only |
 | `GET /configurations/{id}` | `getConfiguration` | Reads one |
 | `PUT /configurations/{id}` | `updateConfiguration` | Partial update |
 | `DELETE /configurations/{id}` | `deleteConfiguration` | Removes one |
 
+Creation is project-scoped: `POST /projects/{id}/configurations` creates the configuration in that
+project and answers `201` with `{"message": "Test configuration created", "id": …}`; an unknown
+project answers `404 not_found` and an id already taken in that project answers `409 conflict`. The
+flat `POST /configurations` is retired and answers `400 invalid_request` naming the replacement. The
+bare `GET /configurations` stays served for compatibility but is deliberately absent from
+`openapi.json`.
+
 ```sh
-curl -s -X POST http://localhost:3100/configurations \
+curl -s -X POST http://localhost:3100/projects/Payments.json/configurations \
   -H 'Content-Type: application/json' \
   -d '{"name":"firefox","browser":"Firefox","os":"Windows 11","resolution":"1920x1080"}'
 ```
 
 ```json
-{"id":"firefox.json","message":"Configuration created"}
+{"id":"firefox.json","message":"Test configuration created"}
 ```
 
-Configurations are **installation-wide**, not project-scoped: the file sits directly under
-`configurations/`, and any authenticated caller may read and write them. There is no ownership on a
-configuration, so naming them by environment (`firefox.json`, `stage-chrome.json`) is what keeps
-them legible.
+A configuration is a **project resource** like everything else. It lives in the project it was
+created in — that folder is its home — and its id is unique there, so two projects may each hold a
+`firefox.json`; the document routes under `/configurations/{id}` answer `409 conflict` when they
+cannot tell which one you mean, and name the parent-scoped route to use instead. Reading a
+configuration needs `viewer` in its home project and writing one needs `editor` there; there is no
+installation-wide short-circuit, so a configuration is not readable by every authenticated caller.
+Naming them by environment (`firefox.json`, `stage-chrome.json`) is still what keeps them legible.
+See [Storage layout v3](../architecture/adr-storage-layout-v3.md) for the decision.
 
 ## Linking a configuration to a run
 
@@ -120,6 +134,9 @@ The run document's `configurations` array holds the identifiers:
 curl -s -X POST http://localhost:3100/test_runs/run-2026-09-14.json/configurations \
   -H 'Content-Type: application/json' -d '{"configId":"firefox.json"}'
 ```
+
+A run may link a configuration from **any** project, so linking needs `editor` in the run's home
+project **and** in every project the run covers; reading the run needs `viewer` in that same set.
 
 Once linked, `?configuration=` on `GET /test_runs` keeps the runs that link that identifier:
 
@@ -138,14 +155,14 @@ Starting from a running instance on `http://localhost:3100` (see
 [Installation and first project](getting-started.md)). Authentication is assumed off; with it on,
 add `-H "Authorization: Bearer $TOKEN"`.
 
-**1. Create a project with tags and a configuration.**
+**1. Create a project with tags, then a configuration in it.**
 
 ```sh
 curl -s -X POST http://localhost:3100/projects \
   -H 'Content-Type: application/json' \
   -d '{"name":"Payments","tags":["payments","smoke"]}'
 
-curl -s -X POST http://localhost:3100/configurations \
+curl -s -X POST http://localhost:3100/projects/Payments.json/configurations \
   -H 'Content-Type: application/json' \
   -d '{"name":"firefox","browser":"Firefox","os":"Windows 11"}'
 ```
@@ -186,7 +203,10 @@ curl -s -X PUT http://localhost:3100/projects/Payments.json \
 | A resource silently loses tags | A `PUT` sent a `tags` array that omitted them; the array is replaced wholesale |
 | `?tags=` on a milestone or configuration listing does nothing | Neither document type carries tags, so neither listing offers the filter |
 | `?configuration=` returns an empty list | No run links that configuration identifier — the filter is a statement about runs, not a validation of the identifier |
-| `404 not_found` on a `configId` | No `<configId>.json` under `configurations/`; remember the id is the file name, not the display `name` |
+| `404 not_found` on a `configId` | No project has a `<configId>.json` in its `configurations/`; remember the id is the file name, not the display `name` |
+| `409 conflict` on `GET /configurations/{id}` | Two or more projects hold a configuration with that id; name the home with `GET`/`PUT`/`DELETE /projects/{id}/configurations/{config_id}` |
+| `400 invalid_request` on `POST /configurations` | The flat creation route is retired: create the configuration inside its project with `POST /projects/{id}/configurations` |
+| `403 forbidden` on a configuration | Reading needs `viewer` and writing needs `editor` in the project that holds it; configurations are no longer readable by every authenticated caller |
 
 ## Next
 
@@ -200,7 +220,10 @@ curl -s -X PUT http://localhost:3100/projects/Payments.json \
 
 *Sources of truth: [`openapi.json`](../../openapi.json) for the `tags` fields, the `?tags=`,
 `?filter=` and `?configuration=` query parameters, the configuration routes and schemas named here;
-the storage concept in the [repository README](../../README.md#storage-concept) for the flat
-`configurations/` layout; the [compatibility contract](../contracts/api-compatibility.md) for the
+the storage concept in the [repository README](../../README.md#storage-concept) for the
+`projects/<project>/configurations/<configId>.json` layout;
+[`docs/architecture/adr-storage-layout-v3.md`](../architecture/adr-storage-layout-v3.md) for why a
+configuration lives inside its project and is governed by it; the
+[compatibility contract](../contracts/api-compatibility.md) for the
 tags plan (#49) and the configurations activation plan (#69). Where this page and one of those
 disagree, the source wins and this page is a bug.*
