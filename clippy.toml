@@ -1,0 +1,18 @@
+# Clippy configuration for TucanoTestAPI.
+#
+# The crate-level `Cargo.toml` already sets `clippy::all = "deny"` and
+# `unsafe_code = "forbid"`. This file documents the thresholds the project
+# relies on, so a future clippy version that changes a default does not
+# silently shift the policy.
+#
+# See https://doc.rust-lang.org/clippy/configuration.html for the full list.
+
+# A function with more than seven arguments is hard to call correctly and hard
+# to refactor later. The Repository trait's largest method has six; anything
+# above seven is a signal to introduce a parameter struct.
+too-many-arguments-threshold = 7
+
+# A type with more nested generic parameters than this is hard to name and
+# harder to read. The service layer's largest type is `TestService<R>` with
+# one parameter; anything above the default is a signal to introduce a newtype.
+type-complexity-threshold = 250

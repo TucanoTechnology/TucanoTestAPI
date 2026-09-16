@@ -20,13 +20,13 @@ jobs:
       image: rust:1.98.0-bookworm
       # Shares the cached crates.io downloads with the other container jobs so
       # `cargo install cargo-audit` does not have to fetch them again; see the
-      # note in ci.yml and issue #123.
+      # note in the build-and-test job in ci.yml and issue #123.
       volumes:
         - tucanotestapi-cargo-registry:/usr/local/cargo/registry
         - tucanotestapi-cargo-git:/usr/local/cargo/git
     env:
-      # rust-toolchain.toml asks for the rustfmt and clippy components, which this
-      # image does not ship, so rustup re-syncs the channel manifest from
+      # rust-toolchain.toml asks for the rustfmt and clippy components, which
+      # this image does not ship, so rustup re-syncs the channel manifest from
       # static.rust-lang.org before the first cargo call. Naming the installed
       # toolchain keeps that call local; this job uses neither component.
       RUSTUP_TOOLCHAIN: "1.98.0"
@@ -98,14 +98,14 @@ jobs:
       image: rust:1.98.0-bookworm
       # Shares the cached crates.io downloads with the other container jobs so
       # `cargo install cargo-cyclonedx` and the dependency resolution behind
-      # `cargo cyclonedx` do not have to fetch them again; see the note in
-      # ci.yml and issue #123.
+      # `cargo cyclonedx` do not have to fetch them again; see the note in the
+      # build-and-test job in ci.yml and issue #123.
       volumes:
         - tucanotestapi-cargo-registry:/usr/local/cargo/registry
         - tucanotestapi-cargo-git:/usr/local/cargo/git
     env:
-      # rust-toolchain.toml asks for the rustfmt and clippy components, which this
-      # image does not ship, so rustup re-syncs the channel manifest from
+      # rust-toolchain.toml asks for the rustfmt and clippy components, which
+      # this image does not ship, so rustup re-syncs the channel manifest from
       # static.rust-lang.org before the first cargo call. Naming the installed
       # toolchain keeps that call local; this job uses neither component.
       RUSTUP_TOOLCHAIN: "1.98.0"
