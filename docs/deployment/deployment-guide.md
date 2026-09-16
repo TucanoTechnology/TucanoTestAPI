@@ -225,8 +225,8 @@ To roll back:
 
 1. Stop and remove the failing container (or point the Compose service back at the previously pinned
    tag) and start `$PREVIOUS` against the **same** `TUCANO_DATA_DIR`.
-2. Confirm `GET /health` answers and run [`scripts/smoke.sh`](../../scripts/smoke.sh) against the
-   restored port.
+2. Confirm `GET /health` and `GET /ready` answer and run
+   [`scripts/smoke.sh`](../../scripts/smoke.sh) against the restored port.
 3. If the release changed a stored document's shape, strictness or validation, follow the versioning
    plan recorded in [`docs/contracts/api-compatibility.md`](../contracts/api-compatibility.md), and
    restore the pre-change snapshot if that plan calls for it.
@@ -262,6 +262,11 @@ makes the failure recoverable. The decision table and the snapshot command live 
       `no-new-privileges`, unprivileged user, resource limits.
 - [ ] `GET /health` answers; the Swagger UI at `/api-docs` and `openapi.json` respond if the
       deployment exposes them.
+- [ ] Health probes wired to the two questions separately: `GET /health` for liveness (the process
+      is up) and `GET /ready` for readiness (the data directory behind it takes writes) — `200`
+      `{"status":"ready","storage":"filesystem"}` when it does, `503 not_ready` when it does not.
+      `GET /diagnostics` answers `200` either way with the individual checks, so it reads as evidence
+      rather than as the probe itself.
 - [ ] Multi-node deployments: shared storage with working advisory locks; no per-replica volumes.
 - [ ] Authentication decided: either the historic `TUCANO_AUTH_REQUIRED`-unset shape, or a signing
       secret plus a provisioned `$TUCANO_DATA_DIR/auth/` tree.

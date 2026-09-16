@@ -18,6 +18,48 @@ pub use layout::{
 use serde_json::Value;
 use std::io;
 
+/// What a readiness or diagnostics probe could learn about a store.
+///
+/// The probe is deliberately a plain value rather than a `Result`: a store that
+/// cannot be reached is exactly what readiness exists to report, so "missing",
+/// "not writable" and "no lock" are answers, not errors. Nothing here names a
+/// path — a probe is served to clients, and the storage-security rules keep
+/// deployment layout out of responses.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StorageProbe {
+    /// The data root exists and is a directory.
+    pub exists: bool,
+    /// A scratch file could be created and removed in the data root, which is
+    /// what persisting a document requires.
+    pub writable: bool,
+    /// The advisory lock the store serialises writes with could be taken. A
+    /// lock another replica already holds counts as available: the store works,
+    /// it is merely busy.
+    pub lockable: bool,
+    /// Some other process holds the lock right now.
+    pub lock_held: bool,
+    /// The most recent modification time seen on the data root itself or one of
+    /// its immediate entries, in seconds since the Unix epoch. It is a liveness
+    /// hint about the volume, not a per-document watermark.
+    pub last_write_unix: Option<u64>,
+}
+
+impl StorageProbe {
+    /// Whether the store can serve requests that write.
+    pub fn ready(&self) -> bool {
+        self.exists && self.writable && self.lockable
+    }
+
+    /// The probe of a store that could not be reached at all.
+    pub const UNREACHABLE: StorageProbe = StorageProbe {
+        exists: false,
+        writable: false,
+        lockable: false,
+        lock_held: false,
+        last_write_unix: None,
+    };
+}
+
 /// Storage operations the domain needs, expressed in terms of [`Resource`].
 ///
 /// Hierarchy resources (projects, suites, cases) are addressed with the
@@ -123,4 +165,11 @@ pub trait Repository: Send + Sync {
         step_index: usize,
         filename: &str,
     ) -> io::Result<()>;
+
+    /// Report what a readiness or diagnostics probe can learn about the store.
+    ///
+    /// This is the one operation that never fails: "the store is missing" is
+    /// the answer readiness exists to give, so it is reported in the returned
+    /// [`StorageProbe`] instead of as an error.
+    fn probe_readiness(&self) -> StorageProbe;
 }
