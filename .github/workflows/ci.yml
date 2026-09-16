@@ -52,6 +52,12 @@ jobs:
         - tucanotestapi-cargo-git:/usr/local/cargo/git
     steps:
       - uses: actions/checkout@v5
+      # The rust image ships no Node, so the two file-reading checks need one
+      # installed before they can run; this is the only outbound dependency
+      # this job adds, and it pins the major version.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
       - name: Check documentation links and page listings
         run: node scripts/check-docs-links.mjs
       - name: Check the operation reference is regenerated
