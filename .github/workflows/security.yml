@@ -53,9 +53,17 @@ jobs:
         # The file-count guard makes that claim checkable: if an extraction or
         # permission problem ever stops a tracked file from being scanned, the
         # job fails instead of passing over a smaller tree.
+        #
+        # The extraction lives under the workspace rather than in $TMPDIR: the
+        # runner's Docker only accepts bind mounts from paths it is configured
+        # to share, and the host's /tmp is not one of them (`mounts denied`).
+        # `git archive` writes out tracked paths only, so nothing extracted can
+        # collide with the checkout's own untracked scratch files.
         run: |
           set -euo pipefail
-          SCAN_DIR=$(mktemp -d)
+          SCAN_DIR="$PWD/.scan-extract"
+          rm -rf "$SCAN_DIR"
+          mkdir -p "$SCAN_DIR"
           git archive --format=tar HEAD | tar -x -C "$SCAN_DIR"
           chmod -R a+rX "$SCAN_DIR"
           SCAN_FILES=$(find "$SCAN_DIR" -type f | wc -l)
@@ -65,7 +73,10 @@ jobs:
             echo "::error::extracted ${SCAN_FILES} of ${TRACKED_FILES} tracked files"
             exit 1
           fi
-          docker run --rm -v "$SCAN_DIR:/repo:ro" zricethezav/gitleaks:v8.9.0 detect --source /repo --no-git --redact
+          rc=0
+          docker run --rm -v "$SCAN_DIR:/repo:ro" zricethezav/gitleaks:v8.9.0 detect --source /repo --no-git --redact || rc=$?
+          rm -rf "$SCAN_DIR"
+          exit "$rc"
 
   container-scan:
     runs-on: [self-hosted, Linux, X64]
