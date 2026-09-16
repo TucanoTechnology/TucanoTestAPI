@@ -140,13 +140,16 @@ from `docs/`; nothing is authored in the published surface.
     flattens `docs/wiki/` accordingly and rewrites each cross-page link; a link to a page that is *not*
     mirrored (a decision record, `AGENTS.md`, the README) is rewritten to an absolute URL in this
     repository, so it still reaches the real file.
-  - GitHub creates the wiki repository when its **first page is saved**, so it may not exist yet.
-    Three states are possible: a wiki with commits clones normally; an empty wiki clones with an
-    unborn `HEAD` and the publish commit seeds it; a wiki that was never created fails the clone
-    with exit 128 ("Repository not found"). The publish step handles all three — when the clone
-    fails, it initialises a fresh local repository, stages the pages, and pushes, which creates
-    the remote wiki on GitHub's side. A genuine access problem (bad token, network error) still
-    surfaces as a push failure.
+  - GitHub creates the wiki repository when its **first page is saved**. A wiki with commits clones
+    normally; an empty wiki clones with an unborn `HEAD` and the publish commit seeds it. A wiki that
+    was never created is *not* distinguishable from a token problem at the git level — GitHub answers
+    an unauthenticated caller with 403 ("Repository not found") for both — so the job probes
+    readability with `git ls-remote` before writing anything: an answer means the token was accepted
+    and the clone proceeds (empty wiki included), a refusal stops the job with the offending token
+    named, rather than failing later on a push whose access error would be hidden behind a misleading
+    "initialising from scratch" message. Seeding a wiki that does not exist is therefore a
+    prerequisite configured once (save any first page in the browser, then let the job overwrite it),
+    not something CI can work around.
 
   The mirror is one-way by construction: the job deletes the staged pages' predecessors and copies
   afresh, so nothing written in the browser survives a publish. Publishing requires a `WIKI_TOKEN`
