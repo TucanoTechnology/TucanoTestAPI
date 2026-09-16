@@ -17,14 +17,17 @@ boundary."* It carries findings only; nothing here is fixed. Remediation belongs
 
 - **Affected revision (the pinned target):** `c5e99431389854368ab3a8e07003622f34dfdd21`
 - **Method:** [audit-scope.md § 6](audit-scope.md#6-how-the-audit-tasks-run), steps 1–7.
-- **Findings so far:** **seven** — `F-177-1`…`F-177-4`, all Low, plus `F-177-5` (Medium), `F-177-6`
-  (High), the two the configuration-file boundary's container arm produced, and `F-177-7` (Low), the
-  hardlink read-through S2-3's fixture 6 turned up. §6 has confirmed the
-  calibration for the two worked examples and for the first four pairs; the **count** stays provisional
-  because a sub-task still to run can add a finding, and §6's list of what it has re-read is updated
-  below to seven.
-- **Pass entries so far:** twenty-three, in the [Pass entries](#5-pass-entries) section.
-- **Executed:** S2-1, S2-2, S2-3, S2-4, S2-6 (partial), S2-7, S2-9, S2-13, S2-14
+- **Findings so far:** **seven**, with the pair behind each: Low are `F-177-1` (Difficult ×
+  Moderate), `F-177-2` (Difficult × Moderate), `F-177-4` (Moderate × Limited) and `F-177-7`
+  (Difficult × Moderate, the hardlink read-through S2-3's fixture 6 turned up); Medium are `F-177-3`
+  (Moderate × **Moderate** — **re-graded in this checkpoint** from Low on S2-8's measurements, pass
+  entry 24, the reason being recorded in the finding) and `F-177-5` (Trivial × Limited); High is
+  `F-177-6` (Trivial × Moderate). The last two are what the configuration-file boundary's container
+  arm produced. §6 has confirmed the calibration for the two worked examples and for all seven pairs;
+  the **count** stays provisional because exactly one sub-task still to run — S2-12 — can add a
+  finding, and §6's list of what it has re-read is updated below to seven.
+- **Pass entries so far:** twenty-four, in the [Pass entries](#5-pass-entries) section.
+- **Executed:** S2-1, S2-2, S2-3, S2-4, S2-6 (partial), S2-7, S2-8, S2-9, S2-13, S2-14
   (partial), **S2-15 (complete — both halves: the `#189` question is answered and recorded in O-177-11,
   and the file-boundary probes have run against the image, producing F-177-5, F-177-6, O-177-12 and pass
   entries 15–17)**. S2-3 is complete rather than partial as of this checkpoint: its owed symlinked
@@ -36,12 +39,16 @@ boundary."* It carries findings only; nothing here is fixed. Remediation belongs
   complete as well: ten timed `SIGKILL`s mid-write are pass entry 22, and it claims no power-loss
   durability. S2-11 is complete as well: its overwrite-contract table — every row measured against an
   existing identifier, against a missing one, with a post-failure leftover check — is pass entry 23,
-  and it produced O-177-14.
-  **Not executed:** S2-8, S2-12 (partial).
+  and it produced O-177-14. S2-8 is complete as well: it was re-provisioned on a disk-backed volume,
+  and its three arms — two replicas on one data directory, the single-replica control, and the
+  slow-writer race — are pass entry 24, which localises `F-177-3`'s mechanism without adding a finding
+  of its own. It also produced O-177-15.
+  **Not executed:** S2-12 (partial).
 - **Throwaway stack:** re-provisioned for the S2-15 container arm with every build step `CACHED` from
   the pinned revision, and **retained** at `tucano-test-audit-177:c5e9943` for the next checkpoint; the
-  earlier tear-down and the re-provisioning are both recorded in [§7](#7-tear-down-step-7). A later
-  checkpoint starts the outstanding sub-tasks with `docker compose -p audit-177 up -d`.
+  earlier tear-down and the re-provisioning are both recorded in [§7](#7-tear-down-step-7). The S2-8
+  pair is a separate stack on a disk-backed directory — see §7's *live at the end of this checkpoint*.
+  A later checkpoint starts the outstanding sub-tasks with `docker compose -p audit-177 up -d`.
 
 ## 1. Revision pinned
 
@@ -490,19 +497,51 @@ every mutating call site, with the one deliberate exception above named rather t
 
 ### F-177-3: Concurrent writes are acknowledged with `200` and then silently discarded
 
-- **Severity:** **Low** — Difficult × Moderate. The trigger is a race, which the rubric places on the
-  Difficult row, and the effect is loss of data inside a scope the writer is already authorised to
-  write. The default-configuration escalation was considered and **not** applied: it would apply to
-  any authenticated client with two open requests, but no attacker gains anything — the loss is
-  symmetric among the writers who are entitled to the resource, and the report chose the reading that
-  the race precondition already carries the weight. The Medium reading (Trivial × Moderate, or Low
-  escalated one level) is arguable and a later reader may take it; the evidence below is what matters.
-- **In scope:** S2-7; trust boundary 4 (service → stored JSON); invariant 2 — the surviving document
-  is always complete and always valid, but a write the API *acknowledged* can be absent from it.
-- **Where:** the document write path (`src/domain/service.rs` → the storage layer's read-modify-write
-  for a case document) and the advisory lock at `src/storage/fs.rs:36` with its eight unlock sites.
-  The audit measured the behaviour and did **not** localise the exact window this checkpoint, so the
-  mechanism below is inferred from the two experiments and said so.
+- **Severity:** **Medium** — Moderate × Moderate, **re-graded in this checkpoint** from Low
+  (Difficult × Moderate) on S2-8's measurements (pass entry 24). § 5 asks every change of score to
+  state its reason, so that a later reader can disagree with the reason rather than with the number;
+  both the reason and the readings that were **not** taken are here. The **impact** axis is unchanged
+  and *Moderate*: the loss is silent, irreversible and leaves no history entry, but it stays inside
+  the authorization scope of the writers entitled to that case. The **exploitability** axis moved
+  from *Difficult* to *Moderate* for two reasons that converge. First, this is not the race the
+  Difficult row means — a window the attacker cannot reliably reach — because it is won essentially
+  every time: in the two-replica storm **23** of 50 acknowledged writes were discarded and in the
+  single-replica control **25** of 50, and with an ordinary 1 MiB case document racing a small one
+  **9 of 20** acknowledged writes left no trace, which is the Moderate row's own test, "repeatable
+  without special conditions". Second, § 5's escalation clause applies on its own terms: the defect is
+  remotely reachable in a **default** configuration and needs no unusual configuration, because the
+  single-replica control shows it needs no second replica at all — the shipped stack is one
+  container, and any client with write access to a case can destroy that case's edits with two
+  concurrent requests. The earlier checkpoint declined that escalation on the ground that "no attacker
+  gains anything — the loss is symmetric among the writers who are entitled to the resource"; that is
+  a statement about the impact axis, where it is already priced as *Moderate*, while the escalation
+  clause asks about reachability rather than about what the attacker gains. Readings considered and
+  **not** taken: *Trivial × Moderate → **High*** — the Trivial row needs "no account and no special
+  position", and the shipped configuration authenticates, so the writer needs a valid account and a
+  grant on that case; and *Difficult × Moderate → Low* as previously scored — the reading a reviewer
+  may prefer if they hold a race to be Difficult however reliably it is won, which is why the measured
+  loss rates are quoted above rather than summarised. Nothing here is scored below its impact axis.
+- **In scope:** S2-7 and S2-8; trust boundary 4 (service → stored JSON); invariant 2 — the surviving
+  document is always complete and always valid, but a write the API *acknowledged* can be absent from
+  it.
+- **Where:** the document write path, **localised in this checkpoint** — S2-8 (pass entry 24) is the
+  measurement that made it attributable. `Service::update` (`src/domain/service.rs:212`) reads the
+  stored document **with no lock held** (`:215–218`, the `read_at` at `:217`); `revise_case`
+  (`:1061`) derives `current` from that unlocked read (`:1073`) and calls `save_revision`
+  (`src/storage/fs.rs:618`), which takes the lock at `:625` and then, when a snapshot for `current`
+  already exists, **returns `Ok(())` without writing anything** (`:635–637` — "A revision snapshot is
+  immutable: an existing one is never rewritten"); `revise_case` then stores `version = current + 1`
+  anyway (`service.rs:1083`), and only the final `write_marker` → `write_at` (`fs.rs:517`, lock at
+  `:524`) is serialised. That is three separate critical sections, so the read-modify-write is not
+  atomic, and the middle one makes the drop invisible: two writers that read the same version both
+  claim the next one, the second one's snapshot is discarded silently, its document overwrites the
+  first at the same version number, and both callers are answered `200`. The intended shape is
+  visible in the same file — `save_attachment` (`fs.rs:583`) holds **one** lock from `:591` to `:614`
+  across its whole file-plus-metadata read-modify-write, which is exactly what the document path does
+  not do. The advisory lock itself is `acquire_lock` (`fs.rs:37`) over `root/.tucano.lock`, and its
+  probe (`probe_lock`, `fs.rs:791`) reports it released between requests in every measurement of pass
+  entry 24. The earlier checkpoint's version of this bullet said the mechanism was **inferred, not
+  localised**; the inference was correct, and the chain above replaces it.
 - **Affected revision:** `c5e99431389854368ab3a8e07003622f34dfdd21` (`tucano-test-audit-177:c5e9943`).
 - **Reproduction.** Against the throwaway stack in §2 (authentication off, host port 3320):
   1. `POST /projects {"name":"S27"}` → `201`; `POST /projects/S27.json/test_cases
@@ -513,6 +552,12 @@ every mutating call site, with the one deliberate exception above named rather t
      --data-binary "{\"title\":\"S27 writer $i\",\"expectedResult\":\"ok\"}" & done; wait`
   3. `GET /test_cases/TC-S27` and `GET /test_cases/TC-S27/history`.
   4. Control: repeat the same 32 requests **sequentially** in a fresh project (`S27seq`).
+
+  S2-8 re-ran the reproduction where the filesystem type is the one a real deployment uses: on a
+  **disk-backed** volume (`ext4`; `stat -f -c %T /data` → `ext2/ext3` inside the container), with the
+  same directory mounted by **two** replicas (`127.0.0.1:3321` and `:3322`), then by **one** replica
+  as a control, then with a 1 MiB `PUT` racing a small one. Commands, fixtures and the raw per-round
+  status codes are in pass entry 24.
 - **Observed.** Concurrent run: **all 32 requests returned `200`**, and the stored document reports
   `"version": 17` with **16** history entries and **16** files in `revisions/`. Sequential control:
   **all 20 requests returned `200`** with `"version": 21`, **20** history entries and **20**
@@ -522,13 +567,35 @@ every mutating call site, with the one deliberate exception above named rather t
   surviving titles in `revisions/` show one writer per round, e.g. round 4 kept writer A and silently
   dropped writer B. No document was ever left malformed, no partial file appeared, and the failed
   writes of the over-long-identifier probe (F-177-4) left nothing behind.
+
+  On the disk-backed volume the same loss appears, with the same shape, at **both** replica counts.
+  Two replicas, 25 rounds × 2 concurrent `PUT`s against one data directory → **all 50 `200`**, the
+  final document `{"title":"A-25","version":28}` identical on **both** replicas, **27** snapshots on
+  disk: **23 acknowledged writes discarded**, in 23 of the 25 rounds. One replica, the same storm →
+  **all 50 `200`**, `{"title":"Q-25","version":26}`, **25** snapshots: **25 discarded, one in every
+  round**. Neither arm produced a single `409` or any other refusal, no `GET` ever saw a torn or
+  interleaved document, and a walk of the whole tree found no `.tucano-*` temp file and no `*.tmp`
+  left behind. The slow-writer arm — a 1 MiB `description` racing a small `PUT`, ten attempts —
+  acknowledged **20** writes and kept **11** (`"version": 12`, `v1`…`v11`): **9 of 20 discarded**,
+  and in attempts 2–9 the fast writer's value was never observable even in the `GET` issued after its
+  own `200`. Attempt 1 is the exception that shows the sharper failure: the fast value (`FAST-1`,
+  version 2) *was* visible to a client that read it back, and the next version on disk — `SLOW-1` at
+  version 3 — reverted it, with both requests answered `200`.
 - **Expected.** Either a write the service acknowledges is durable — 32 accepted writes produce 32
   versions — or a write that will not be applied is refused with a `409` conflict, as duplicate
   creation already is. An accepted `200` that leaves no trace is a false success signal, and a client
-  cannot tell which of its two concurrent edits survived.
+  cannot tell which of its two concurrent edits survived. The design's S2-8 expectation
+  (`audit-design-176-178.md:1015–1017`) splits the same way against this measurement: *no torn
+  document* held — no reader ever saw a half-updated document, at either replica count — while *the
+  lock serialises the writers* did not: each critical section is serialised and the read-modify-write
+  is not, which is the whole of the defect.
 - **Impact.** Silent, non-recoverable loss of a collaborator's or of the same client's just-accepted
   edit. `changedFields` history loses the entry too, so the loss leaves no audit trail. Confined to
-  the writers' own authorisation scope, so Moderate rather than Severe. The overwrite/locking
+  the writers' own authorisation scope, so Moderate rather than Severe. S2-8 puts a rate on it: under
+  exact concurrency the loss is the rule rather than an occasional window — 23 and 25 discarded writes
+  out of 50, and 9 of 20 when one document is much larger — so a client whose request was accepted
+  cannot rely on the value it reads back either, because attempt 1 of the slow-writer arm read its own
+  value at version 2 and found it gone at version 3. The overwrite/locking
   semantics are still listed as an **open decision** in `threat-model.md` ("Locking implementation
   and overwrite/conflict semantics"), which is why the design asks for this to be *measured*; the
   measurement now exists and the decision can be made against it.
@@ -959,6 +1026,10 @@ which is the capability boundary 3 exists to contain rather than to be probed fr
 and not scored** — and recorded chiefly so S2-12's `DomainError`-by-layer table does not rediscover it.
 (Boundary 3; boundary 8.)
 
+Two later observations are recorded in §5 instead of here, each next to the measurement that produced
+it: `O-177-14`, the identifier the API reports against the one it accepts (pass entry 23), and
+`O-177-15`, the readiness probe advancing `lastWriteUnix` (pass entry 24).
+
 **Pending triage — measured, and now decided.** The following results were produced by the S2-4
 identifier probes. They are recorded so the measurement is not lost; every row is now either a scored
 **finding**, a **pass entry**, or a recorded **observation**, and no row is left unscored:
@@ -1218,6 +1289,66 @@ append `.json` to the *name*, and the initial probe batch of this sub-task was r
 above: `C1` was the fixture case the earlier sub-tasks planted, so the table's "existing identifier"
 column is exercised by cases this checkpoint created, not by import of a pre-existing tree.
 
+24. **Two replicas on one disk-backed data directory acknowledge fifty concurrent writes and discard
+    twenty-three of them; one replica discards one write in every round.** S2-8, re-provisioned onto a
+    real volume because the previous checkpoint's row could not be answered from a `tmpfs` fixture —
+    the design requires the arm's filesystem to be measured (`audit-design-176-178.md:1018–1020`, "an
+    overlay/tmpfs result does not transfer to a real volume"). `findmnt` on the host gives the bind
+    source `/var/tmp/audit-177-disk` → **`ext4 /dev/nvme0n1p2`**, and inside *both* containers
+    `stat -f -c %T /data` answers **`ext2/ext3`** — a real block-device filesystem, so the caveat is
+    satisfied. Two replicas (`a` on 3321, `c` on 3322) mounted that directory and ran 25 rounds of two
+    concurrent `PUT /test_cases/C1`, the bodies differing only in `title` (`A-<n>` from one replica,
+    `C-<n>` from the other). **All 50 requests returned `200`**, both replicas then served the
+    byte-identical document
+    `{"expectedResult":"e","lastModified":"2026-09-16T10:14:44Z","testCaseId":"C1","title":"A-25","version":28}`,
+    and `revisions/` held **27** snapshots (`v1`…`v27`): 50 acknowledged writes, 27 applied versions,
+    **23 gone** — in 23 of the 25 rounds; two rounds applied both — and neither replica ever answered
+    `409` or refused anything. A walk of the whole tree found no `.tucano-*` temp file and no `*.tmp`,
+    the only dot-entry in the data root is `data/.tucano.lock`, and all **67** stored `*.json`
+    documents parse. The loss is silent in every sense: nothing refused, nothing malformed, nothing
+    left behind.
+    *One replica is enough.* The same storm against a **single** container (case `C2`, 50 requests)
+    also returned **all 50 `200`** and left `{"title":"Q-25","version":26}` over **25** snapshots:
+    **25 discarded, exactly one per round**. The control is what makes the first arm attributable — it
+    shows the loss happens inside one process, so it is `F-177-3`'s unlocked read-modify-write and not
+    a lock-scope effect, and it is reachable in the shipped single-container deployment. The `Where`
+    bullet of that finding carries the code-level chain this arm localises.
+    *A large document widens it.* Ten rounds of one slow 1 MiB `PUT` (case `C3`) racing one small `PUT`
+    acknowledged **20** writes and stored **11** (`"version": 12`, `v1`…`v11`): **9 discarded**. In
+    attempts 2–9 the fast value is not observable even in the `GET` issued immediately after its own
+    `200`; in attempt 1 it was observable and then reverted — mid-flight `FAST-1 FASTE-1 v2 d0`,
+    final `SLOW-1 SLOWE-1 v3 d1048576` — so a client can read a value back and later find it gone.
+    Every `c3-slow-*.code` recorded `200`.
+    *At rest both replicas are healthy.* `/diagnostics` →
+    `{"exists":true,"lastWriteUnix":1789553864,"lockHeld":false,"lockable":true,"ready":true,"storage":"filesystem","writable":true}`
+    and `/ready` → `{"status":"ready","storage":"filesystem"}`; the lock is not held between requests,
+    which is the mechanism rather than a fault.
+    *What this arm does not claim.* Nothing about the lock's scope across hosts: both replicas share
+    one `flock` on one machine, which the design records as an Info observation and this entry does
+    **not** score — the single-replica control is what removes it as a cause. The divergence window's
+    *size* is not measured, only its existence and its rate. The arm adds **no** finding of its own.
+    Read against the design's expectation (`audit-design-176-178.md:1015–1017`) the split is exact:
+    "no torn document" **held** — every document read back was complete and none interleaved — while
+    "the lock serialises the writers" **did not**: each critical section is serialised and the
+    read-modify-write that spans them is not, which is the whole of `F-177-3`. (Boundary 5;
+    invariant 1; the DoD's concurrency item.)
+
+**O-177-15 — `lastWriteUnix` is advanced by the readiness probe itself, so the field does not separate
+"writers have stalled" from "the operator polled `/ready`".** `probe_readiness`
+(`src/storage/fs.rs:745–761`) reads `newest_mtime` (`:751`, implemented at `:813` over the data root
+and its immediate entries) *before* `probe_writable` (`:768`) creates and removes its own scratch file
+`root/.tucano-<suffix>.tmp` in that same root. The probe therefore leaves its own file out of the value
+it returns — but creating and removing it still bumps the **data root's** mtime, which the *next*
+probe reads as the newest write. Measured on the S2-8 stack: with the data root at
+`2026-09-16 07:17:44.775442391 -0300`, `/diagnostics` reported `lastWriteUnix 1789553864`; one
+`GET /ready` later the root mtime was `07:18:48.357905454` and the next `/diagnostics` reported
+`lastWriteUnix 1789553928` — the only writer in that interval was the probe. Recorded as an
+observation, not a finding: the scratch file is removed, nothing is over-permissive, and the endpoint
+is documented as a readiness report, not as an audit log. What it costs is diagnosability: an operator
+who monitors `/ready` keeps the field moving by monitoring it, and since `write_json` uses the same
+`.tucano-<suffix>.tmp` convention, a fresh `lastWriteUnix` is not evidence that a *client* write
+landed. (Boundary 4.)
+
 Outside the numbered entries, S2-14 found the same shape on the auth tree: `/auth`, `/auth//`,
 `/data/auth`, `/auth/projects`, and `/projects/../auth` all return **404**, and `/auth/me` returns
 **401** without a token — no route lists, reads, or writes the store under `TUCANO_DATA_DIR/auth/`.
@@ -1262,22 +1393,26 @@ which is the one case that does not echo the value (`F-177-6`). This is source-l
 pinned revision, not evidence about the built image: the image was
 audited by the API probes, the baselines by the test binaries compiled from the same revision.
 
-Not yet credited in this checkpoint (and deliberately not listed as passes): two replicas on one data
-directory (S2-8) and the full error-leak table (S2-12). Four sub-tasks have left this list since the
+Not yet credited in this checkpoint (and deliberately not listed as passes): the full error-leak table
+(S2-12). Five sub-tasks have left this list since the
 previous checkpoint:
 atomicity under `SIGKILL` (S2-5), whose ten timed kills and clean-aftermath walk are pass entry 22,
 the overwrite contract (S2-11), whose per-operation table is pass entry 23,
 attachment and revision publication (S2-10), whose three arms are pass entry 21, and the
 configuration-file boundary (S2-15), both of whose halves are settled — the *key* half by O-177-11 (`#189`
 is open, so the key boundary is documented-pending by the design's own pre-commitment, not unprobed),
-the *file* half by pass entries 15–17 after the container arm ran. The three symlink baselines
+the *file* half by pass entries 15–17 after the container arm ran. The fifth is the two-replica arm
+(S2-8), whose three arms are pass entry 24: it was re-provisioned on a real volume because the row it
+left behind said a `tmpfs` result would not transfer, and it is the measurement `F-177-3`'s re-grade
+rests on. The three symlink baselines
 correspond to the fixtures measured in entries 5–6 above; the symlinked-*attachment* fixture S2-3 also
 names has since been planted and refused at the API — the attachment file, the dangling variant of it
 and the case folder itself (pass entries 18–19, O-177-13) — so S2-3 is no longer partial; its fixture 6
 (the outside-file hardlink) has since been planted as well, and it did **not** hold, which is why it
 appears in §4 as F-177-7 rather than on this list. `F-177-3` names
 `test_concurrent_writes_do_not_corrupt` — now re-run green — as the place a durability regression test
-belongs, because the baseline as written cannot fail on an acknowledged-but-lost write.
+belongs, because the baseline as written cannot fail on an acknowledged-but-lost write; pass entry 24
+measures that loss on a disk-backed volume and `F-177-3`'s *Where* bullet localises it in the code.
 
 ## 6. Calibration confirmed
 
@@ -1313,25 +1448,31 @@ re-confirmed.
   them, which the rubric requires before the pair becomes a number: F-177-1 *Difficult × Moderate* →
   **Low**, with the design's competing **Medium** reading ("another local principal on a default
   deployment") written down and the reason the lower one is taken; F-177-2 *Difficult × Moderate* →
-  **Low**; F-177-3 *Difficult × Moderate* → **Low**; F-177-4 *Moderate × Limited* → **Low**; F-177-5
+  **Low**; F-177-3 *Moderate × Moderate* → **Medium**, **re-graded in this checkpoint** from
+  *Difficult × Moderate* → Low on S2-8's measurements (pass entry 24), because the loss is won in
+  essentially every round rather than in an occasional race and because the escalation clause reaches a
+  defect the shipped single-container stack hits, with both the reason and the two readings *not* taken
+  (*Trivial × Moderate* → High; *Difficult × Moderate* → Low) written into the finding; F-177-4
+  *Moderate × Limited* → **Low**; F-177-5
   *Trivial × Limited* → **Medium**, the Trivial row of the matrix, with the de-escalation question
   answered in the entry (the defect does not depend on an unrecommended configuration — the revision's
   contract is that the refusal names the setting in every configuration); F-177-6 *Trivial × Moderate*
   → **High**, with the competing *Limited → Medium* reading written down and the reason the higher one
   is taken; F-177-7 *Difficult × Moderate* → **Low**, the hardlink arm of S2-3's own fixture 6, with
   the excluded precondition spent on the exploitability axis. No finding is scored below its impact
-  axis, and the two that could have escalated
-  (F-177-1, F-177-2) state why escalation does not apply: neither is reachable in the shipped default
-  without a position on the data volume. One consequence is recorded here rather than left for a reader
-  to notice — **five of the seven are Low and the two the configuration-file boundary added are not
-  (Medium and High), so §4's order is neither a severity ranking nor an order by band.** It follows the
+  axis. Of the three the escalation clause could have reached, two do not escalate — F-177-1 and
+  F-177-2 state why: neither is reachable in the shipped default
+  without a position on the data volume — and the third, F-177-3, does, for the reason recorded above
+  and in the finding. One consequence is recorded here rather than left for a reader
+  to notice — **four of the seven are Low, two are Medium (F-177-3, re-graded, and F-177-5) and one is
+  High, so §4's order is neither a severity ranking nor an order by band.** It follows the
   order §3 enumerates the surface: the permission call sites (F-177-1), then the document path
   (F-177-2, F-177-3), then the identifier and error-class path (F-177-4), and finally the
   configuration-file boundary, whose two findings were written last because they were measured last.
   Comparing severity across S2's findings means comparing the pairs, not the sequence.
-- **What this section does not yet confirm:** that seven is the final count. S2-8 and
-  S2-12 can each still add a finding, and a new finding changes the surface's distribution — which is
-  why the header marks the count provisional. §6 is re-confirmed, not rewritten, in the closing
+- **What this section does not yet confirm:** that seven is the final count. S2-12 is the one
+  sub-task left that can still add a finding, and a new finding changes the surface's distribution —
+  which is why the header marks the count provisional. §6 is re-confirmed, not rewritten, in the closing
   checkpoint; the two examples and the seven pairs above will not change unless a later sub-task
   contradicts one of them.
 
@@ -1348,10 +1489,10 @@ Recorded 2026-09-16, at the end of the window that produced this checkpoint.
 | Confirm nothing is left | `docker ps -a --filter name=audit-177`; `docker images \| grep audit-177` | No container, no image |
 | Confirm the operator's instance is untouched | `docker ps` | `tucano-test-api-1` still `Up 34 hours`, `tucano-test-gui-1` still `Up 34 hours`. **Note for the next reader:** `docker inspect` reports that container's `Config.Image` as `tucano-test-api:local` but its image id as `13f10c0e9208` (built 2026-09-09), while the tag `tucano-test-api:local` now resolves to `8f075af3c2e7` (built 2026-09-15) — the tag was rebuilt at some point without the running container being recreated. This audit did not build or re-tag that image and did not touch that container; the observation is recorded only so a later checkpoint does not read the mismatch as evidence of this window's work |
 
-The throwaway volume was `tmpfs` on the host's `/tmp`, which is why S2-8's result cannot be taken from
-this checkpoint's stack (see the *Not yet executed* row): the sub-task has to be re-provisioned on a
-disk-backed directory. The audit's own scratch state is gone; the evidence that survives is this file
-and the pushed commits.
+The throwaway volume of the first stack was `tmpfs` on the host's `/tmp`, which is why S2-8's result
+could not be taken from it: the sub-task was re-provisioned on a disk-backed directory, and that is
+pass entry 24 (see also *live at the end of this checkpoint* below). The audit's own scratch state is
+gone; the evidence that survives is this file and the pushed commits.
 
 **Re-provisioned, later in the same window, for S2-15's container arm.** The sub-task's file half needs
 the image, so the stack was rebuilt from the same revision with `docker compose build` — every step
@@ -1364,19 +1505,30 @@ else was left running: `docker ps` reports only the operator's `tucano-test-api-
 and `open-webui`. This is a change of state from the tear-down table above and is recorded here rather
 than by editing that table, which keeps the record of what the tear-down did.
 
+**Live at the end of this checkpoint.** Three audit containers are up, all from the pinned revision's
+image: the S2-8 pair `audit-177-disk-a-1` (127.0.0.1:3321) and `audit-177-disk-c-1` (127.0.0.1:3322),
+each bind-mounting `/var/tmp/audit-177-disk/data`, plus the earlier `audit-177-api-1` (3320) on the
+`tmpfs` fixture at `/tmp/audit-177/data`. The S2-8 fixtures sit on `/var/tmp`, which is `ext4` on this
+host and survives a reboot, so the pair's state — `data/.tucano.lock`, `projects/S28/` with `C1` (27
+revisions, `version` 28), `C2` (25, 26) and `C3` (11, 12), and the `s28-storm.log`, `s28-single.log`,
+`s28-stale.log` and `c3-slow-*.{json,code}` transcripts — is the evidence pass entry 24 is written
+from and can be re-read by a later checkpoint. The `/tmp/audit-177/` fixtures are on `tmpfs` and are
+not: they survive only until the next reboot.
+
 ## Not yet executed in this checkpoint
 
 The following sub-tasks of [audit-design-176-178.md](audit-design-176-178.md) §"#177" §3 have not run
 to completion. Each names what it is for, so a reader can see the shape of what is missing rather
 than only its absence. Rows marked **partial** have measured results in §4/§5; what they still owe is
 in the second column. S2-6 and S2-14 have run and keep a row only to name what their run
-did **not** cover; S2-1, S2-3, S2-4, S2-5, S2-7, S2-9, S2-10 and S2-13 have now run in full, so their rows are gone
+did **not** cover; S2-1, S2-3, S2-4, S2-5, S2-7, S2-8, S2-9, S2-10 and S2-13 have now run in full, so their rows are gone
 (S2-5's ten timed `SIGKILL`s are pass entry 22 and it claims no power-loss durability;
 S2-9's third arm, the revision write, is pass entry 20; what S2-9 still cannot
 show is a lock observed *held* — its probes measure release, not exclusion; S2-10's three arms are
 pass entry 21, and what S2-10 still cannot show is a torn body: the recipe that was to produce one
 turned out unreachable, so the *consequence* of a short body was measured instead, not its
-production), and
+production; S2-8's three arms are pass entry 24, run on a disk-backed volume as its old row demanded,
+and it claims nothing about cross-host lock scope), and
 S2-15 has now run both halves — the `#189` question in O-177-11 and the file-boundary probes in pass
 entries 15–17 — so its row is gone as well (its two findings and one observation are in §4). S2-3's row
 is gone for the same reason: the attachment fixtures it owed are pass entries 18–19, and its fixture 6
@@ -1385,7 +1537,6 @@ ran too — as F-177-7 in §4, because the hardlink arm did not hold.
 | Sub-task | What is missing |
 | --- | --- |
 | **S2-6 (partial)** | Truncation, invalid UTF-8, and a 100 MiB replacement are measured (pass entries 7–9). The wrong-shape JSON case is measured **and is a finding** instead of a pass (`F-177-2`). No further variants are owed, and the calibration pass §6 owed `F-177-2` has now run; the row stays only until §6 is re-confirmed at the closing checkpoint. |
-| **S2-8** | Two replicas against one data directory, with the filesystem type of the throwaway volume recorded — note that this checkpoint's volume is `tmpfs`, so this sub-task's result does **not** transfer to a real volume and the arm must be re-provisioned on a disk-backed directory before its result may be written up. |
 | **S2-12 (partial)** | The error samples recorded so far are in §4's pending-triage and pass entries 7–11 (`storage_error` for corruption, the wrong-shape-JSON `200`, traversal `invalid_request` 400, conflict 409, not-found 404, the empty-body 404 fallback, unauthorized 401, and the length-overflow `500 storage_error` of `F-177-4`, plus the history routes' **405 with an empty body** measured for S2-10). The DoD item — the full `DomainError`-by-layer table — is not written, and `O-177-5` records that the storage failures collapse into one undifferentiated `storage_error`. One measured fact already belongs in that table's log column: the service logs **nothing** at startup, cleanly or otherwise (pass entry 16), so a failure that only appears in the console is the configuration refusal and nothing else. |
 | **S2-14 (partial)** | The auth surface is unreachable anonymously (§5, unnumbered note): `/auth`, `/auth//`, `/data/auth`, `/auth/projects`, `/projects/../auth` → **404**, `/auth/me` → **401**. What is owed is the **authenticated** arm, i.e. creating an auth store and confirming no project route can then reach it. |
 
