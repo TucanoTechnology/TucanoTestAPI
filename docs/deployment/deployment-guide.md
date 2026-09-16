@@ -49,12 +49,57 @@ and the container holds nothing that must survive a restart:
 - **The volume is inspectable.** Because the files are ordinary JSON, an operator can read, snapshot
   and archive them without the API. The layout is documented in the *Storage concept* section of
   [`README.md`](../../README.md) and in
-  [`docs/architecture/rust-service-core.md`](../architecture/rust-service-core.md).
+  [`docs/architecture/rust-service-core.md`](../architecture/rust-service-core.md); its decision of
+  record is [`docs/architecture/adr-storage-layout-v3.md`](../architecture/adr-storage-layout-v3.md).
 - **The port is not the state.** Host port `3100` (Compose) or `3000` (plain `docker run`) is where
   the API answers; which port it uses has no bearing on what is stored.
 
 This is the property that makes both scaling and rollback possible: two containers pointed at the
 same `TUCANO_DATA_DIR` see the same data.
+
+### Storage layout v3 and legacy volumes
+
+Since layout v3 ([#215](https://github.com/TucanoTechnology/TucanoTestAPI/issues/215)) a test run, a
+milestone and a configuration each live inside the project that governs them, as a flat `<id>.json`
+under `projects/<project>/test_runs/`, `projects/<project>/milestones/` and
+`projects/<project>/configurations/`. A volume written by an earlier build keeps those three
+collections at the root of `TUCANO_DATA_DIR` instead, so the service **refuses to start** rather than
+serve a data set it can only partly read: before the listener binds, the storage layer counts the
+`*.json` documents in the root `test_runs/`, `milestones/` and `configurations/`, and aborts with a
+message naming the counts and this document:
+
+```text
+legacy flat storage layout detected: test_runs/ holds 3 document(s), milestones/ holds 1 document(s);
+layout v3 stores runs, milestones and configurations inside their project folder — move each
+document into projects/<project>/<collection>/ and restart (docs/deployment/deployment-guide.md)
+```
+
+The check is read-only. It counts plain `*.json` files and nothing else: an absent directory, an
+**empty** one (the pre-v3 build created all three on startup, so most volumes have one), a
+subdirectory, a symlink and the atomic-write temporary pattern `.tucano-*.tmp` are all ignored.
+Nothing is moved, rewritten or deleted — a legacy document is left exactly where the operator put
+it.
+
+**Nothing is migrated automatically and no migration script ships.** Which project a document
+belongs to is a judgement call, not a deduction: a run whose `projects` array is empty and a
+configuration — which names no project at all — have no recorded project to be filed under. The
+recipe:
+
+1. **Stop the service** (`docker compose stop api`), so nothing writes while files move.
+2. **Copy the volume** before touching it:
+   `tar -C "$DATA_DIR" -czf "tucano-data-$(date +%Y%m%d-%H%M%S).tgz" .`
+3. **Move each document into its project.** Create
+   `$DATA_DIR/projects/<project>/{test_runs,milestones,configurations}/` as needed and move the file
+   in: a run goes to a project its `projects` array names, a milestone to a project its
+   `testSuiteIds`/`testRunIds` reach, a configuration to the project you decide governs it. A run
+   with no `projects` and every configuration need that decision from you.
+4. **Restart the service.** A clean start confirms every document was placed; a refusal reports the
+   count still sitting at the root. The same documents are then served through the project-scoped
+   routes.
+
+The refusal is deliberately loud rather than silent: answering `[]` from a listing route while
+documents sit unread at the root is the kind of wrong answer this service refuses everywhere else,
+and a container that will not start is actionable and reversible.
 
 ## Compose configuration
 
@@ -229,7 +274,8 @@ To roll back:
    [`scripts/smoke.sh`](../../scripts/smoke.sh) against the restored port.
 3. If the release changed a stored document's shape, strictness or validation, follow the versioning
    plan recorded in [`docs/contracts/api-compatibility.md`](../contracts/api-compatibility.md), and
-   restore the pre-change snapshot if that plan calls for it.
+   restore the pre-change snapshot if that plan calls for it. A release that changed *where*
+   documents live instead is the other case — see *Rolling back across storage layout v3* below.
 
 ### What the compatibility guarantees cover
 
@@ -254,10 +300,29 @@ recorded versioning/migration plan — and a pre-change snapshot, which is the c
 makes the failure recoverable. The decision table and the snapshot command live in
 *What rollback guarantees about the shared volume* in the promotion runbook.
 
+### Rolling back across storage layout v3
+
+A layout change is not a shape change, and the compatibility guarantees above do not cover it. A v2
+image started against a v3 volume reads no root collections and finds nothing where it looks: it
+answers `404` for runs, milestones and configurations, and `GET /milestones/{id}/progress` reports
+zeros because it skips the runs it cannot find. The documents are untouched — a v3 image started
+again serves them — but the rollback is not a drop-in substitute for the promoted build.
+
+Full rollback therefore means restoring the pre-change snapshot the promotion runbook already takes
+(Step 0 of [`canary-validation-and-rollback.md`](canary-validation-and-rollback.md)), not merely
+re-pinning the tag. No `formatVersion` bump is involved, because no document's shape changed: the
+marker answers "is this document from the future", not "is this document where I expect it". The
+layout, the refusal and the operator recipe are recorded in
+[`docs/architecture/adr-storage-layout-v3.md`](../architecture/adr-storage-layout-v3.md) and in
+*Storage layout v3 and legacy volumes* above.
+
 ## Deployment checklist
 
 - [ ] Image tag identified: a `vMAJOR.MINOR.PATCH` release tag or an immutable `build-<run number>` tag.
 - [ ] `TUCANO_DATA_DIR` (default `/data`) mounted on the intended durable storage for every replica.
+- [ ] Volume layout checked: no `*.json` documents left in a root `test_runs/`, `milestones/` or
+      `configurations/` directory — the service refuses to start when there are (see *Storage layout
+      v3 and legacy volumes*).
 - [ ] Container started with the hardened shape: read-only root filesystem, `/tmp` tmpfs,
       `no-new-privileges`, unprivileged user, resource limits.
 - [ ] `GET /health` answers; the Swagger UI at `/api-docs` and `openapi.json` respond if the
@@ -281,6 +346,7 @@ makes the failure recoverable. The decision table and the snapshot command live 
 | [`Dockerfile`](../../Dockerfile) | Image build, `TUCANO_DATA_DIR=/data`, `PORT=3000`, unprivileged uid 10001, `VOLUME ["/data"]`. |
 | [`config.example.json`](config.example.json) | The optional configuration-file template, kept valid against the loader's schema by a unit test. |
 | [`docs/security/configuration-decision.md`](../security/configuration-decision.md) | The configuration and secrets decision: precedence, key management, and the deferred encrypted format. |
+| [`docs/architecture/adr-storage-layout-v3.md`](../architecture/adr-storage-layout-v3.md) | ADR: where runs, milestones and configurations live, the legacy-layout startup refusal, and the v3 rollback consequence. |
 | [`.github/workflows/release.yml`](../../.github/workflows/release.yml) | Publishes the immutable SemVer and `build-<run number>` tags to GHCR. |
 | [`docs/deployment/canary-validation-and-rollback.md`](canary-validation-and-rollback.md) | Canary promotion, the scratch-CRUD smoke check, and the rollback procedure. |
 | [`docs/contracts/api-compatibility.md`](../contracts/api-compatibility.md) | The file-format and compatibility rules a rollback depends on. |

@@ -9,7 +9,8 @@ Exact schemas and status codes live in the Swagger UI at `/api-docs` and
 
 ## What a milestone is
 
-A flat document, `milestones/<milestoneId>.json`:
+A flat document, inside the project that owns it, at
+`projects/<project>/milestones/<milestoneId>.json`:
 
 | Field | Notes |
 | --- | --- |
@@ -21,24 +22,40 @@ A flat document, `milestones/<milestoneId>.json`:
 | `testSuiteIds` | Identifiers of the suites in scope |
 | `testRunIds` | Identifiers of the runs in scope |
 
+A milestone has a **home project** — the project it is created in, whose `milestones/` folder holds
+the document. Its id is unique there, so two projects may each hold a `v1.0.json`; the document
+routes under `/milestones/{id}` answer `409 conflict` when they cannot tell which one you mean, and
+name the parent-scoped route to use instead. See
+[Storage layout v3](../architecture/adr-storage-layout-v3.md) for the decision.
+
 | Route | Operation id | What it does |
 | --- | --- | --- |
-| `GET /milestones` | `listMilestones` | Lists them; supports `?filter=` only |
-| `POST /milestones` | `createMilestone` | Creates one from a `MilestoneCreateRequest` |
+| `GET /projects/{id}/milestones` | `listProjectMilestones` | Lists one project's milestones, as a sorted array of ids |
+| `POST /projects/{id}/milestones` | `addProjectMilestone` | Creates the milestone inside the project |
+| `DELETE /projects/{id}/milestones/{milestone_id}` | `removeProjectMilestone` | Removes the milestone from the project |
+| `GET /milestones` | `listMilestones` | Lists them across every project; supports `?filter=` only |
 | `GET /milestones/{id}` | `getMilestone` | Reads one |
 | `PUT /milestones/{id}` | `updateMilestone` | Partial update |
 | `DELETE /milestones/{id}` | `deleteMilestone` | Removes one |
 | `POST /milestones/{id}/duplicate` | `duplicateMilestone` | Copies it, references included |
 | `GET /milestones/{id}/progress` | `getMilestoneProgress` | Derives progress from the referenced runs |
 
-## A milestone must point at something
+Creation is project-scoped: `POST /projects/{id}/milestones` creates the milestone in that project
+and answers `201` with `{"message": "Milestone created", "id": …}`; an unknown project answers
+`404 not_found` and an id already taken in that project answers `409 conflict`. The flat
+`POST /milestones` is retired and answers `400 invalid_request` naming the replacement. The bare
+`GET /milestones` stays served for compatibility but is deliberately absent from `openapi.json`.
 
-A milestone that references no project is meaningless, so creation requires **at least one**
-reference that resolves to a project, through either `testSuiteIds` or `testRunIds`. A create with
-neither is refused as `400 invalid_request`.
+## How a milestone resolves what it references
+
+A milestone resolves each `testSuiteIds` and `testRunIds` entry through its own project first, so a
+run id another project happens to use as well still names the intended run. That is a resolution
+rule, not a creation constraint: **a milestone with no references at all is legal.** It is a
+planning milestone for work not yet scoped, and its progress reports zeros until you point it at
+something.
 
 ```sh
-curl -s -X POST http://localhost:3100/milestones \
+curl -s -X POST http://localhost:3100/projects/Payments.json/milestones \
   -H 'Content-Type: application/json' \
   -d '{"milestoneId":"release-4.2.json","name":"Release 4.2",
        "targetDate":"2026-10-01","testSuiteIds":["Refunds.json"],"testRunIds":["run-2026-09-14.json"]}'
@@ -48,9 +65,10 @@ curl -s -X POST http://localhost:3100/milestones \
 {"id":"release-4.2.json","message":"Milestone created"}
 ```
 
-Writing a milestone requires `owner` in every project its references reach; reading it requires
-`viewer`. See the [authentication section](../../README.md#authentication) of the README for the
-role model.
+Writing a milestone requires `owner` in its **home project** and in every project its references
+reach; reading it requires `viewer` in the same set. Creating one therefore needs `owner` in the
+project that will hold it, and a milestone that references nothing is governed by its home alone.
+See the [authentication section](../../README.md#authentication) of the README for the role model.
 
 ## Progress is derived, not stored
 
@@ -78,6 +96,11 @@ curl -s http://localhost:3100/milestones/release-4.2.json/progress
 > those runs recorded it. Editing a case today does not move a milestone, because the run it points
 > at still holds the result it held. To change the number, record a new result or run.
 
+The runs it reads are the ones named in `testRunIds`, each looked up in the milestone's own project
+first. A reference no project holds is skipped and the numbers recompute over the runs that remain;
+one that two or more projects hold outside the home answers `409 conflict` rather than picking
+arbitrarily, because an arbitrary pick would report a wrong number.
+
 The same consequence applies to duplication: `POST /milestones/{id}/duplicate` copies which suites
 and runs the milestone references, and those references still point at the **same** runs. Nothing is
 re-executed and no new snapshot is taken, so a duplicate starts with the same progress until you
@@ -98,10 +121,10 @@ Starting from a running instance on `http://localhost:3100` (see
 `run-2026-09-14.json` run from [Test runs and results](test-runs-and-results.md) present.
 Authentication is assumed off; with it on, add `-H "Authorization: Bearer $TOKEN"`.
 
-**1. Create the milestone over a suite and a run.**
+**1. Create the milestone in the project, over a suite and a run.**
 
 ```sh
-curl -s -X POST http://localhost:3100/milestones \
+curl -s -X POST http://localhost:3100/projects/Payments.json/milestones \
   -H 'Content-Type: application/json' \
   -d '{"milestoneId":"release-4.2.json","name":"Release 4.2","status":"In progress",
        "startDate":"2026-09-14","targetDate":"2026-10-01",
@@ -153,12 +176,15 @@ curl -s 'http://localhost:3100/reports/summary?milestoneId=release-4.2.json'
 
 | Symptom | Cause |
 | --- | --- |
-| `400 invalid_request` creating a milestone | Neither `testSuiteIds` nor `testRunIds` referenced a project |
 | Progress never changes | The progress comes from the referenced runs' recorded results. Editing cases does nothing; record a result or add a run |
 | A duplicate has the same numbers as the original | Duplication copies the references; the runs are shared, not re-executed |
 | `404 not_found` on a milestone id | The `milestoneId` is the file name (`<name>.json`), not the display `name` |
 | `?tags=` on `GET /milestones` does nothing | Milestones carry no `tags` field, so the listing offers only `?filter=` |
-| `403 forbidden` | Writing a milestone requires `owner` in every project its references reach |
+| `400 invalid_request` on `POST /milestones` | The flat creation route is retired: create the milestone inside its project with `POST /projects/{id}/milestones` |
+| `404 not_found` on `POST /projects/{id}/milestones` | No project has that `id` — a milestone is created inside a project that exists |
+| `409 conflict` on `GET /milestones/{id}` | Two or more projects hold a milestone with that id; name the home with `GET`/`PUT`/`DELETE /projects/{id}/milestones/{milestone_id}` |
+| `409 conflict` on `GET /milestones/{id}/progress` | A run the milestone references exists in two or more projects outside its home, so there is no single answer to report |
+| `403 forbidden` | Writing a milestone requires `owner` in its home project and in every project its references reach |
 
 ## Next
 
@@ -170,9 +196,11 @@ curl -s 'http://localhost:3100/reports/summary?milestoneId=release-4.2.json'
 
 ---
 
-*Sources of truth: [`openapi.json`](../../openapi.json) for the milestone routes, the
-`MilestoneCreateRequest` rule and the `MilestoneProgress` schema named here; the storage concept in
+*Sources of truth: [`openapi.json`](../../openapi.json) for the milestone routes and the
+`MilestoneProgress` schema named here; the storage concept in
 the [repository README](../../README.md#storage-concept) for milestones referencing suites and runs
-and deriving progress from their results; the
+and deriving progress from their results; [`docs/architecture/adr-storage-layout-v3.md`](../architecture/adr-storage-layout-v3.md)
+for why milestones live inside their project, that a reference-less milestone is legal, and how a
+shared identifier resolves; the
 [compatibility contract](../contracts/api-compatibility.md) for the milestone duplicate plan (#68).
 Where this page and one of those disagree, the source wins and this page is a bug.*
