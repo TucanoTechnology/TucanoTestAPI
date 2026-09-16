@@ -17,11 +17,12 @@ boundary."* It carries findings only; nothing here is fixed. Remediation belongs
 
 - **Affected revision (the pinned target):** `c5e99431389854368ab3a8e07003622f34dfdd21`
 - **Method:** [audit-scope.md § 6](audit-scope.md#6-how-the-audit-tasks-run), steps 1–7.
-- **Findings so far:** **six** — `F-177-1`…`F-177-4`, all Low, plus `F-177-5` (Medium) and `F-177-6`
-  (High), the two the configuration-file boundary's container arm produced. §6 has confirmed the
+- **Findings so far:** **seven** — `F-177-1`…`F-177-4`, all Low, plus `F-177-5` (Medium), `F-177-6`
+  (High), the two the configuration-file boundary's container arm produced, and `F-177-7` (Low), the
+  hardlink read-through S2-3's fixture 6 turned up. §6 has confirmed the
   calibration for the two worked examples and for the first four pairs; the **count** stays provisional
   because a sub-task still to run can add a finding, and §6's list of what it has re-read is updated
-  below to six.
+  below to seven.
 - **Pass entries so far:** nineteen, in the [Pass entries](#5-pass-entries) section.
 - **Executed:** S2-1, S2-2, S2-3, S2-4, S2-6 (partial), S2-7, S2-9 (partial), S2-13, S2-14
   (partial), **S2-15 (complete — both halves: the `#189` question is answered and recorded in O-177-11,
@@ -711,6 +712,62 @@ every mutating call site, with the one deliberate exception above named rather t
   silence, and unrelated to O-177-11's recorded state (`#189` not landed), because this leak is in the
   refusal text, not in the file.
 
+### F-177-7: A hardlink is served as an attachment, because confinement is a path check
+
+- **Severity:** Low
+- **In scope:** S2 — storage and filesystem invariants; trust boundary 3 (*Resource ID or filename →
+  filesystem*).
+- **Where:** the class of controls, not one site: `src/storage/layout.rs:391` (`ensure_within`) and
+  `:415` (`resolve_existing_prefix`) decide confinement from *paths*, and the attachment read
+  (`GET /test_cases/{id}/attachments/{filename}`) then opens the path that check approved.
+- **Affected revision:** `c5e99431389854368ab3a8e07003622f34dfdd21` (the image in §1).
+- **Reproduction.** A hardlink from a file *outside* the data root onto in-tree names — with both ends
+  on one filesystem, `ln /tmp/audit-177/outside-source.txt …data/projects/S23\ symlink\ fixture/C1/outside-hard.txt`
+  and the same again as `…/outside-hard.json` in the project folder — is invisible to
+  `resolve_existing_prefix` (there is no symlink to canonicalise) and to `validate_component` (the name
+  is ordinary). All three routes then behave differently:
+  - `GET /test_cases/C1/attachments/outside-hard.txt` → **200**, and the body is the outside file's
+    content byte for byte: the outside file (`{"name":"outside-hard","projectId":"outside-hard"}`) is
+    disclosed through the API.
+  - `DELETE` of the same path → **200** `{"message":"File deleted successfully"}`, after which the
+    outside file is **intact** — link count `3` → `2`, `sha256`
+    `3886e9857855bcd71e95bed82e08f719c301b2d588ca8fcedfa9baaded756a23` unchanged. The unlink removes
+    the in-tree name only, so there is no delete-through.
+  - `POST` with that filename → **201**, storing the bytes as `1789537026504682289-outside-hard.txt`: the
+    upload de-collides instead of opening the link, and the outside file is unchanged afterwards (same
+    `sha256`, still `2` links). There is no write-through either.
+  Of the three directions the read is the one that escapes: reading is the operation that follows the
+  planted name, and no path check can see the second link.
+- **Why this is a finding rather than a pass.** The design's S2-3 fixture 6 states its own expectation —
+  "the hardlink cannot be turned into a read of an outside file **through the API**" — and that
+  expectation is not met. The symlink half of the same sub-task passes (entries 5, 18, 19); the
+  hardlink half does not, and the two are different controls, not one control with two fixtures: path
+  confinement catches symlinks and is silent on hardlinks.
+- **Severity — the two axes.** *Exploitability:* **Difficult.** The fixture requires write access to
+  the storage tree, which the design's §3 excludes as a precondition, and on a host with
+  `fs.protected_hardlinks` the source file must be one the planter already owns (or `CAP_FOWNER`).
+  *Impact:* **Moderate** — the disclosure is of files the service uid can read anywhere on that
+  filesystem, so a volume shared with another tenant or service turns into a read channel, though the
+  data is served only to principals already authorized for the case. *Difficult × Moderate* → **Low**
+  per [audit-scope.md](audit-scope.md) § 5. The excluded precondition is spent on the exploitability
+  axis, where the design puts it, rather than as a second de-escalation — the rubric does not
+  de-escalate below the impact axis, and de-escalating here would put the entry below its own Impact
+  cell.
+- **CWE:** CWE-59 (Improper Link Resolution Before File Access, "Link Following") — the control resolves
+  links but does not consider non-link aliases of a file; recorded with the caveat that CWE-59's title
+  names symlinks and this is a hardlink.
+- **Fix direction (recommended, not applied — fixes are out of scope for this report).** A path check
+  cannot close this; the stored-file reader has to look at the *file*. Refuse to read, serve, or unlink
+  an attachment whose `nlink > 1` (one `symlink_metadata` call, already made one level up), and
+  recommend the volume be a dedicated filesystem so "outside the root" and "outside the volume" stay
+  the same statement. The regression test this report recommends belongs next to the symlink tests in
+  `tests/security_tests.rs::symlink_tests` — a hardlink fixture beside `test_rejects_symlink_escape`,
+  which no existing test covers: the repository's four symlink baselines all exercise the path check.
+- **Duplicates / prerequisites:** not a duplicate of entries 5–6 or of pass entries 18–19, which measure
+  the symlink control (and of entry 6, which measured an *in-tree* hardlink and a write, not an outside
+  hardlink and a read). Related to F-177-1 in that both take the storage volume's trust properties as
+  the deciding fact.
+
 ### Recorded observations (not findings)
 
 **O-177-1 — A stray `.tucano-<suffix>.tmp` file is inert and unaddressable.** The atomic-write
@@ -1097,13 +1154,15 @@ is open, so the key boundary is documented-pending by the design's own pre-commi
 the *file* half by pass entries 15–17 after the container arm ran. The three symlink baselines
 correspond to the fixtures measured in entries 5–6 above; the symlinked-*attachment* fixture S2-3 also
 names has since been planted and refused at the API — the attachment file, the dangling variant of it
-and the case folder itself (pass entries 18–19, O-177-13) — so S2-3 is no longer partial. `F-177-3` names
+and the case folder itself (pass entries 18–19, O-177-13) — so S2-3 is no longer partial; its fixture 6
+(the outside-file hardlink) has since been planted as well, and it did **not** hold, which is why it
+appears in §4 as F-177-7 rather than on this list. `F-177-3` names
 `test_concurrent_writes_do_not_corrupt` — now re-run green — as the place a durability regression test
 belongs, because the baseline as written cannot fail on an acknowledged-but-lost write.
 
 ## 6. Calibration confirmed
 
-Confirmed at this checkpoint for the two worked examples and for the six findings written so far. The
+Confirmed at this checkpoint for the two worked examples and for the seven findings written so far. The
 count itself stays provisional, and the section says below what that costs and where it is
 re-confirmed.
 
@@ -1113,8 +1172,9 @@ re-confirmed.
   with the S2 surface's own part stated rather than borrowed from S3's: the band is unchanged, and on
   this surface the example's hypothesis **did not materialize**. Confinement holds where S2 measured
   it — pass entries 1–6 (traversal, symlink and hostile-component refusals on every path built from a
-  request field, plus the reserved-collection rule) and O-177-10 — so the four storage findings stay
-  **inside the caller's own authorization scope**, and none of them could be scored on this band. The
+  request field, plus the reserved-collection rule) and O-177-10 — so the five storage findings stay
+  **inside the caller's own authorization scope** (F-177-7 included: reaching the hardlink's name
+  already requires a case the caller can read), and none of them could be scored on this band. The
   two findings the configuration-file boundary added are not candidates for the example either, and for
   a stronger reason than a failed hypothesis: they are decided **before the listener binds**, so no
   request field exists yet and path confinement is not the control in question — F-177-6's disclosure
@@ -1130,7 +1190,7 @@ re-confirmed.
   and the three localhost URLs, filtered) and `:46` falls back to the first candidate when none answers
   `/health`, and `Authorization` does not appear in the file at all. The calibration holds, nothing in
   S2 changes it, and it is **not** raised as a finding.
-- **The six findings re-read against § 5.** Each states both axes and the matrix cell it reads off
+- **The seven findings re-read against § 5.** Each states both axes and the matrix cell it reads off
   them, which the rubric requires before the pair becomes a number: F-177-1 *Difficult × Moderate* →
   **Low**, with the design's competing **Medium** reading ("another local principal on a default
   deployment") written down and the reason the lower one is taken; F-177-2 *Difficult × Moderate* →
@@ -1139,19 +1199,21 @@ re-confirmed.
   answered in the entry (the defect does not depend on an unrecommended configuration — the revision's
   contract is that the refusal names the setting in every configuration); F-177-6 *Trivial × Moderate*
   → **High**, with the competing *Limited → Medium* reading written down and the reason the higher one
-  is taken. No finding is scored below its impact axis, and the two that could have escalated
+  is taken; F-177-7 *Difficult × Moderate* → **Low**, the hardlink arm of S2-3's own fixture 6, with
+  the excluded precondition spent on the exploitability axis. No finding is scored below its impact
+  axis, and the two that could have escalated
   (F-177-1, F-177-2) state why escalation does not apply: neither is reachable in the shipped default
   without a position on the data volume. One consequence is recorded here rather than left for a reader
-  to notice — **four of the six are Low and the two the configuration-file boundary added are not
+  to notice — **five of the seven are Low and the two the configuration-file boundary added are not
   (Medium and High), so §4's order is neither a severity ranking nor an order by band.** It follows the
   order §3 enumerates the surface: the permission call sites (F-177-1), then the document path
   (F-177-2, F-177-3), then the identifier and error-class path (F-177-4), and finally the
   configuration-file boundary, whose two findings were written last because they were measured last.
   Comparing severity across S2's findings means comparing the pairs, not the sequence.
-- **What this section does not yet confirm:** that six is the final count. S2-5, S2-8, S2-10, S2-11 and
+- **What this section does not yet confirm:** that seven is the final count. S2-5, S2-8, S2-10, S2-11 and
   S2-12 can each still add a finding, and a new finding changes the surface's distribution — which is
   why the header marks the count provisional. §6 is re-confirmed, not rewritten, in the closing
-  checkpoint; the two examples and the six pairs above will not change unless a later sub-task
+  checkpoint; the two examples and the seven pairs above will not change unless a later sub-task
   contradicts one of them.
 
 ## 7. Tear-down (step 7)
@@ -1192,7 +1254,8 @@ in the second column. S2-6, S2-9 and S2-14 have run and keep a row only to name 
 did **not** cover; S2-1, S2-3, S2-4, S2-7 and S2-13 have now run in full, so their rows are gone, and
 S2-15 has now run both halves — the `#189` question in O-177-11 and the file-boundary probes in pass
 entries 15–17 — so its row is gone as well (its two findings and one observation are in §4). S2-3's row
-is gone for the same reason: the attachment fixtures it owed are pass entries 18–19.
+is gone for the same reason: the attachment fixtures it owed are pass entries 18–19, and its fixture 6
+ran too — as F-177-7 in §4, because the hardlink arm did not hold.
 
 | Sub-task | What is missing |
 | --- | --- |
