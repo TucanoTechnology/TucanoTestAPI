@@ -17,8 +17,9 @@ boundary."* It carries findings only; nothing here is fixed. Remediation belongs
 
 - **Affected revision (the pinned target):** `c5e99431389854368ab3a8e07003622f34dfdd21`
 - **Method:** [audit-scope.md § 6](audit-scope.md#6-how-the-audit-tasks-run), steps 1–7.
-- **Findings so far:** **four**, all Low (`F-177-1`, `F-177-2`, `F-177-3`, `F-177-4`). Severity
-  calibration across the surface (§6) has not been completed, so this count is provisional.
+- **Findings so far:** **four**, all Low (`F-177-1`, `F-177-2`, `F-177-3`, `F-177-4`). §6 has
+  confirmed the calibration for the two worked examples and for these four pairs; the **count** stays
+  provisional because a sub-task still to run can add a finding.
 - **Pass entries so far:** fourteen, in the [Pass entries](#5-pass-entries) section.
 - **Executed:** S2-1, S2-2, S2-3 (partial), S2-4, S2-6 (partial), S2-7, S2-9
   (partial), S2-13, S2-14 (partial), S2-15 (partial — its `#189` question is answered and recorded in
@@ -860,10 +861,46 @@ fail on an acknowledged-but-lost write.
 
 ## 6. Calibration confirmed
 
-**Not completed in this checkpoint.** The severity calibration across the surface — that each
-finding's two axes were scored against the rubric's tests and not against intuition, and that the
-provisional finding count matches §4 — is the step that closes an audit report and cannot be done
-while sub-tasks are outstanding.
+Confirmed at this checkpoint for the two worked examples and for the four findings written so far.
+The count itself stays provisional, and the section says below what that costs and where it is
+re-confirmed.
+
+- **The Critical worked example** ([audit-scope.md](audit-scope.md) § 5): "With the shipped Compose
+  configuration, `GET /openapi.json` is public by design, and suppose some route derived a filesystem
+  path from a request field without confinement… *Trivial* × *Severe* → **Critical**." Re-confirmed,
+  with the S2 surface's own part stated rather than borrowed from S3's: the band is unchanged, and on
+  this surface the example's hypothesis **did not materialize**. Confinement holds where S2 measured
+  it — pass entries 1–6 (traversal, symlink and hostile-component refusals on every path built from a
+  request field, plus the reserved-collection rule) and O-177-10 — so all four S2 findings stay
+  **inside the caller's own authorization scope**, and none of them could be scored on this band. The
+  example's premise also holds at this revision, read from the served contract rather than restated:
+  `openapi.json` declares `GET /openapi.json` with `security: []`, i.e. public by design, which matches
+  the five public operations [authentication-decision.md](authentication-decision.md) names and S3's
+  §6 records.
+- **The Info worked example** ([audit-scope.md](audit-scope.md) § 5, left by it to "**#179** or #178 to
+  confirm against the code"): `scripts/clear-data.mjs`. S4 confirmed it against the code and S3
+  re-checked it at its own revision; re-read here, the facts are unchanged —
+  `scripts/clear-data.mjs:25-32` is the fixed candidate list (`argv[2]`, `API_URL`, `TUCANO_API_URL`
+  and the three localhost URLs, filtered) and `:46` falls back to the first candidate when none answers
+  `/health`, and `Authorization` does not appear in the file at all. The calibration holds, nothing in
+  S2 changes it, and it is **not** raised as a finding.
+- **The four findings re-read against § 5.** Each states both axes and the matrix cell it reads off
+  them, which the rubric requires before the pair becomes a number: F-177-1 *Difficult × Moderate* →
+  **Low**, with the design's competing **Medium** reading ("another local principal on a default
+  deployment") written down and the reason the lower one is taken; F-177-2 *Difficult × Moderate* →
+  **Low**; F-177-3 *Difficult × Moderate* → **Low**; F-177-4 *Moderate × Limited* → **Low**. No
+  finding is scored below its impact axis, and the two that could have escalated (F-177-1, F-177-2)
+  state why escalation does not apply: neither is reachable in the shipped default without a position
+  on the data volume. One consequence is recorded here rather than left for a reader to notice —
+  **all four are Low, so §4's order is not a severity ranking.** It follows the order §3 enumerates the
+  surface: the permission call sites (F-177-1), then the document path (F-177-2, F-177-3), then the
+  identifier and error-class path (F-177-4). Comparing severity across S2's findings means comparing
+  the pairs, not the sequence.
+- **What this section does not yet confirm:** that four is the final count. S2-5, S2-8, S2-10, S2-11,
+  S2-12 and S2-15 can each still add a finding, and a new finding changes the surface's distribution —
+  which is why the header marks the count provisional. §6 is re-confirmed, not rewritten, in the
+  closing checkpoint; the two examples and the four pairs above will not change unless a later
+  sub-task contradicts one of them.
 
 ## 7. Tear-down (step 7)
 
@@ -896,7 +933,7 @@ run its stack-free half and keeps a row only for the container arm.
 | --- | --- |
 | **S2-3 (partial)** | The six fixtures were planted and refused (pass entries 5–6, O-177-4), and the repository's own symlink baselines (`src/storage/layout.rs::a_symlink_that_escapes_the_root_is_rejected`, `::a_symlinked_collection_directory_that_escapes_the_root_is_rejected`, `::a_symlinked_project_folder_that_escapes_the_root_is_rejected`, `tests/security_tests.rs::symlink_tests::test_rejects_symlink_escape`) have now been **re-run green** (§5, "Repository baselines, re-run"). What is still missing is the **symlinked attachment** fixture: a symlinked *attachment file* inside a real case's attachments directory, pointing outside the root. |
 | **S2-5** | Atomicity: ten `SIGKILL`s of the container process mid-write, then a JSON validation pass over every stored document and an inspection of leftover `.tucano-*.tmp` files. No power-loss durability is claimed either way; a missing parent-directory `fsync` is an observation by pre-commitment, never a finding. |
-| **S2-6 (partial)** | Truncation, invalid UTF-8, and a 100 MiB replacement are measured (pass entries 7–9). The wrong-shape JSON case is measured **and is a finding** instead of a pass (`F-177-2`). No further variants are owed, but `F-177-2` needs the calibration pass in §6. |
+| **S2-6 (partial)** | Truncation, invalid UTF-8, and a 100 MiB replacement are measured (pass entries 7–9). The wrong-shape JSON case is measured **and is a finding** instead of a pass (`F-177-2`). No further variants are owed, and the calibration pass §6 owed `F-177-2` has now run; the row stays only until §6 is re-confirmed at the closing checkpoint. |
 | **S2-8** | Two replicas against one data directory, with the filesystem type of the throwaway volume recorded — note that this checkpoint's volume is `tmpfs`, so this sub-task's result does **not** transfer to a real volume and the arm must be re-provisioned on a disk-backed directory before its result may be written up. |
 | **S2-9 (partial)** | Lock release is measured for the **document** and **attachment** failure paths (pass entries 10–11). The revision path's failure-then-success pair has not been run, and no lock was observed *held* at any point (the probes measure release, not exclusion). |
 | **S2-10** | Attachment publication in place (torn read), orphan handling, and revision immutability. Only the attachment lock half has run. |
