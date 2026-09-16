@@ -331,10 +331,10 @@ flow top to bottom.
 
 ```
 #241 (this epic)
-├── sub-1: gap analysis PR
-│   └── sub-3: create v1.0 milestone
-│       └── sub-4: tag v1.0.0
-└── sub-2: triage #214
+├── #242 (PR): gap analysis document
+│   └── #244 ✅: create v1.0 milestone (done)
+│       └── #245: tag v1.0.0 (after merge)
+└── #243 ✅: triage #214 (done)
 ```
 
 All four sub-tasks are design/tracking work — **no `src/` changes**. The
@@ -346,7 +346,7 @@ entire v1 blocker set is this epic plus its administrative sub-tasks.
 
 Each sub-task is executable without clarification by a flash execution lane.
 
-### Sub-1: Commit Gap Analysis and Open PR
+### Sub-1 (#242 — PR): Commit Gap Analysis and Open PR
 
 - **Files:** `docs/roadmap-v1-gap-analysis.md` (this document)
 - **Acceptance test:** `cargo fmt --check && cargo clippy && cargo test` pass
@@ -363,7 +363,7 @@ Each sub-task is executable without clarification by a flash execution lane.
   4. Run `cargo fmt --check && cargo clippy --all-targets --all-features && cargo test --all-targets --all-features`
   5. Push and open PR targeting `main`; assign to ECiurleo
 
-### Sub-2: Triage #214
+### Sub-2 (#243 ✅): Triage #214
 
 - **Files:** None (GitHub issue metadata only)
 - **Acceptance test:** #214 has labels, milestone, assignee, and a comment
@@ -384,7 +384,7 @@ Each sub-task is executable without clarification by a flash execution lane.
      design requires a new API contract (OAuth2/OIDC) and depends on the GUI's
      SSO support maturing."
 
-### Sub-3: Create v1.0 Milestone and Assign Closed Items
+### Sub-3 (#244 ✅): Create v1.0 Milestone and Assign Closed Items
 
 - **Files:** None (GitHub milestone metadata only)
 - **Acceptance test:** `v1.0` milestone exists; #9, #11, #34, #45, #46, #47,
@@ -400,7 +400,7 @@ Each sub-task is executable without clarification by a flash execution lane.
      milestone
   5. Verify milestone counts match §4.2
 
-### Sub-4: Tag v1.0.0 and Verify GHCR Publish
+### Sub-4 (#245): Tag v1.0.0 and Verify GHCR Publish
 
 - **Files:** None (git tag only)
 - **Acceptance test:** `v1.0.0` tag exists on `main`; GHCR image
