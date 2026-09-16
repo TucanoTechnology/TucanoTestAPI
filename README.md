@@ -116,7 +116,7 @@ surface is:
 
 | Area | Routes |
 | --- | --- |
-| Health and contract | `GET /health`, `GET /openapi.json`, `GET /api-docs` |
+| Health, readiness and contract | `GET /health`, `GET /ready`, `GET /diagnostics`, `GET /openapi.json`, `GET /api-docs` |
 | Authentication | `POST /auth/login`, `POST /auth/refresh`, `POST /auth/logout`, `GET /auth/me` |
 | Projects | `GET`/`POST /projects`, `GET`/`PUT`/`DELETE /projects/{id}`, `POST /projects/{id}/duplicate`, parent-scoped suite and case creation (`/projects/{id}/test_suites`, `/projects/{id}/test_cases`) |
 | Suites | `GET /test_suites`, `GET`/`PUT`/`DELETE /test_suites/{id}`, `POST /test_suites/{id}/duplicate`, parent-scoped case creation (`POST /test_suites/{id}/test_cases`) |
@@ -199,8 +199,9 @@ you map it elsewhere.
 
 ### Authentication
 
-With `TUCANO_AUTH_REQUIRED` turned on, every operation but `GET /health`, `GET /openapi.json`,
-`GET /api-docs`, `POST /auth/login`, and `POST /auth/refresh` requires a bearer access token and is
+With `TUCANO_AUTH_REQUIRED` turned on, every operation but `GET /health`, `GET /ready`,
+`GET /diagnostics`, `GET /openapi.json`, `GET /api-docs`, `POST /auth/login`, and
+`POST /auth/refresh` requires a bearer access token and is
 authorized against **project-scoped RBAC**: a role (`viewer`, `editor`, `owner`) granted per project,
 plus a `systemAdmin` account that reaches everything. A caller reaches only the projects it was
 granted; listings are filtered down to them rather than refused, and direct reads or writes of a
@@ -534,10 +535,10 @@ results are removed with the run.
 
 ### Validating a seeded deployment
 
-The generator's validation step is the acceptance check for the dataset: it asserts `GET /health`,
-reads every document of the target tree back through its `GET` route, checks that each
-project-owned resource — configurations, runs and milestones — also reads back through the listing
-of the project that owns it (and not through another project's), checks
+The generator's validation step is the acceptance check for the dataset: it asserts `GET /health`
+and `GET /ready`, reads every document of the target tree back through its `GET` route, checks that
+each project-owned resource — configurations, runs and milestones — also reads back through the
+listing of the project that owns it (and not through another project's), checks
 `GET /milestones/v1.0.json/progress` reports five buckets with `totalCases` equal to the cases the run
 declares, exercises both report scopes and the `?tags=` and `?configuration=` filters, reads
 `GET /auth/me`, confirms the seeded viewer reaches one project and not the other, and confirms a
@@ -655,7 +656,7 @@ Tests are split into two layers and both run in CI on every push and pull reques
 
 | Suite | Covers |
 | --- | --- |
-| `tests/service.rs` | Health, OpenAPI document and its error contract, Swagger UI, malformed bodies, traversal rejection, the identifier and size-limit error answers, the on-disk tree layout, persistence across restarts |
+| `tests/service.rs` | Health, readiness and storage diagnostics, OpenAPI document and its error contract, Swagger UI, malformed bodies, traversal rejection, the identifier and size-limit error answers, the on-disk tree layout, persistence across restarts |
 | `tests/projects.rs` | Project CRUD, validation, conflicts, error envelopes |
 | `tests/suites.rs` | Test suite CRUD, parent-scoped creation, copy/move composition, ambiguity conflicts, missing resources |
 | `tests/runs.rs` | Test run CRUD, validation, conflicts, missing resources, the case-version capture each run records, JUnit XML and JSON result import, and listing, linking and unlinking the defect links a result carries |

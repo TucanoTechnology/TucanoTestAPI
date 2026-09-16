@@ -27,7 +27,8 @@ use std::sync::Arc;
 use axum::{
     Json, Router,
     body::Body,
-    http::header,
+    extract::State,
+    http::{StatusCode, header},
     middleware,
     response::{IntoResponse, Response},
     routing::get,
@@ -38,7 +39,7 @@ use tower_http::{limit::RequestBodyLimitLayer, trace::TraceLayer};
 use self::auth::AuthState;
 use crate::{
     domain::{MAX_ATTACHMENT_BYTES, TestService},
-    storage::Repository,
+    storage::{Repository, StorageProbe},
 };
 
 pub use crate::domain::ListQuery;
@@ -105,6 +106,8 @@ impl<R> axum::extract::FromRef<AppState<R>> for AuthState {
 /// these, and `tests/service.rs` checks that against `openapi.json`.
 pub const ROUTES: &[&str] = &[
     "/health",
+    "/ready",
+    "/diagnostics",
     "/openapi.json",
     "/api-docs",
     "/api-docs/",
@@ -188,6 +191,8 @@ where
 
     Router::<AppState<R>>::new()
         .route("/health", get(health))
+        .route("/ready", get(ready::<R>))
+        .route("/diagnostics", get(diagnostics::<R>))
         .route("/openapi.json", get(openapi))
         .route("/api-docs", get(swagger_ui))
         .route("/api-docs/", get(swagger_ui))
@@ -207,6 +212,61 @@ where
 
 async fn health() -> Json<Value> {
     Json(json!({"status": "ok", "storage": "filesystem"}))
+}
+
+/// Liveness is not readiness: `/health` answers as soon as the process serves,
+/// while `/ready` also asks whether the store behind it can be written to.
+///
+/// The probe is unauthenticated and answers no 404 — an orchestrator asks it
+/// before any credential could be presented — but it reveals nothing about the
+/// deployment beyond the three booleans that make up readiness.
+async fn ready<R>(State(state): State<AppState<R>>) -> Response
+where
+    R: Repository + 'static,
+{
+    let probe = state.probe_storage();
+    if probe.ready() {
+        return Json(json!({"status": "ready", "storage": "filesystem"})).into_response();
+    }
+    error::envelope(
+        StatusCode::SERVICE_UNAVAILABLE,
+        "not_ready",
+        &format!("storage is not ready: {}", not_ready_reason(&probe)),
+    )
+}
+
+/// The operator's half of the probe: the same checks as `/ready`, reported
+/// individually so a failing deployment says which one failed.
+///
+/// It answers `200` even when the store is not ready — that is the report, not
+/// an error — and it names no path, quotes no filesystem error and carries no
+/// stored content.
+async fn diagnostics<R>(State(state): State<AppState<R>>) -> Json<Value>
+where
+    R: Repository + 'static,
+{
+    let probe = state.probe_storage();
+    Json(json!({
+        "storage": "filesystem",
+        "ready": probe.ready(),
+        "exists": probe.exists,
+        "writable": probe.writable,
+        "lockable": probe.lockable,
+        "lockHeld": probe.lock_held,
+        "lastWriteUnix": probe.last_write_unix,
+    }))
+}
+
+/// Which of the three readiness checks failed, in a sentence that names no path
+/// and repeats no filesystem error.
+fn not_ready_reason(probe: &StorageProbe) -> &'static str {
+    if !probe.exists {
+        "the data directory is missing"
+    } else if !probe.writable {
+        "the data directory is not writable"
+    } else {
+        "the storage lock cannot be taken"
+    }
 }
 
 async fn openapi() -> Response {

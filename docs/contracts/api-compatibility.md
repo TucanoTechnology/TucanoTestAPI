@@ -1111,8 +1111,8 @@ There are 64 operations, named as follows:
 The document declares eight top-level tags in the order above, one per resource family, and every operation
 carries exactly one of them. A route is tagged by the resource it lives under, so the composition routes are
 tagged by their parent — `POST /projects/{id}/test_suites` is `Projects`, not `TestSuites` — which is the same
-rule the `operationId` prefix follows. The `Service` tag holds the three non-resource routes (`GET /health`,
-`GET /openapi.json`, `GET /api-docs`).
+rule the `operationId` prefix follows. The `Service` tag holds the five non-resource routes (`GET /health`,
+`GET /ready`, `GET /diagnostics`, `GET /openapi.json`, `GET /api-docs`).
 
 ### Duplicate operations inlined (G5)
 
