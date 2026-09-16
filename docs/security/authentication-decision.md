@@ -67,9 +67,10 @@ which carries this approach as its description, alongside the parent hardening t
 Implementation landed on `feat/p2-130-auth`. What it publishes:
 
 - `openapi.json` declares `components.securitySchemes.bearerAuth` — an HTTP `bearer` scheme carrying a JWT
-  `bearerFormat` — as a global `security` requirement, and marks the five operations that need no caller
-  (`GET /health`, `GET /openapi.json`, `GET /api-docs`, `POST /auth/login`, `POST /auth/refresh`) with
-  `security: []`.
+  `bearerFormat` — as a global `security` requirement, and marks the operations that need no caller with
+  `security: []`: `GET /health`, `GET /openapi.json`, `GET /api-docs`, `POST /auth/login` and
+  `POST /auth/refresh` as published here, with `GET /ready` and `GET /diagnostics` added later by
+  [#104](https://github.com/TucanoTechnology/TucanoTestAPI/issues/104).
 - Four session endpoints exist: `POST /auth/login`, `POST /auth/refresh`, `POST /auth/logout`, and
   `GET /auth/me`. Success answers `SessionResponse` (access token, refresh token, token type, and the access
   token's lifetime in seconds) or `MeResponse` (the caller's identity plus its per-project roles). Failure

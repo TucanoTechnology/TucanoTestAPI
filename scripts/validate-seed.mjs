@@ -207,6 +207,33 @@ async function stepHealth() {
   );
 }
 
+async function stepReady() {
+  const ready = await request("/ready");
+  ok(
+    ready?.status === "ready" && ready?.storage === "filesystem",
+    "GET /ready answers status=ready storage=filesystem",
+    JSON.stringify(ready),
+  );
+
+  // The same store, as evidence rather than as a status code. `lockable` is
+  // asserted rather than `lockHeld`: a peer seeding a second replica may hold
+  // the lock at this instant without the store being any less ready.
+  const diagnostics = await request("/diagnostics");
+  ok(
+    diagnostics?.ready === true &&
+      diagnostics?.exists === true &&
+      diagnostics?.writable === true &&
+      diagnostics?.lockable === true,
+    "GET /diagnostics reports the seeded store ready, existing, writable and lockable",
+    JSON.stringify(diagnostics),
+  );
+  ok(
+    typeof diagnostics?.lastWriteUnix === "number",
+    "GET /diagnostics names when the store was last written",
+    JSON.stringify(diagnostics),
+  );
+}
+
 async function stepDocuments(token) {
   for (const project of PROJECTS) {
     const document = await getOrNull(`/projects/${project}`, token);
@@ -548,6 +575,7 @@ async function main() {
   const token = await adminToken();
 
   await stepHealth();
+  await stepReady();
   await stepDocuments(token);
   await stepProgress(token);
   await stepReports(token);
