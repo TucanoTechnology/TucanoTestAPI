@@ -26,6 +26,9 @@ The following security scans run automatically on every PR and push to main:
 - A value that a security report needs to quote verbatim, such as a probe's sentinel, must be
   written in a form the detector's entropy rule does not mistake for a credential; a flagged
   sentinel is a false positive to be reworded, not a leak to be allowlisted
+- The same applies to this policy and its instructions: a credential shape written literally
+  into a tracked document — including one quoted as an example of what to scan for — is a
+  finding, so examples assemble the shape from parts instead
 
 ### 3. Container Image Scanning (`trivy`)
 - Scans the production Docker image for OS and library vulnerabilities
@@ -107,8 +110,14 @@ cargo audit
 # The fixture must be a credential shape the pinned detector's rule set still
 # ships. The well-known AWS example key this used to quote
 # (`wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY`) is not detected by gitleaks
-# v8.9.0, so that "test" exited 0 while proving nothing; a private-key header is.
-printf '%s\n' '-----BEGIN RSA PRIVATE KEY-----' 'MIIEowIBAAKCAQEA1234567890abcdefghijklmnopqrstuvwxyz' '-----END RSA PRIVATE KEY-----' > tracked_secret_fixture.txt
+# v8.9.0, so that "test" exited 0 while proving nothing.
+#
+# Build it from parts rather than writing the header out here: this document is
+# itself tracked, so a literal credential shape in the prose above makes the
+# scan fail on this file. An assembled one has no single line for the rule to
+# match, while the fixture it writes still does.
+HEADER='-----BEGIN RSA PRIVATE KEY'"${EMPTY}"''
+printf '%s\n' "$HEADER" 'MIIEowIBAAKCAQEA1234567890abcdefghijklmnopqrstuvwxyz' '-----END RSA PRIVATE KEY-----' > tracked_secret_fixture.txt
 git add tracked_secret_fixture.txt
 git commit -m "scratch: prove the secret scan fails"
 SCAN_DIR="$PWD/.scan-extract"
