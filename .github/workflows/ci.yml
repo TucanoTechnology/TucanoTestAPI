@@ -63,10 +63,73 @@ jobs:
         run: node scripts/check-docs-links.mjs
       - name: Check the operation reference is regenerated
         run: node scripts/generate-operations-reference.mjs --check
+      # The GitHub Wiki is a mirror of docs/wiki/, so every page must still map
+      # onto the flat wiki namespace. This catches a new page whose name would
+      # collide, and a cross-page link that no longer has a wiki target, before
+      # the publish job on main would have to deal with it.
+      - name: Check the wiki pages map onto the GitHub Wiki namespace
+        run: node scripts/sync-github-wiki.mjs --check
       - name: Install mdBook
         run: cargo install mdbook --locked
       - name: Build the documentation site
         run: mdbook build docs
+
+  # The GitHub Wiki tab is what a reader reaches first, so it is kept in sync
+  # with docs/wiki/ — the source of truth — by a build step rather than by hand.
+  # It runs only on main: a pull request stages nothing, and a PR from a fork
+  # has no token that could write to the wiki repository. When WIKI_TOKEN is
+  # unset the job reports that publishing is skipped instead of failing, so
+  # enabling the wiki never blocks a merge.
+  wiki:
+    runs-on: [self-hosted, Linux, X64]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    steps:
+      - uses: actions/checkout@v5
+      - name: Check whether the wiki token is configured
+        id: token
+        env:
+          WIKI_TOKEN: ${{ secrets.WIKI_TOKEN }}
+        run: |
+          if [ -n "$WIKI_TOKEN" ]; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::WIKI_TOKEN is not set; skipping the GitHub Wiki publish."
+          fi
+      - name: Stage the wiki pages
+        if: steps.token.outputs.available == 'true'
+        run: node scripts/sync-github-wiki.mjs --out "$RUNNER_TEMP/wiki"
+      - name: Publish to the GitHub Wiki
+        if: steps.token.outputs.available == 'true'
+        env:
+          WIKI_TOKEN: ${{ secrets.WIKI_TOKEN }}
+        run: |
+          set -euo pipefail
+          # GitHub creates the wiki repository when the first wiki page is
+          # saved, so it may not exist yet. The failure modes differ: a
+          # repository that was never created fails the clone, while one with
+          # no commits clones fine and leaves HEAD unborn. A shallow clone of
+          # an empty repository succeeds and the commit below seeds it, so the
+          # one path handles both — and a clone that genuinely fails (a bad
+          # token, no repository) still fails loudly under `set -e`.
+          wiki_url="https://x-access-token:${WIKI_TOKEN}@github.com/${GITHUB_REPOSITORY}.wiki.git"
+          work="$RUNNER_TEMP/wiki-repo"
+          git clone --depth 1 "$wiki_url" "$work"
+          # Remove the predecessors of every mirrored page, so a page dropped
+          # from docs/wiki/ is dropped here too and a hand edit in the browser
+          # is overwritten rather than merged. _Sidebar.md is restaged below.
+          find "$work" -maxdepth 1 -name '*.md' -delete
+          cp "$RUNNER_TEMP/wiki"/*.md "$work"/
+          git -C "$work" config user.name  "github-actions[bot]"
+          git -C "$work" config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git -C "$work" add -A
+          if git -C "$work" diff --cached --quiet; then
+            echo "The GitHub Wiki is already up to date."
+            exit 0
+          fi
+          git -C "$work" commit -q -m "docs: mirror the wiki from docs/ at ${GITHUB_SHA:0:7}"
+          git -C "$work" push -q origin HEAD:master \
+            || git -C "$work" push -q origin HEAD:main
 
   checks:
     runs-on: [self-hosted, Linux, X64]

@@ -517,6 +517,9 @@ the project that owns it, so it goes when that project does.
 | `validate-seed.mjs` | Asserts the seeded dataset through the API, including the refusals a non-admin receives |
 | `teardown.mjs` | Removes exactly what `seed.mjs` created, by identifier, and reports anything it leaves in place |
 | `check-matrix.mjs` | Fails when a route in `openapi.json` and a row of the dataset's coverage matrix disagree |
+| `generate-operations-reference.mjs` | Renders `docs/generated/operations-reference.md` from `openapi.json`; `--check` fails on any drift |
+| `check-docs-links.mjs` | Fails when a documentation link breaks, a page is missing from `SUMMARY.md` or the README table, or the wiki index is incomplete |
+| `sync-github-wiki.mjs` | Stages `docs/wiki/` as GitHub Wiki pages (`--out <dir>`); `--check` verifies the flat-namespace mapping. The `wiki` CI job publishes the staged pages on `main` |
 | `clear-data.mjs` | Unscoped wipe: empties every sample collection a run or seed left behind, with each configuration going as part of the project that holds it |
 | `fixtures/` | The small files the seed uploads: a case attachment, a step attachment, and the JUnit report it imports; a new feature that needs a file adds it here |
 
@@ -736,7 +739,7 @@ Repository contribution and agent workflow rules are documented in [AGENTS.md](A
 | [docs/security/audit-s2-storage-and-filesystem.md](docs/security/audit-s2-storage-and-filesystem.md) | The S2 storage and filesystem audit report — the layout contract, identifier validation, permissions, atomicity, the lock, attachment and revision publication, the overwrite contract, the error surface, and the configuration-file boundary (#177) |
 | [docs/testing/seed-dataset-spec.md](docs/testing/seed-dataset-spec.md) | The demo/seed dataset: the feature coverage matrix, the target tree below `TUCANO_DATA_DIR`, the API calls that produce it, and the teardown scope |
 | [docs/testing/test-data-generator-guide.md](docs/testing/test-data-generator-guide.md) | Using the test-data generator as a demo, a fixture and a test bed, and how to extend it when a feature lands (#196) |
-| [docs/wiki/README.md](docs/wiki/README.md) | **User wiki** — index of the user-facing guides: installation, feature how-to, API quickstart, and operations |
+| [docs/wiki/README.md](docs/wiki/README.md) | **User wiki** — index of the user-facing guides: installation, feature how-to, API quickstart, and operations. Mirrored to the repository's GitHub Wiki on every merge to `main` |
 | [docs/wiki/getting-started.md](docs/wiki/getting-started.md) | Install the Compose stack, verify it is up, turn authentication on, and create a first project, suite and case (#171) |
 | [docs/wiki/projects-suites-and-cases.md](docs/wiki/projects-suites-and-cases.md) | The container hierarchy, parent-scoped creation, and how membership is stored as folders (#172) |
 | [docs/wiki/steps-and-attachments.md](docs/wiki/steps-and-attachments.md) | Structured test steps, case attachments, and per-step attachments (#172) |
