@@ -243,9 +243,17 @@ the "before" baseline. What has changed since:
   the file" rule is enforced by keeping the environment authoritative (the file can supply a secret
   that the environment also reaches), and the shipped example documents `jwt_secret_file` rather
   than an inline secret, so the template itself carries no secret.
-- **Still open.** #189 (AEAD-encrypted secrets and the key file) is not implemented:
-  `ConfigFile` reads secrets in the clear. #190's per-key precedence matrix is partly covered by
-  #188's tests, but its reference table is not yet published. #191 has not started.
+- **#189 landed the encrypted half.** `src/config/secret.rs` holds the AEAD envelope
+  (AES-256-GCM, versioned and self-describing), the key ring loader (`TUCANO_CONFIG_KEY_FILE`),
+  and the `SecretValue` serde bridge that lets `jwt_secret` and `bootstrap_password` carry either
+  a plain string or an encrypted object. `ConfigFile::resolve_secrets` decrypts in place at
+  startup, before the auth resolver sees the file; every failure mode — missing key, wrong key,
+  corrupted ciphertext, unknown key identifier — fails closed with a startup error that names
+  the setting, never the value. Key rotation is supported through a multi-key ring: the old key
+  stays in the ring while the file is re-encrypted under the new one. No secret, key material,
+  or raw ciphertext appears in any error message.
+- **Still open.** #190's per-key precedence matrix is partly covered by #188's tests, but its
+  reference table is not yet published. #191 has not started.
 - Everything in the *Current state* table remains true for the settings it lists, because the
   environment still supplies every one of them when no file is named.
 

@@ -17,6 +17,7 @@ use std::fmt::{self, Display, Formatter};
 use std::time::Duration;
 
 use crate::config::ConfigFile;
+use crate::config::secret::SecretValue;
 
 /// The smallest HS256 signing secret the server will start with, in bytes.
 ///
@@ -110,12 +111,12 @@ impl AuthConfig {
             let file = file?;
             match key {
                 "TUCANO_AUTH_REQUIRED" => file.auth_required.map(|flag| flag.to_string()),
-                "TUCANO_JWT_SECRET" => file.jwt_secret.clone(),
+                "TUCANO_JWT_SECRET" => file.jwt_secret.as_ref().and_then(as_plain),
                 "TUCANO_JWT_SECRET_FILE" => file.jwt_secret_file.clone(),
                 "TUCANO_ACCESS_TOKEN_TTL" => file.access_token_ttl.clone(),
                 "TUCANO_REFRESH_TOKEN_TTL" => file.refresh_token_ttl.clone(),
                 "TUCANO_BOOTSTRAP_USERNAME" => file.bootstrap_username.clone(),
-                "TUCANO_BOOTSTRAP_PASSWORD" => file.bootstrap_password.clone(),
+                "TUCANO_BOOTSTRAP_PASSWORD" => file.bootstrap_password.as_ref().and_then(as_plain),
                 _ => None,
             }
         };
@@ -241,6 +242,20 @@ impl Error for ConfigError {
             Self::SecretFile { source, .. } => Some(source),
             _ => None,
         }
+    }
+}
+
+/// Extracts the plaintext from a [`SecretValue`] that has already been
+/// resolved.
+///
+/// After [`ConfigFile::resolve_secrets`], every secret in the file is
+/// [`SecretValue::Plain`]. An unresolved encrypted value returns `None`, which
+/// makes it invisible to the resolver — the setting appears absent rather than
+/// silently falling through to a default.
+fn as_plain(value: &SecretValue) -> Option<String> {
+    match value {
+        SecretValue::Plain(s) => Some(s.clone()),
+        SecretValue::Encrypted(_) => None,
     }
 }
 
