@@ -20,8 +20,8 @@ boundary."* It carries findings only; nothing here is fixed. Remediation belongs
 - **Findings so far:** **four**, all Low (`F-177-1`, `F-177-2`, `F-177-3`, `F-177-4`). Severity
   calibration across the surface (§6) has not been completed, so this count is provisional.
 - **Pass entries so far:** fourteen, in the [Pass entries](#5-pass-entries) section.
-- **Executed:** S2-1, S2-2, S2-3 (partial), S2-4 (partial), S2-6 (partial), S2-7
-  (partial), S2-9 (partial), S2-13, S2-14 (partial). **Not executed:** S2-5, S2-8, S2-10, S2-11,
+- **Executed:** S2-1, S2-2, S2-3 (partial), S2-4, S2-6 (partial), S2-7, S2-9
+  (partial), S2-13, S2-14 (partial). **Not executed:** S2-5, S2-8, S2-10, S2-11,
   S2-12 (partial), S2-15.
 - **Throwaway stack:** torn down, and the tear-down is recorded in [§7](#7-tear-down-step-7). A later
   checkpoint must re-provision before the outstanding sub-tasks can run.
@@ -779,23 +779,37 @@ Outside the numbered entries, S2-14 found the same shape on the auth tree: `/aut
 That is recorded here rather than as an entry because it is a `partial` sub-task: the authenticated
 arm (with an auth store actually created) has not been probed. (Boundary 6/7.)
 
+**Repository baselines, re-run.** The baselines `audit-scope.md` names are not pass entries in their
+own right, but S2-3, S2-4 and S2-7 each owe one, so they were executed *after* the stack was torn
+down, on the host, against the audit worktree — whose `src/`, `tests/`, `Cargo.toml` and `Cargo.lock`
+are byte-identical to the pinned revision (`git diff c5e9943…dfdd21 HEAD` empty). Two commands, both
+green:
+
+```text
+cargo test --lib "storage::layout::tests::"   → 21 passed; 0 failed (346 filtered out; 0.00s)
+cargo test --test security_tests              → 11 passed; 0 failed (0.00s)
+```
+
+That covers the four baselines S2-4 credits — `layout.rs::a_document_identifier_is_validated_before_any_path_is_built`,
+`::hostile_components_are_rejected` (the baseline the O-177-10 decision rests on: it passes *because*
+the set it refuses is the narrow path-meaning set), `::a_project_reserves_the_names_of_its_collections`,
+`::case_folders_keep_their_identifier_verbatim` — the three symlink baselines S2-3 credits, and
+`tests/security_tests.rs::data_integrity_tests::test_concurrent_writes_do_not_corrupt`, which passes
+while asserting only that the stored document stays *valid*: validity holds and the durability of
+every acknowledged write does not, which is exactly the distinction `F-177-3` records. The same
+binary's `path_traversal_tests::*` (four tests, including
+`test_rejects_traversal_through_a_case_identifier`) and `symlink_tests::test_rejects_symlink_escape`
+also pass, independently corroborating pass entries 1–2 and 5. This is source-level evidence at the
+pinned revision, not evidence about the built image: the image was audited by the API probes, the
+baselines by the test binaries compiled from the same revision.
+
 Not yet credited in this checkpoint (and deliberately not listed as passes): atomicity under `SIGKILL`
 (S2-5), two replicas on one data directory (S2-8), attachment and revision publication (S2-10), the
 overwrite table (S2-11), the full error-leak table (S2-12), and the configuration-file boundary
-(S2-15). The
-repository's own tests — `src/storage/layout.rs::a_symlink_that_escapes_the_root_is_rejected`,
-`::a_symlinked_collection_directory_that_escapes_the_root_is_rejected`,
-`::a_symlinked_project_folder_that_escapes_the_root_is_rejected`,
-`tests/security_tests.rs::symlink_tests::test_rejects_symlink_escape`,
-`tests/security_tests.rs::data_integrity_tests::test_concurrent_writes_do_not_corrupt`,
-`src/storage/layout.rs::hostile_components_are_rejected` — are baselines per
-`audit-scope.md`, not findings, and this audit has not yet re-run them. The three symlink baselines
-correspond to the fixtures measured in entries 5–6 above; the concurrency baseline is still owed a
-fresh run (S2-7's evidence is the API-level measurement recorded in `F-177-3` and pass entry 13, and
-`F-177-3` names that baseline — which asserts only that the document stays valid — as the place a
-durability regression test belongs); and `hostile_components_are_rejected` is the baseline the S2-4
-identifier decisions rest on, read verbatim at the pinned revision but not executed in this
-checkpoint — the PR gate's `cargo test` runs it.
+(S2-15). The three symlink baselines correspond to the fixtures measured in entries 5–6 above; the
+symlinked-*attachment* fixture S2-3 also names has not been planted, so S2-3 stays partial. `F-177-3`
+names `test_concurrent_writes_do_not_corrupt` — now re-run green — as the place a durability regression
+test belongs, because the baseline as written cannot fail on an acknowledged-but-lost write.
 
 ## 6. Calibration confirmed
 
@@ -827,16 +841,14 @@ and the pushed commits.
 The following sub-tasks of [audit-design-176-178.md](audit-design-176-178.md) §"#177" §3 have not run
 to completion. Each names what it is for, so a reader can see the shape of what is missing rather
 than only its absence. Rows marked **partial** have measured results in §4/§5; what they still owe is
-in the second column. S2-3, S2-4, S2-7 and S2-9 have run; their rows are kept only to name what the
-run did **not** cover (S2-1 and S2-13 have run in full, so their rows are gone).
+in the second column. S2-3, S2-6, S2-9 and S2-14 have run and keep a row only to name what their run
+did **not** cover; S2-1, S2-4, S2-7 and S2-13 have now run in full, so their rows are gone.
 
 | Sub-task | What is missing |
 | --- | --- |
-| **S2-3 (partial)** | The six fixtures were planted and refused (pass entries 5–6, O-177-4), but a **symlinked attachment** was not planted, and the repository's own symlink baselines (`src/storage/layout.rs::a_symlink_that_escapes_the_root_is_rejected`, `::a_symlinked_collection_directory_that_escapes_the_root_is_rejected`, `::a_symlinked_project_folder_that_escapes_the_root_is_rejected`, `tests/security_tests.rs::symlink_tests::test_rejects_symlink_escape`) were not re-run. |
-| **S2-4 (partial)** | The reserved-suite-name probe was re-run against the correct body field: in a freshly created project `name: test_runs` → **409** `conflict` (refused by validation, not by a pre-existing directory), control `Smoke` → **201** and a repeat → **409**; the 4 KiB row is scored and promoted to `F-177-4` (the boundary is `NAME_MAX`: 255 → 201, 256 → 500); and the two unrefused degenerate identifiers — whitespace-only and the dotfile names (`.tucano.lock`, `.tucano-<suffix>.tmp`, accepted as case ids → 201) — are **decided in O-177-10** as an observation, with the pass entry that carries the decision (entry 14). What remains is the execution of the sub-task's named baselines, `src/storage/layout.rs::a_document_identifier_is_validated_before_any_path_is_built`, `::hostile_components_are_rejected`, `::a_project_reserves_the_names_of_its_collections`, and `::case_folders_keep_their_identifier_verbatim`: they are read verbatim at the pinned revision but not re-run here, and the PR gate's `cargo test` runs them. |
+| **S2-3 (partial)** | The six fixtures were planted and refused (pass entries 5–6, O-177-4), and the repository's own symlink baselines (`src/storage/layout.rs::a_symlink_that_escapes_the_root_is_rejected`, `::a_symlinked_collection_directory_that_escapes_the_root_is_rejected`, `::a_symlinked_project_folder_that_escapes_the_root_is_rejected`, `tests/security_tests.rs::symlink_tests::test_rejects_symlink_escape`) have now been **re-run green** (§5, "Repository baselines, re-run"). What is still missing is the **symlinked attachment** fixture: a symlinked *attachment file* inside a real case's attachments directory, pointing outside the root. |
 | **S2-5** | Atomicity: ten `SIGKILL`s of the container process mid-write, then a JSON validation pass over every stored document and an inspection of leftover `.tucano-*.tmp` files. No power-loss durability is claimed either way; a missing parent-directory `fsync` is an observation by pre-commitment, never a finding. |
 | **S2-6 (partial)** | Truncation, invalid UTF-8, and a 100 MiB replacement are measured (pass entries 7–9). The wrong-shape JSON case is measured **and is a finding** instead of a pass (`F-177-2`). No further variants are owed, but `F-177-2` needs the calibration pass in §6. |
-| **S2-7 (partial)** | Measured: 32 concurrent PUTs of one document all returned **200** but only 16 persisted (`version: 17`), against a sequential control of 20 × 200 → 20 persisted (`version: 21`), and a 2-writer × 10-round reproduction where all 20 acknowledged writes yielded one new version per round. Written up as `F-177-3`, with `tests/security_tests.rs::data_integrity_tests::test_concurrent_writes_do_not_corrupt` still owed a fresh run — it asserts only that the document stays valid, which the measurement confirms. |
 | **S2-8** | Two replicas against one data directory, with the filesystem type of the throwaway volume recorded — note that this checkpoint's volume is `tmpfs`, so this sub-task's result does **not** transfer to a real volume and the arm must be re-provisioned on a disk-backed directory before its result may be written up. |
 | **S2-9 (partial)** | Lock release is measured for the **document** and **attachment** failure paths (pass entries 10–11). The revision path's failure-then-success pair has not been run, and no lock was observed *held* at any point (the probes measure release, not exclusion). |
 | **S2-10** | Attachment publication in place (torn read), orphan handling, and revision immutability. Only the attachment lock half has run. |
