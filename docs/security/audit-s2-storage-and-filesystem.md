@@ -20,7 +20,7 @@ boundary."* It carries findings only; nothing here is fixed. Remediation belongs
 - **Findings so far:** **four**, all Low (`F-177-1`, `F-177-2`, `F-177-3`, `F-177-4`). Severity
   calibration across the surface (§6) has not been completed, so this count is provisional.
 - **Pass entries so far:** thirteen, in the [Pass entries](#5-pass-entries) section.
-- **Executed:** S2-1 (partial), S2-2, S2-3 (partial), S2-4 (partial), S2-6 (partial), S2-7
+- **Executed:** S2-1, S2-2, S2-3 (partial), S2-4 (partial), S2-6 (partial), S2-7
   (partial), S2-9 (partial), S2-13, S2-14 (partial). **Not executed:** S2-5, S2-8, S2-10, S2-11,
   S2-12 (partial), S2-15.
 - **Throwaway stack:** torn down, and the tear-down is recorded in [§7](#7-tear-down-step-7). A later
@@ -107,7 +107,7 @@ auditor's.
    `docker run --user 4242:4242 --entrypoint sh` against the same data directory, using the audited
    image (so the same `sh` availability as the service's own runtime).
 
-## 3. Surface enumerated before probing (step 3 — S2-1, **partial**)
+## 3. Surface enumerated before probing (step 3 — S2-1, closed)
 
 ### 3.1 Enforcement points in `src/storage/layout.rs`
 
@@ -139,12 +139,76 @@ The repository's own assertion of the resulting mode is `src/storage/fs.rs:2376`
 `assert_eq!(mode, 0o666);`. The design document cites this line as `:2286`; at this revision it is
 `:2376`. The assertion is unchanged in substance.
 
-### 3.3 Not yet enumerated
+### 3.3 The closed set of mutating call sites
 
-The closed mutating-call-site table the sub-task requires (`grep -n "fs::rename\|fs::write\|File::create\|OpenOptions\|create_dir\|remove_dir\|remove_file\|sync_all" src/storage/fs.rs src/storage/layout.rs src/auth/store.rs`,
-plus the `attachment_path` / `step_attachment_path` / `revision_dir` / `project_document_path` /
-`project_collection_dir` builders) has **not** been run. §3 is therefore not the closed table the
-design asks for, and a path built outside `layout.rs` would not yet have been caught.
+Enumerated with the sub-task's own commands:
+
+```bash
+grep -n "fs::rename\|fs::write\|fs::remove_file\|fs::remove_dir\|fs::create_dir\|File::create\|OpenOptions\|sync_all\|sync_data\|set_permissions\|fs::copy\|fs::hard_link" \
+  src/storage/fs.rs src/storage/layout.rs src/auth/store.rs
+grep -rn "fs::write\|fs::rename\|fs::remove_file\|fs::remove_dir\|fs::create_dir\|File::create\|OpenOptions" src/ --include=*.rs
+grep -n "attachment_path(\|step_attachment_path(\|revision_dir(\|project_document_path(\|project_collection_dir(\|self.document(\|self.folder(" src/storage/fs.rs
+```
+
+The line numbers are the pinned revision's: `git diff c5e99431389854368ab3a8e07003622f34dfdd21 HEAD --stat -- src/ tests/ Cargo.toml`
+is empty, so nothing in this report's source references can have drifted. Test code is excluded by
+construction — the `#[cfg(test)] mod tests` boundaries are `src/storage/fs.rs:971`,
+`src/storage/layout.rs:460`, `src/auth/store.rs:419`, `src/domain/service.rs:1679` — because the
+sub-task enumerates the *service's* surface, and a test fixture that writes to its own `TempDir` is
+not that surface.
+
+| Site | Enclosing item | Mutation | Target comes from |
+| --- | --- | --- | --- |
+| `src/storage/fs.rs:30` | `FileRepository::new` (`:26`) | `create_dir_all(root/<name>)` per `ROOT_DIRS` | `ROOT_DIRS` literals (`layout.rs:49`), never request data |
+| `src/storage/fs.rs:38` | `acquire_lock` (`:37`) | `OpenOptions` create `.tucano.lock` | `self.root.join(".tucano.lock")` |
+| `src/storage/fs.rs:163`, `:164`, `:165`, `:174`, `:175`, `:178` | `write_json` (`:159`) | `create_dir_all(parent of destination)`, create `.tucano-<suffix>.tmp`, `sync_all`, `rename` onto `destination`, `remove_file` of the temp on failure | `destination` = always a `self.document(...)` / `project_document_path(...)` path; the temp name is the only locally built path, and it is `<validated directory>/.tucano-<random suffix>.tmp` |
+| `src/storage/fs.rs:358`, `:362`, `:366` | `place_locked` (`:325`) | `create_dir_all(to.parent())`; `rename(from → to)` for `Placement::Move`; on a failed rename `copy_dir_all` + `remove_dir_all(from)`; `Placement::Copy` calls `copy_dir_all` | `from`/`to` = `self.folder(resource, Some(<parent>), id)` (`fs.rs:76`) |
+| `src/storage/fs.rs:549`, `:551` | `delete_at` (`:546`) | `remove_dir_all(folder)` or, when the node is a document, `remove_file` | `self.folder(...)` / `self.document(...)` |
+| `src/storage/fs.rs:601`, `:607`, `:609` | `save_attachment` (`:583`) | create `.tucano-<suffix>.tmp`, `sync_all`, `remove_file` of the temp on failure | `attachment_path(...)` (`layout.rs:323`), assigned at `fs.rs:600` |
+| `src/storage/fs.rs:677` | `delete_attachment` (`:674`) | `remove_file` | `attachment_path(...)` |
+| `src/storage/fs.rs:704`, `:706`, `:712`, `:714` | `save_revision` (`:618`) | `create_dir_all(revision dir)`, create temp, `sync_all`, `remove_file` of the temp on failure | `revision_dir(...)` (`layout.rs:304`), assigned at `fs.rs:646` |
+| `src/storage/fs.rs:732` | `delete_step_attachment` (`:723`) | `remove_file` | `step_attachment_path(...)` (`layout.rs:353`), built inline at `:702`/`:732` |
+| `src/storage/fs.rs:770`, `:778` | `probe_writable` (`:768`) | create `.tucano-<suffix>.tmp` in the **root**, `remove_file` it | `root.join(format!(".tucano-{}.tmp", unique_suffix()))` — the readiness probe, no request data |
+| `src/storage/fs.rs:792` | `probe_lock` (`:791`) | `OpenOptions` create/read/write `.tucano.lock` in the root | `root.join(".tucano.lock")`; opened `truncate(false)`, so a probe never empties a held lock |
+| `src/storage/fs.rs:856`, `:863` | `copy_dir_all` (`:855`) | `create_dir_all(to)`, `fs::copy` per entry | recursive over `fs::read_dir(from)` — names read back off the disk, not from a request; reached only from `place_locked` |
+| `src/auth/store.rs:102` | `AuthStore::new` (`:100`) | `create_dir_all(grants_dir)` | `auth_dir()`/`grants_dir()` (`:106`/`:114`) |
+| `src/auth/store.rs:136` | `AuthStore::acquire_lock` (`:135`) | `OpenOptions` create `.tucano.lock` | the auth directory |
+| `src/auth/store.rs:361` | `remove_project_grants` (`:359`) | `remove_file` | `grant_path(project_id)` (`:123`) |
+| `src/auth/store.rs:399`, `:401`, `:410`, `:411`, `:414` | `write_json_atomically` (`:395`) | `create_dir_all`, create temp, `sync_all`, `rename`, `remove_file` of the temp on failure | the caller's destination, by the same atomic-write pattern as `write_json` |
+| `src/storage/layout.rs:455` | `set_private_permissions` (`:451`) | `set_permissions(0o666)` | the open write handle (`F-177-1`) |
+
+**What the enumeration establishes.**
+
+1. **Every mutating target is produced by the builders in `layout.rs`** — `project_document_path`
+   (`:248`), `project_collection_dir` (`:215`), `revision_dir` (`:304`), `attachment_path` (`:323`),
+   `step_attachment_path` (`:353`), and `fs.rs`'s own `document`/`folder` (`:49`/`:76`), which
+   delegate to `project_document_path` (`fs.rs:70`), `project_dir` (`fs.rs:80`), `suite_dir`
+   (`fs.rs:84`) and `case_dir` (`fs.rs:88`) in `layout.rs` (`:199`, `:261`, `:289`). Each of those
+   validates the
+   identifier and re-checks confinement (`validate_document_id` `:236`, `validate_component` `:367`,
+   `ensure_within` `:391`, `resolve_existing_prefix` `:415`). This is the invariant the sub-task was
+   written to test, and it holds at this revision.
+2. **The only paths built outside `layout.rs` are the atomic-temp names** —
+   `fs.rs:164`, `fs.rs:770`, `auth/store.rs:400` — each `<validated directory>/.tucano-<random
+   suffix>.tmp`. They take their directory from a builder's output and their suffix from the random
+   generator, so no request data reaches them; a temporary can therefore only ever appear beside the
+   destination it is about to replace. That is also why a leftover `.tucano-*.tmp` is inert and
+   unaddressable (pass entry 13's debris check, `O-177-1`).
+3. **The lock file is created by two different items in the same module** — `acquire_lock` (`:37`,
+   under `O_EXCL`-style `create(true)`) and `probe_lock` (`:791`, `truncate(false)`) — which is why a
+   fresh data directory can hold a `.tucano.lock` before anything is written (`O-177-2` measures
+   `0644` there).
+4. **No path is built anywhere else in the service.** The repo-wide grep matched only three lines
+   outside the three modules — `src/auth/config.rs:374`, `src/config.rs:378`, `:393` — all of them
+   `std::fs::write` of a test fixture inside those files' `#[cfg(test)]` modules. Per the sub-task's
+   expected result ("a path built anywhere else is a finding") there is **no finding** here.
+5. **`refuse_legacy_layout` (`fs.rs:929`) does not mutate.** It is the one item in the
+   persistence module whose name suggests a write; the enumeration shows it reads only, so a legacy
+   tree that refuses the root is left untouched (the repository's own
+   `a_refused_root_leaves_the_legacy_document_untouched` covers the same ground).
+
+This closes S2-1: §3.1 names the enforcement points, §3.2 the permission call sites, and this table
+every mutating call site, with the one deliberate exception above named rather than omitted.
 
 ## 4. Findings
 
@@ -716,11 +780,10 @@ The following sub-tasks of [audit-design-176-178.md](audit-design-176-178.md) §
 to completion. Each names what it is for, so a reader can see the shape of what is missing rather
 than only its absence. Rows marked **partial** have measured results in §4/§5; what they still owe is
 in the second column. S2-3, S2-4, S2-7 and S2-9 have run; their rows are kept only to name what the
-run did **not** cover (S2-13 has run in full and its row is gone).
+run did **not** cover (S2-1 and S2-13 have run in full, so their rows are gone).
 
 | Sub-task | What is missing |
 | --- | --- |
-| **S2-1 (remainder)** | The closed mutating-call-site table required by report §3 (see §3.3). |
 | **S2-3 (partial)** | The six fixtures were planted and refused (pass entries 5–6, O-177-4), but a **symlinked attachment** was not planted, and the repository's own symlink baselines (`src/storage/layout.rs::a_symlink_that_escapes_the_root_is_rejected`, `::a_symlinked_collection_directory_that_escapes_the_root_is_rejected`, `::a_symlinked_project_folder_that_escapes_the_root_is_rejected`, `tests/security_tests.rs::symlink_tests::test_rejects_symlink_escape`) were not re-run. |
 | **S2-4 (partial)** | The reserved-suite-name probe was re-run against the correct body field: in a freshly created project `name: test_runs` → **409** `conflict` (refused by validation, not by a pre-existing directory), control `Smoke` → **201** and a repeat → **409**; the 4 KiB row is scored and promoted to `F-177-4` (the boundary is `NAME_MAX`: 255 → 201, 256 → 500). What remains is the decision on the two unrefused degenerate identifiers — whitespace-only and the dotfile names (`.tucano.lock`, `.tucano-<suffix>.tmp`, accepted as case ids → 201). |
 | **S2-5** | Atomicity: ten `SIGKILL`s of the container process mid-write, then a JSON validation pass over every stored document and an inspection of leftover `.tucano-*.tmp` files. No power-loss durability is claimed either way; a missing parent-directory `fsync` is an observation by pre-commitment, never a finding. |
