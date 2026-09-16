@@ -127,23 +127,30 @@ rejection, not a runtime surprise.
 
 **Generated (never edited by hand):**
 
-- The **route and operation reference** is produced from `openapi.json` at build time (a small script
-  that renders the operations index into mdBook Markdown). It is a *view* of the contract, not a copy:
-  it is regenerated on every build, so it cannot drift.
-- The **wiki index and `SUMMARY.md` entries** for generated pages are produced by the same step.
+- The **route and operation reference** — `docs/generated/operations-reference.md`, rendered from
+  `openapi.json` by [`scripts/generate-operations-reference.mjs`](../../scripts/generate-operations-reference.mjs).
+  It is a *view* of the contract, not a copy: the page is committed so it is reviewable in the diff, and
+  CI re-renders it and fails on any difference.
+- The **wiki index** is hand-written prose that links only pages that exist; CI keeps it exhaustive (see
+  check 3).
 
-**What CI checks:**
+**What CI checks** (the `docs` job in [`.github/workflows/ci.yml`](../../.github/workflows/ci.yml)):
 
 1. **Build must succeed** — `mdbook build docs` runs on every push and pull request; a broken link or a
    page missing from `SUMMARY.md` fails the job.
-2. **Generated reference must be current** — the build regenerates the operation reference from
-   `openapi.json` and the job **fails if regeneration produces a diff** against the committed tree.
-   This is the same "generate, then fail on drift" pattern the generated-client strategy already uses in
-   [`docs/architecture/gui-client-boundary.md`](gui-client-boundary.md): a contract change that is not
-   reflected in the published reference is a red build, not a stale page.
-3. **README linkage must stay complete** — the job asserts every `docs/<category>/*.md` page appears in
-   the README documentation table (and in `SUMMARY.md`), so a new page cannot be added without being
-   discoverable. This mirrors the linkage requirement in [`AGENTS.md`](../../AGENTS.md).
+2. **Generated reference must be current** — `node scripts/generate-operations-reference.mjs --check`
+   re-renders the operation reference from `openapi.json` and **fails if it differs** from the committed
+   page. This is the same "generate, then fail on drift" pattern the generated-client strategy already
+   uses in [`docs/architecture/gui-client-boundary.md`](gui-client-boundary.md): a contract change that
+   is not reflected in the published reference is a red build, not a stale page. It runs in a plain
+   container without rebuilding the crate, so it is cheap on every pull request.
+3. **README linkage and links must stay complete** — `node scripts/check-docs-links.mjs` asserts that
+   every relative link in every tracked Markdown document resolves, that every `docs/<category>/*.md`
+   page appears in both `SUMMARY.md` and the README documentation table, and that the wiki index links
+   every wiki page and no page that does not exist. A new page cannot be added without being
+   discoverable, and the index cannot link a page that is missing — the defect issue
+   [#236](https://github.com/TucanoTechnology/TucanoTestAPI/issues/236) reported. This mirrors the
+   linkage requirement in [`AGENTS.md`](../../AGENTS.md).
 
 **The update rule, stated once:** *when a feature, route or deployment step changes, the same pull
 request updates the `docs/` page that documents it and regenerates the reference; CI refuses the merge
@@ -155,9 +162,10 @@ together, in one reviewed revision.
 - The wiki is a second *view* of `docs/`, never a second *copy*. There is exactly one place to edit a
   fact, and it is versioned with the code that implements it.
 - Publication is a build step, so it adds no service, no database and no deployment concern.
-- Two small pieces of tooling are introduced when the first page is authored: `docs/book.toml` and
-  `docs/SUMMARY.md`, plus the CI job that builds and drift-checks them. That tooling is the cost of the
-  guarantee; the alternative (a GitHub Wiki) has no tooling cost and no guarantee.
+- The tooling this record called for is in place: `docs/book.toml`, `docs/SUMMARY.md`,
+  `scripts/generate-operations-reference.mjs`, `scripts/check-docs-links.mjs`, and the `docs` job in
+  `.github/workflows/ci.yml`. That tooling is the cost of the guarantee; the alternative (a GitHub Wiki)
+  has no tooling cost and no guarantee.
 - The child tasks of [#165](https://github.com/TucanoTechnology/TucanoTestAPI/issues/165) author pages
   against this structure; this record unblocks them and is superseded only by another decision record
   under `docs/architecture/`.

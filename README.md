@@ -730,6 +730,7 @@ Repository contribution and agent workflow rules are documented in [AGENTS.md](A
 | [docs/security/configuration-decision.md](docs/security/configuration-decision.md) | The configuration and secrets decision (#187): environment variables versus a unified file, precedence, and key management |
 | [docs/security/scanning-policy.md](docs/security/scanning-policy.md) | The dependency-audit, secret-scan, container-scan, and SBOM policy CI enforces |
 | [docs/security/audit-scope.md](docs/security/audit-scope.md) | The security audit's scope, methodology, finding template, and severity rubric (#175) |
+| [docs/security/audit-design-176-178.md](docs/security/audit-design-176-178.md) | The design brief shared by the S1–S3 audit reports: what each report covers and the method they follow |
 | [docs/security/audit-s4-dependencies-and-supply-chain.md](docs/security/audit-s4-dependencies-and-supply-chain.md) | The S4 supply-chain audit report — dependency advisories, CI controls, action and image pinning, the SBOM, and the workflow permissions model (#179) |
 | [docs/security/audit-s3-container-and-deployment.md](docs/security/audit-s3-container-and-deployment.md) | The S3 container and deployment audit report — image and Compose hardening, secret delivery, the volume as the only state, network exposure, rollback, and the CI security jobs measured against the scanning policy (#178) |
 | [docs/security/audit-s2-storage-and-filesystem.md](docs/security/audit-s2-storage-and-filesystem.md) | The S2 storage and filesystem audit report — the layout contract, identifier validation, permissions, atomicity, the lock, attachment and revision publication, the overwrite contract, the error surface, and the configuration-file boundary (#177) |
@@ -746,5 +747,8 @@ Repository contribution and agent workflow rules are documented in [AGENTS.md](A
 | [docs/wiki/milestones.md](docs/wiki/milestones.md) | Milestone progress derived from referenced runs (#172) |
 | [docs/wiki/case-versioning-and-history.md](docs/wiki/case-versioning-and-history.md) | The `version` stamp, `revisions/` snapshots, and the history endpoints (#172) |
 | [docs/wiki/api-and-authentication.md](docs/wiki/api-and-authentication.md) | Zero to an authenticated call, the error envelope, request limits, and why Swagger is the contract (#173) |
+| [docs/wiki/operations-and-troubleshooting.md](docs/wiki/operations-and-troubleshooting.md) | Running the service: the data directory as the only state, health and readiness, scaling, backup and restore, rollback, and a troubleshooting FAQ (#174) |
 | [docs/roadmap.md](docs/roadmap.md) | The roadmap ordered by delivery priority, with the tracking issue for each item |
+| [docs/SUMMARY.md](docs/SUMMARY.md) | The table of contents of the published documentation site — the entry point that lists every page |
+| [docs/generated/operations-reference.md](docs/generated/operations-reference.md) | Generated from `openapi.json`: the index of every route, method, `operationId` and summary |
 | [AgentRules/](AgentRules/) | Organisation-wide engineering and process rules |
