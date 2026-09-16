@@ -28,6 +28,7 @@
 - [The Rust service core](architecture/rust-service-core.md)
 - [GUI client boundary and generated clients](architecture/gui-client-boundary.md)
 - [ADR: object storage declined](architecture/adr-object-storage.md)
+- [Storage backends](architecture/storage-backends.md)
 - [ADR: storage layout v3](architecture/adr-storage-layout-v3.md)
 - [Wiki structure and publication](architecture/wiki-structure-and-publication.md)
 
