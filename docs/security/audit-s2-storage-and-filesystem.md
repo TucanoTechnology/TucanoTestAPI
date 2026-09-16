@@ -905,7 +905,8 @@ run its stack-free half and keeps a row only for the container arm.
 | **S2-14 (partial)** | The auth surface is unreachable anonymously (§5, unnumbered note): `/auth`, `/auth//`, `/data/auth`, `/auth/projects`, `/projects/../auth` → **404**, `/auth/me` → **401**. What is owed is the **authenticated** arm, i.e. creating an auth store and confirming no project route can then reach it. |
 | **S2-15 (partial)** | Its design-level question is answered and recorded: `#189`'s AEAD envelope has **not** landed at the audited revision (`#188` closed 2026-09-14, `#189` and `#190` open with no PR; the source search finds no crypto), so the *Configuration key* boundary stays **documented-pending** by the design's own pre-commitment rather than exercised, and the two `config::` baselines are re-run green (§5, O-177-11). What is still missing is the **container arm** of the file boundary: a well-formed file mounted read-only resolves; an unknown key, a bad `version`, a malformed document and a missing file each refuse startup with errors that name the setting and never the value; and the running service never writes the file (invariant 9), confirmed by `docker diff` and an in-container `touch`. Needs the image. |
 
-Also outstanding for the finished report: the README documentation-table row, the full local gate
-(`actionlint`, `node scripts/check-matrix.mjs`, `cargo fmt --check`, `cargo clippy`, `cargo test`,
-`cargo build --release`), and the pull request itself — which per the design is opened **only** when
-the report is complete, assigned to `ECiurleo` and never merged by the auditor.
+Also outstanding for the finished report: the full local gate (`actionlint`, `node
+scripts/check-matrix.mjs`, `cargo fmt --check`, `cargo clippy`, `cargo test`, `cargo build --release`)
+and the pull request itself — which per the design is opened **only** when the report is complete,
+assigned to `ECiurleo` and never merged by the auditor. The README documentation-table row the design's
+PR step names is already added on this branch, pointing at this file next to its S3 and S4 siblings.
