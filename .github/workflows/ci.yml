@@ -105,20 +105,34 @@ jobs:
           WIKI_TOKEN: ${{ secrets.WIKI_TOKEN }}
         run: |
           set -euo pipefail
-          # GitHub creates the wiki repository when the first wiki page is
-          # saved, so it may not exist yet. The failure modes differ: a
-          # repository that was never created fails the clone, while one with
-          # no commits clones fine and leaves HEAD unborn. A shallow clone of
-          # an empty repository succeeds and the commit below seeds it, so the
-          # one path handles both — and a clone that genuinely fails (a bad
-          # token, no repository) still fails loudly under `set -e`.
           wiki_url="https://x-access-token:${WIKI_TOKEN}@github.com/${GITHUB_REPOSITORY}.wiki.git"
           work="$RUNNER_TEMP/wiki-repo"
-          git clone --depth 1 "$wiki_url" "$work"
-          # Remove the predecessors of every mirrored page, so a page dropped
-          # from docs/wiki/ is dropped here too and a hand edit in the browser
-          # is overwritten rather than merged. _Sidebar.md is restaged below.
-          find "$work" -maxdepth 1 -name '*.md' -delete
+          # GitHub creates the wiki repository when its first page is pushed,
+          # so it may not exist yet. Three states are possible:
+          #
+          #   1. Wiki repo exists with commits — shallow clone succeeds.
+          #   2. Wiki repo exists but is empty — shallow clone succeeds with
+          #      an unborn HEAD; the commit below seeds it.
+          #   3. Wiki repo was never created — clone fails with "Repository
+          #      not found" (exit 128). In this case we initialise a fresh
+          #      repo locally, add the first pages, and push — which creates
+          #      the remote wiki repo on GitHub's side.
+          #
+          # A clone that fails for any *other* reason (bad token, network
+          # error) also falls through to the init path, which will fail at
+          # the push step with an auth error — distinguishing a genuine
+          # access problem from a first-run.
+          if git clone --depth 1 "$wiki_url" "$work" 2>/dev/null; then
+            # Remove the predecessors of every mirrored page, so a page
+            # dropped from docs/wiki/ is dropped here too and a hand edit
+            # in the browser is overwritten rather than merged.
+            find "$work" -maxdepth 1 -name '*.md' -delete
+          else
+            echo "Wiki repository does not exist yet; initialising from scratch."
+            mkdir -p "$work"
+            git -C "$work" init -q
+            git -C "$work" remote add origin "$wiki_url"
+          fi
           cp "$RUNNER_TEMP/wiki"/*.md "$work"/
           git -C "$work" config user.name  "github-actions[bot]"
           git -C "$work" config user.email "41898282+github-actions[bot]@users.noreply.github.com"
