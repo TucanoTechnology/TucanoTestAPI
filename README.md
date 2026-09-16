@@ -732,6 +732,7 @@ Repository contribution and agent workflow rules are documented in [AGENTS.md](A
 | [docs/contracts/file-format-versioning-plan.md](docs/contracts/file-format-versioning-plan.md) | The `formatVersion` storage marker: field, reader and writer rules, migration rules, and the rollback drill matrix |
 | [docs/deployment/deployment-guide.md](docs/deployment/deployment-guide.md) | The deployment model: the JSON volume mount, Compose configuration, the optional configuration file, container hardening, scaling, and rollback to an immutable release tag |
 | [docs/deployment/config.example.json](docs/deployment/config.example.json) | The configuration-file template, kept valid against the loader's schema by a unit test |
+| [docs/deployment/configuration-reference.md](docs/deployment/configuration-reference.md) | Every setting: environment variable, file key, default, sensitivity, precedence rules, validation rules, and the encrypted-secret envelope format (#190) |
 | [docs/deployment/canary-validation-and-rollback.md](docs/deployment/canary-validation-and-rollback.md) | Canary validation, the scratch-CRUD smoke check, and safe rollback |
 | [docs/security/threat-model.md](docs/security/threat-model.md) | Trust boundaries, abuse cases, and security invariants |
 | [docs/security/authentication-decision.md](docs/security/authentication-decision.md) | The authentication decision and its implemented tracking ticket (#130) |
