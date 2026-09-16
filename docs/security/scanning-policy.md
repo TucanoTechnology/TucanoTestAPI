@@ -14,9 +14,18 @@ The following security scans run automatically on every PR and push to main:
 - **Fails the build** if any known vulnerabilities are found
 
 ### 2. Secret Scanning (`gitleaks`)
-- Scans repository history for accidentally committed secrets
+- Scans the tracked tree for accidentally committed secrets — every file `git ls-files`
+  reports, extracted with `git archive` and scanned from a temporary directory so that the
+  container's own uid can always read it
 - Detects API keys, passwords, tokens, and other sensitive data
 - **Fails the build** if any secrets are detected
+- Does **not** walk commit history, and does not scan untracked or ignored files. A secret
+  committed and later deleted still lives in history, where `git clone` delivers it; closing
+  that gap is [finding F-179-5](audit-s4-dependencies-and-supply-chain.md#f-179-5-run-the-secret-scan-over-history-or-correct-the-claim-that-it-does)
+  in the S4 audit report
+- A value that a security report needs to quote verbatim, such as a probe's sentinel, must be
+  written in a form the detector's entropy rule does not mistake for a credential; a flagged
+  sentinel is a false positive to be reworded, not a leak to be allowlisted
 
 ### 3. Container Image Scanning (`trivy`)
 - Scans the production Docker image for OS and library vulnerabilities
@@ -86,22 +95,30 @@ When a vulnerability is discovered:
 
 ## Testing Security Controls
 
-To verify CI security controls are working:
+To verify CI security controls are working, run the job's own body. For the secret scan the
+fixture must be **inside the tracked tree** — an untracked file is deliberately not scanned —
+and it must be removed before committing:
 
 ```bash
 # Test dependency audit
 cargo audit
 
-# Test secret scanning (should detect test secret)
-echo "AWS_SECRET_ACCESS_KEY = \"wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY\"" >> test_secret.txt
-gitleaks detect --source . --no-git
+# Test secret scanning (should detect the fixture)
+echo 'AWS_SECRET_ACCESS_KEY = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"' >> tracked_secret_fixture.txt
+git add tracked_secret_fixture.txt
+SCAN_DIR=$(mktemp -d)
+git archive --format=tar HEAD | tar -x -C "$SCAN_DIR"
+chmod -R a+rX "$SCAN_DIR"
+docker run --rm -v "$SCAN_DIR:/repo:ro" zricethezav/gitleaks:v8.9.0 detect --source /repo --no-git --redact
+# expect: WRN leaks found ... and a non-zero exit
 
 # Test container scanning
 docker build -t tucano-test .
 trivy image tucano-test
 
 # Clean up
-rm test_secret.txt
+git rm --cached tracked_secret_fixture.txt
+rm tracked_secret_fixture.txt "$SCAN_DIR"
 ```
 
 ## Compliance
