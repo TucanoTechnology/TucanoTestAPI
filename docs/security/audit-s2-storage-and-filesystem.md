@@ -19,7 +19,7 @@ boundary."* It carries findings only; nothing here is fixed. Remediation belongs
 - **Method:** [audit-scope.md § 6](audit-scope.md#6-how-the-audit-tasks-run), steps 1–7.
 - **Findings so far:** **four**, all Low (`F-177-1`, `F-177-2`, `F-177-3`, `F-177-4`). Severity
   calibration across the surface (§6) has not been completed, so this count is provisional.
-- **Pass entries so far:** thirteen, in the [Pass entries](#5-pass-entries) section.
+- **Pass entries so far:** fourteen, in the [Pass entries](#5-pass-entries) section.
 - **Executed:** S2-1, S2-2, S2-3 (partial), S2-4 (partial), S2-6 (partial), S2-7
   (partial), S2-9 (partial), S2-13, S2-14 (partial). **Not executed:** S2-5, S2-8, S2-10, S2-11,
   S2-12 (partial), S2-15.
@@ -630,21 +630,54 @@ directories only; a run or configuration identifier is one level deeper and cann
 so the asymmetry — refused at one level, accepted at the next — is not later mistaken for an
 inconsistency.
 
-**Pending triage — measured, not yet scored.** The following results were produced by the S2-4
-identifier probes and are **candidates** whose severity has not been scored. They are recorded so the
-measurement is not lost; they are not findings until scored and written in the §"Required finding
-shape" form:
+**O-177-10 — Degenerate identifiers are accepted, and the design expected refusal; decided as an
+observation, not a finding.** The design's S2-4 expectation is "Refusal (400 `invalid_…` or 409) for
+**every** degenerate value", and it names `.tucano.lock`, `.tucano-1700000000000000000.tmp`, the
+Windows device names, and whitespace-only among the values it expects refused. Measurement (the
+pending-triage table) shows two of those classes **accepted**: a whitespace-only case id → **201**, and
+a dotfile case id → **201**. The control that exists is narrower than the expectation, and the
+repository states it exactly: `hostile_components_are_rejected` (`src/storage/layout.rs:770`) asserts
+refusal only for `""`, `"."`, `".."`, a `/`-separated value, a `\`-separated value, and an absolute
+path — names with *path* meaning — and asserts `TC-001.json` accepted. No baseline in the repository
+claims a charset restriction. The accepted names are stored inside the actor's **own** project, are
+returned by the same listing routes that would return any case (the case listing selects on
+"directory holding `test-case.json`", not on a leading dot), and are deleted by the same routes that
+created them; nothing is lost, disclosed, or defeated, so §5's impact axis has no loss to score and
+the entry stays an observation. The reading not taken is named: under §5, *Moderate* × *Limited* would
+be a **Low** finding and *Trivial* × *Limited* a **Medium** one; both presuppose an impact this
+measurement does not show, and the second would also overstate exploitability, since the shipped
+default requires a valid account and a project before a case id can be supplied at all. Two
+consequences are recorded for a reviewer and are **not** scored here. (a) A case directory named
+`.tucano.lock` or `.tucano-<suffix>.tmp` aliases the storage layer's *own* bookkeeping names; for the
+lock file the alias is nominal rather than a collision, because `acquire_lock` opens the lock at the
+data root (`src/storage/fs.rs::acquire_lock`, `self.root.join(".tucano.lock")`), one level above any
+project, and a project child of the same name is a different entry. (b) `unique_suffix()`
+(`src/storage/layout.rs:443`) is `SystemTime::now().as_nanos()` — **pure time, no randomness** — so
+the atomic-temp name built at `src/storage/fs.rs:164` is in principle predictable, and an entry
+already holding a temp's name in the
+directory that receives the write makes `File::create` or `fs::rename` fail (a **500**), while a
+*file* at that name is replaced. Exploiting it needs a nanosecond-exact guess of the service's own
+clock reading, which is impractical rather than merely difficult, so it is recorded and not scored —
+the same treatment §2.7 gives the leftover temp file, an inert bookkeeping name. **Recommended
+regression tests (text only, per the design's "tests recommended, not written"):** extend
+`hostile_components_are_rejected` with the accepted set so the control's boundary is asserted rather
+than only measured; and plant a case whose id equals a temp name in the same directory, with a
+matching suffix, then assert the sibling document write still succeeds.
+
+**Pending triage — measured, and now decided.** The following results were produced by the S2-4
+identifier probes. They are recorded so the measurement is not lost; every row is now either a scored
+**finding**, a **pass entry**, or a recorded **observation**, and no row is left unscored:
 
 | Probe | Result |
 | --- | --- |
 | case id `test_runs`, `milestones`, `configurations` (reserved project children), in a freshly created project | **409** `conflict` — refused, and refused in a project whose collection directory does not pre-exist |
-| case id `.tucano.lock` | **201** — accepted as a case directory name |
-| case id `.tucano-1700000000000000000.tmp` | **201** — accepted (see O-177-1) |
+| case id `.tucano.lock` | **201** — accepted as a case directory name; decided below (O-177-10) |
+| case id `.tucano-1700000000000000000.tmp` | **201** — accepted (see O-177-1); decided below (O-177-10) |
 | case id `CON`, `nul`, `aux` (Windows device names) | **201** — accepted; no refusal, so a Windows-hosted volume is the only place the name becomes special |
 | case id `.`, `..`, `a/b`, `a\b` | **400** `invalid_request` — refused |
 | case id `a%2Fb` | **201** — stored literally, no traversal |
 | case id `""` | **400** `Required fields are missing` |
-| case id `"   "` (whitespace only) | **201** — accepted, producing a whitespace-named directory |
+| case id `"   "` (whitespace only) | **201** — accepted, producing a whitespace-named directory; decided below (O-177-10) |
 | case id 4096 bytes long | **500** `storage_error` `"Storage operation failed"` — **scored and promoted to `F-177-4`**; the boundary is `NAME_MAX` (`255` → 201, `256` → 500) |
 | case id `cafe\u0301` (combining accent) | **201** — accepted as its own distinct identifier |
 | duplicate case id `TC-LOGIN-1` | **409** `conflict` |
@@ -653,19 +686,22 @@ shape" form:
 | suite name `test_runs`, `milestones`, `configurations` in a **freshly created** project, re-run against `name` | **409** `conflict` — refused by validation, not by a pre-existing directory; the control `Smoke` → **201** and a repeat `Smoke` → **409** `conflict` |
 | run and configuration names `test_runs` in the same fresh project | **201** each — recorded as O-177-9 (one level deeper, no collision) |
 
-Two rows are now closed by this checkpoint: the 4 KiB row became **`F-177-4`**, and the invalid
-suite probe was re-run against the correct field and confirms the reserved-child rule for suites. The
-accepted whitespace-only and dotfile identifiers still need a decision against the design's §2.7
-reasoning — dotfiles in particular, since `.tucano.lock` and `.tucano-*.tmp` are names the storage
-layer itself uses.
+Three rows are closed by this checkpoint: the 4 KiB row became **`F-177-4`**, the invalid suite probe
+was re-run against the correct field and confirms the reserved-child rule for suites, and the
+whitespace-only and dotfile identifiers are decided in **O-177-10** — accepted by measurement,
+expected refused by the design, and recorded as an observation rather than a finding because the
+control the repository specifies and tests is the narrower one. **The pending table is therefore
+empty of undecided rows**, and every value it lists is either a finding, a pass entry, or a recorded
+observation.
 
 ## 5. Pass entries
 
 Controls tested **and not broken** in this checkpoint:
 
 1. **Traversal characters in an identifier are refused, not laundered.** `"."`, `".."`, `"a/b"`, and
-   `"a\b"` as a case identifier all return **400** `invalid_request`; the request never reaches the
-   filesystem layer. (Trust boundary 3.)
+   `"a\b"` as a case identifier all return **400** `invalid_request`, and the empty identifier returns
+   **400** `Required fields are missing` (refused a layer earlier, by field validation); the request
+   never reaches the filesystem layer in any of the five cases. (Trust boundary 3.)
 2. **A percent-encoded separator stays literal.** `a%2Fb` is accepted as the identifier `a%2Fb` and
    stored as the directory `a%2Fb`, with no decoding into a path separator. (Trust boundary 3.)
 3. **Reserved project children are refused as case identifiers.** `test_runs`, `milestones`, and
@@ -727,6 +763,15 @@ Controls tested **and not broken** in this checkpoint:
     tree is the S2-4 fixture *directory*); and a collision is refused rather than merged (`409`).
     What did **not** hold is the durability of every acknowledged write — that is `F-177-3`, and this
     entry is deliberately limited to what passed. (Invariant 2's atomicity half; boundary 4.)
+14. **The identifier charset is deliberately open, and an open name stays inside the actor's own
+    project.** The values the design lists as degenerate but the service accepts — a whitespace-only
+    id, the dotfile names `.tucano.lock` and `.tucano-<suffix>.tmp`, the Windows device names, and a
+    combining-accent value — are stored verbatim as the case directory, are returned by the case
+    listing, and remain deletable through the same route that created them; no path leaves
+    `Projects/<project>/…`, and no reserved collection is shadowed (the same names *are* refused at
+    the project-child level, entry 3, and nest harmlessly one level deeper, O-177-9). The control is
+    exactly `validate_component`'s refusals, not a charset restriction. Accepted by decision; the
+    reading not taken is recorded in O-177-10. (Trust boundary 3.)
 
 Outside the numbered entries, S2-14 found the same shape on the auth tree: `/auth`, `/auth//`,
 `/data/auth`, `/auth/projects`, and `/projects/../auth` all return **404**, and `/auth/me` returns
@@ -742,12 +787,15 @@ repository's own tests — `src/storage/layout.rs::a_symlink_that_escapes_the_ro
 `::a_symlinked_collection_directory_that_escapes_the_root_is_rejected`,
 `::a_symlinked_project_folder_that_escapes_the_root_is_rejected`,
 `tests/security_tests.rs::symlink_tests::test_rejects_symlink_escape`,
-`tests/security_tests.rs::data_integrity_tests::test_concurrent_writes_do_not_corrupt` — are baselines per
+`tests/security_tests.rs::data_integrity_tests::test_concurrent_writes_do_not_corrupt`,
+`src/storage/layout.rs::hostile_components_are_rejected` — are baselines per
 `audit-scope.md`, not findings, and this audit has not yet re-run them. The three symlink baselines
-correspond to the fixtures measured in entries 5–6 above. The concurrency baseline is still owed a
-fresh run: S2-7's evidence is the API-level measurement recorded in `F-177-3` and pass entry 13, and
+correspond to the fixtures measured in entries 5–6 above; the concurrency baseline is still owed a
+fresh run (S2-7's evidence is the API-level measurement recorded in `F-177-3` and pass entry 13, and
 `F-177-3` names that baseline — which asserts only that the document stays valid — as the place a
-durability regression test belongs.
+durability regression test belongs); and `hostile_components_are_rejected` is the baseline the S2-4
+identifier decisions rest on, read verbatim at the pinned revision but not executed in this
+checkpoint — the PR gate's `cargo test` runs it.
 
 ## 6. Calibration confirmed
 
@@ -785,7 +833,7 @@ run did **not** cover (S2-1 and S2-13 have run in full, so their rows are gone).
 | Sub-task | What is missing |
 | --- | --- |
 | **S2-3 (partial)** | The six fixtures were planted and refused (pass entries 5–6, O-177-4), but a **symlinked attachment** was not planted, and the repository's own symlink baselines (`src/storage/layout.rs::a_symlink_that_escapes_the_root_is_rejected`, `::a_symlinked_collection_directory_that_escapes_the_root_is_rejected`, `::a_symlinked_project_folder_that_escapes_the_root_is_rejected`, `tests/security_tests.rs::symlink_tests::test_rejects_symlink_escape`) were not re-run. |
-| **S2-4 (partial)** | The reserved-suite-name probe was re-run against the correct body field: in a freshly created project `name: test_runs` → **409** `conflict` (refused by validation, not by a pre-existing directory), control `Smoke` → **201** and a repeat → **409**; the 4 KiB row is scored and promoted to `F-177-4` (the boundary is `NAME_MAX`: 255 → 201, 256 → 500). What remains is the decision on the two unrefused degenerate identifiers — whitespace-only and the dotfile names (`.tucano.lock`, `.tucano-<suffix>.tmp`, accepted as case ids → 201). |
+| **S2-4 (partial)** | The reserved-suite-name probe was re-run against the correct body field: in a freshly created project `name: test_runs` → **409** `conflict` (refused by validation, not by a pre-existing directory), control `Smoke` → **201** and a repeat → **409**; the 4 KiB row is scored and promoted to `F-177-4` (the boundary is `NAME_MAX`: 255 → 201, 256 → 500); and the two unrefused degenerate identifiers — whitespace-only and the dotfile names (`.tucano.lock`, `.tucano-<suffix>.tmp`, accepted as case ids → 201) — are **decided in O-177-10** as an observation, with the pass entry that carries the decision (entry 14). What remains is the execution of the sub-task's named baselines, `src/storage/layout.rs::a_document_identifier_is_validated_before_any_path_is_built`, `::hostile_components_are_rejected`, `::a_project_reserves_the_names_of_its_collections`, and `::case_folders_keep_their_identifier_verbatim`: they are read verbatim at the pinned revision but not re-run here, and the PR gate's `cargo test` runs them. |
 | **S2-5** | Atomicity: ten `SIGKILL`s of the container process mid-write, then a JSON validation pass over every stored document and an inspection of leftover `.tucano-*.tmp` files. No power-loss durability is claimed either way; a missing parent-directory `fsync` is an observation by pre-commitment, never a finding. |
 | **S2-6 (partial)** | Truncation, invalid UTF-8, and a 100 MiB replacement are measured (pass entries 7–9). The wrong-shape JSON case is measured **and is a finding** instead of a pass (`F-177-2`). No further variants are owed, but `F-177-2` needs the calibration pass in §6. |
 | **S2-7 (partial)** | Measured: 32 concurrent PUTs of one document all returned **200** but only 16 persisted (`version: 17`), against a sequential control of 20 × 200 → 20 persisted (`version: 21`), and a 2-writer × 10-round reproduction where all 20 acknowledged writes yielded one new version per round. Written up as `F-177-3`, with `tests/security_tests.rs::data_integrity_tests::test_concurrent_writes_do_not_corrupt` still owed a fresh run — it asserts only that the document stays valid, which the measurement confirms. |
