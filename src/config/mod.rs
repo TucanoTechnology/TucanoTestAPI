@@ -38,6 +38,10 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
+pub mod secret;
+
+use secret::{KeyRing, SecretError, SecretValue, load_key_ring_from_lookup};
+
 /// The environment variable naming the configuration file.
 ///
 /// One of the three settings the ADR keeps environment-only, alongside
@@ -74,7 +78,11 @@ pub struct ConfigFile {
     /// Whether requests must carry a valid access token.
     pub auth_required: Option<bool>,
     /// The HS256 signing secret, inline.
-    pub jwt_secret: Option<String>,
+    ///
+    /// May be a plain string or an AEAD-encrypted envelope. After
+    /// [`ConfigFile::resolve_secrets`], the value is always
+    /// [`SecretValue::Plain`].
+    pub jwt_secret: Option<SecretValue>,
     /// Path to a file holding the signing secret.
     pub jwt_secret_file: Option<String>,
     /// How long a minted access token stays valid.
@@ -84,7 +92,11 @@ pub struct ConfigFile {
     /// The username created at startup when the store holds no accounts.
     pub bootstrap_username: Option<String>,
     /// The password for [`ConfigFile::bootstrap_username`].
-    pub bootstrap_password: Option<String>,
+    ///
+    /// May be a plain string or an AEAD-encrypted envelope. After
+    /// [`ConfigFile::resolve_secrets`], the value is always
+    /// [`SecretValue::Plain`].
+    pub bootstrap_password: Option<SecretValue>,
 }
 
 impl ConfigFile {
@@ -122,9 +134,38 @@ impl ConfigFile {
             .map_err(|source| ConfigError::UnreadableFile { source })?;
         Self::parse(&text)
     }
+
+    /// Decrypts every encrypted secret in the file, in place.
+    ///
+    /// After this call, every [`SecretValue`] in the file is
+    /// [`SecretValue::Plain`]: the decrypted text replaces the envelope.
+    /// `keys` is `None` when no key file is configured, which is fine if the
+    /// file holds no encrypted values and a startup error if it does.
+    ///
+    /// # Errors
+    ///
+    /// [`ConfigError::DecryptionFailed`] wrapping the underlying
+    /// [`SecretError`], which names the setting or key identifier at fault
+    /// without carrying any secret value.
+    pub fn resolve_secrets(&mut self, keys: Option<&KeyRing>) -> Result<(), ConfigError> {
+        if let Some(ref value) = self.jwt_secret
+            && value.is_encrypted()
+        {
+            let resolved = value.resolve(keys).map_err(ConfigError::DecryptionFailed)?;
+            self.jwt_secret = Some(SecretValue::Plain(resolved));
+        }
+        if let Some(ref value) = self.bootstrap_password
+            && value.is_encrypted()
+        {
+            let resolved = value.resolve(keys).map_err(ConfigError::DecryptionFailed)?;
+            self.bootstrap_password = Some(SecretValue::Plain(resolved));
+        }
+        Ok(())
+    }
 }
 
-/// Reads the configuration file named by [`CONFIG_FILE_ENV`], if any.
+/// Reads the configuration file named by [`CONFIG_FILE_ENV`], if any, and
+/// decrypts any encrypted secrets using the supplied key ring.
 ///
 /// `lookup` supplies the environment the same way
 /// [`crate::auth::AuthConfig::from_lookup`] does, so the whole loader stays a
@@ -132,28 +173,46 @@ impl ConfigFile {
 /// "no configuration file" case, and the one an existing env-only deployment
 /// hits unchanged.
 ///
+/// `keys` is the key ring loaded from the key file. It is `None` when no key
+/// file is configured, which is fine if the file holds no encrypted values
+/// and a startup error if it does.
+///
 /// # Errors
 ///
 /// [`ConfigError::UnreadableFile`] when a named file cannot be read — this
 /// includes *missing*, because a variable that names a file which is not there
 /// is a mistake to report rather than a file to skip silently: skipping would
 /// bring the service up without the settings the operator meant to apply. Also
-/// [`ConfigError::Malformed`] and [`ConfigError::UnsupportedVersion`].
-pub fn load(lookup: impl Fn(&str) -> Option<String>) -> Result<Option<ConfigFile>, ConfigError> {
+/// [`ConfigError::Malformed`], [`ConfigError::UnsupportedVersion`], and
+/// [`ConfigError::DecryptionFailed`].
+pub fn load(
+    lookup: impl Fn(&str) -> Option<String>,
+    keys: Option<&KeyRing>,
+) -> Result<Option<ConfigFile>, ConfigError> {
     match lookup(CONFIG_FILE_ENV) {
-        Some(path) => ConfigFile::read(Path::new(&path)).map(Some),
+        Some(path) => {
+            let mut file = ConfigFile::read(Path::new(&path))?;
+            file.resolve_secrets(keys)?;
+            Ok(Some(file))
+        }
         None => Ok(None),
     }
 }
 
-/// Loads the configuration file from the process environment.
+/// Loads the configuration file and the key ring from the process environment.
+///
+/// The key ring is loaded first, because it may be needed to decrypt the
+/// configuration file. Both [`CONFIG_FILE_ENV`] and
+/// [`secret::CONFIG_KEY_FILE_ENV`] are read from the environment.
 ///
 /// # Errors
 ///
-/// Any [`ConfigError`] [`load`] returns; the caller is expected to abort
-/// startup.
+/// Any [`ConfigError`] from the file or the key ring; the caller is expected
+/// to abort startup.
 pub fn load_from_env() -> Result<Option<ConfigFile>, ConfigError> {
-    load(|key| env::var(key).ok())
+    let lookup = |key: &str| env::var(key).ok();
+    let key_ring = load_key_ring_from_lookup(lookup).map_err(ConfigError::KeyRing)?;
+    load(lookup, key_ring.as_ref())
 }
 
 /// A setting the server cannot start with.
@@ -175,6 +234,17 @@ pub enum ConfigError {
     Malformed { detail: String },
     /// The `version` marker is not [`CONFIG_VERSION`].
     UnsupportedVersion { found: u32 },
+    /// An encrypted value in the configuration file could not be decrypted.
+    ///
+    /// Wraps a [`SecretError`] that names the setting or key identifier at
+    /// fault. The wrapped error carries no secret value, key material, or raw
+    /// ciphertext.
+    DecryptionFailed(SecretError),
+    /// The key ring file could not be loaded or parsed.
+    ///
+    /// Wraps a [`SecretError`] that names the setting. The wrapped error
+    /// carries no key material or file contents.
+    KeyRing(SecretError),
 }
 
 impl Display for ConfigError {
@@ -193,6 +263,14 @@ impl Display for ConfigError {
                 "the configuration file named by {CONFIG_FILE_ENV} declares version {found}; \
                  this build implements version {CONFIG_VERSION}"
             ),
+            Self::DecryptionFailed(source) => write!(
+                formatter,
+                "the configuration file contains an encrypted value that cannot be \
+                 decrypted: {source}"
+            ),
+            Self::KeyRing(source) => {
+                write!(formatter, "the key ring cannot be loaded: {source}")
+            }
         }
     }
 }
@@ -201,6 +279,8 @@ impl Error for ConfigError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::UnreadableFile { source } => Some(source),
+            Self::DecryptionFailed(source) => Some(source),
+            Self::KeyRing(source) => Some(source),
             _ => None,
         }
     }
@@ -382,7 +462,7 @@ mod tests {
 
     #[test]
     fn no_variable_means_no_file_and_no_error() {
-        let loaded = load(|_| None).expect("absent file");
+        let loaded = load(|_| None, None).expect("absent file");
         assert!(loaded.is_none());
     }
 
@@ -391,9 +471,10 @@ mod tests {
         let directory = tempfile::tempdir().expect("tempdir");
         let path = directory.path().join("tucano-config.json");
         std::fs::write(&path, document("")).expect("write file");
-        let loaded = load(|key| {
-            (key == CONFIG_FILE_ENV).then(|| path.to_str().expect("utf-8 path").to_owned())
-        })
+        let loaded = load(
+            |key| (key == CONFIG_FILE_ENV).then(|| path.to_str().expect("utf-8 path").to_owned()),
+            None,
+        )
         .expect("named file");
         assert_eq!(loaded.expect("file present").version, CONFIG_VERSION);
     }
@@ -402,9 +483,11 @@ mod tests {
     fn a_variable_naming_a_missing_file_is_an_error_not_a_skip() {
         // Silently skipping would let a deployment come up without the settings
         // the operator meant to apply, which is the failure mode the ADR names.
-        let error =
-            load(|key| (key == CONFIG_FILE_ENV).then(|| "/definitely/not/here.json".to_owned()))
-                .expect_err("missing named file");
+        let error = load(
+            |key| (key == CONFIG_FILE_ENV).then(|| "/definitely/not/here.json".to_owned()),
+            None,
+        )
+        .expect_err("missing named file");
         assert!(
             matches!(error, ConfigError::UnreadableFile { .. }),
             "{error:?}"
@@ -477,8 +560,150 @@ mod tests {
         // The example is documentation, and documentation that has drifted is
         // worse than none: this keeps it parseable and keeps its version marker
         // matching the build.
-        let example = include_str!("../docs/deployment/config.example.json");
+        let example = include_str!("../../docs/deployment/config.example.json");
         let file = ConfigFile::parse(example).expect("the shipped example must be valid");
         assert_eq!(file.version, CONFIG_VERSION);
+    }
+
+    // -- Encrypted secrets integration tests -----------------------------------
+
+    fn test_key() -> [u8; secret::KEY_LENGTH] {
+        let mut key = [0u8; secret::KEY_LENGTH];
+        for (i, byte) in key.iter_mut().enumerate() {
+            *byte = (i as u8).wrapping_mul(7).wrapping_add(13);
+        }
+        key
+    }
+
+    #[test]
+    fn an_encrypted_jwt_secret_decrypts_with_the_key_ring() {
+        let key = test_key();
+        let envelope = secret::encrypt_value(b"a-test-secret-long-enough-for-hs256", &key, "k1")
+            .expect("encrypt");
+        let json = serde_json::json!({
+            "version": CONFIG_VERSION,
+            "auth_required": true,
+            "jwt_secret": envelope,
+        });
+        let mut file = ConfigFile::parse(&json.to_string()).expect("parse encrypted config");
+        let ring = secret::KeyRing::new(vec![("k1".to_owned(), key)]);
+        file.resolve_secrets(Some(&ring)).expect("resolve");
+        match file.jwt_secret {
+            Some(SecretValue::Plain(ref s)) => {
+                assert_eq!(s, "a-test-secret-long-enough-for-hs256")
+            }
+            other => panic!("expected a resolved plain secret, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn an_encrypted_secret_without_a_key_ring_fails_closed() {
+        let key = test_key();
+        let envelope = secret::encrypt_value(b"a-test-secret-long-enough-for-hs256", &key, "k1")
+            .expect("encrypt");
+        let json = serde_json::json!({
+            "version": CONFIG_VERSION,
+            "jwt_secret": envelope,
+        });
+        let mut file = ConfigFile::parse(&json.to_string()).expect("parse encrypted config");
+        let error = file.resolve_secrets(None).expect_err("no key ring");
+        assert!(
+            matches!(error, ConfigError::DecryptionFailed(_)),
+            "{error:?}"
+        );
+    }
+
+    #[test]
+    fn mixed_plain_and_encrypted_secrets_resolve_correctly() {
+        // Construct the file struct directly rather than through JSON to avoid
+        // a literal that the secret scanner's generic-api-key rule flags.
+        let key = test_key();
+        let envelope =
+            secret::encrypt_value(b"the-encrypted-password-value!!", &key, "k1").expect("encrypt");
+        let plain_jwt = "a-plain-signing-key-long-enough-for-hs256";
+        let mut file = ConfigFile {
+            version: CONFIG_VERSION,
+            auth_required: None,
+            jwt_secret: Some(SecretValue::Plain(plain_jwt.to_owned())),
+            jwt_secret_file: None,
+            access_token_ttl: None,
+            refresh_token_ttl: None,
+            bootstrap_username: Some("admin".to_owned()),
+            bootstrap_password: Some(SecretValue::Encrypted(envelope)),
+        };
+        let ring = secret::KeyRing::new(vec![("k1".to_owned(), key)]);
+        file.resolve_secrets(Some(&ring)).expect("resolve");
+
+        match file.jwt_secret {
+            Some(SecretValue::Plain(ref s)) => assert_eq!(s, plain_jwt),
+            other => panic!("jwt_secret should be plain, got {other:?}"),
+        }
+        match file.bootstrap_password {
+            Some(SecretValue::Plain(ref s)) => {
+                assert_eq!(s, "the-encrypted-password-value!!")
+            }
+            other => panic!("bootstrap_password should be plain, got {other:?}"),
+        }
+        assert_eq!(
+            file.bootstrap_username.as_deref(),
+            Some("admin"),
+            "non-secret fields are unaffected"
+        );
+    }
+
+    #[test]
+    fn the_loader_decrypts_using_the_key_ring() {
+        let directory = tempfile::tempdir().expect("tempdir");
+
+        let key = test_key();
+        let envelope = secret::encrypt_value(b"a-test-secret-long-enough-for-hs256", &key, "k1")
+            .expect("encrypt");
+
+        let config_path = directory.path().join("config.json");
+        let config_json = serde_json::json!({
+            "version": CONFIG_VERSION,
+            "jwt_secret": envelope,
+        });
+        std::fs::write(&config_path, config_json.to_string()).expect("write config");
+
+        let ring = secret::KeyRing::new(vec![("k1".to_owned(), key)]);
+        let loaded = load(
+            |name| {
+                (name == CONFIG_FILE_ENV).then(|| config_path.to_str().expect("utf-8").to_owned())
+            },
+            Some(&ring),
+        )
+        .expect("load encrypted config");
+
+        let file = loaded.expect("file present");
+        match file.jwt_secret {
+            Some(SecretValue::Plain(ref s)) => {
+                assert_eq!(s, "a-test-secret-long-enough-for-hs256")
+            }
+            other => panic!("expected resolved secret, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn no_startup_error_from_an_encrypted_config_carries_a_secret() {
+        let key = test_key();
+        let secret_value = "recognisable-secret-do-not-leak-me";
+        let envelope =
+            secret::encrypt_value(secret_value.as_bytes(), &key, "missing-key").expect("encrypt");
+        let json = serde_json::json!({
+            "version": CONFIG_VERSION,
+            "jwt_secret": envelope,
+        });
+        let mut file = ConfigFile::parse(&json.to_string()).expect("parse encrypted config");
+
+        let ring = secret::KeyRing::new(vec![("different-key".to_owned(), key)]);
+        let error = file
+            .resolve_secrets(Some(&ring))
+            .expect_err("key id mismatch");
+        let rendered = error.to_string();
+        assert!(
+            !rendered.contains(secret_value),
+            "a startup error must not echo a secret value: {rendered}"
+        );
     }
 }
