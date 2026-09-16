@@ -1,7 +1,7 @@
 //! HTTP layer.
 //!
-//! One module per resource — [`projects`], [`suites`], [`runs`], [`cases`],
-//! [`milestones`], [`configurations`] — each owning the routes that address it.
+//! One module per resource — `projects`, `suites`, `runs`, `cases`,
+//! `milestones`, `configurations` — each owning the routes that address it.
 //! [`auth`] is the exception: it owns the session endpoints a client signs in
 //! through rather than a resource.
 //! A handler does three things only: pull values out of the request, call
@@ -51,10 +51,10 @@ pub const MAX_BODY_BYTES: usize = MAX_ATTACHMENT_BYTES;
 /// Everything a request may need: the service that reaches storage, and the
 /// authentication material a guard reads.
 ///
-/// It resolves to the service through [`Deref`], so a handler that only touches
-/// storage calls the service's methods exactly as it did when the state was a
-/// bare [`Arc`]; the authentication half is reached through [`AppState::auth`]
-/// and the [`Principal`](crate::auth::Principal) extractor.
+/// It resolves to the service through [`std::ops::Deref`], so a handler that
+/// only touches storage calls the service's methods exactly as it did when the
+/// state was a bare [`Arc`]; the authentication half is reached through
+/// [`AppState::auth`] and the [`Principal`](crate::auth::Principal) extractor.
 pub struct AppState<R> {
     service: Arc<TestService<R>>,
     auth: AuthState,

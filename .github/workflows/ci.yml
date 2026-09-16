@@ -11,7 +11,8 @@ permissions:
   contents: read
 
 jobs:
-  workflows:
+  lint-workflows:
+    name: Validate GitHub Actions syntax
     runs-on: [self-hosted, Linux, X64]
     steps:
       - uses: actions/checkout@v5
@@ -25,7 +26,8 @@ jobs:
   # files and starts nothing, so it is cheap enough to run on every pull
   # request. The seeded half of the freshness check needs a running stack and
   # stays on the local one-command path (scripts/demo.sh) — see the spec's §1.
-  matrix-integrity:
+  lint-contract:
+    name: Validate API coverage matrix
     runs-on: [self-hosted, Linux, X64]
     steps:
       - uses: actions/checkout@v5
@@ -41,10 +43,11 @@ jobs:
   # no diff; and the book builds. It reads files and starts nothing, so it is
   # cheap enough to run on every pull request.
   docs:
+    name: Validate and build documentation
     runs-on: [self-hosted, Linux, X64]
     container:
       image: rust:1.98.0-bookworm
-      # Same reasoning as the `checks` job: without the registry cache this
+      # Same reasoning as the `build-and-test` job: without the registry cache this
       # would re-download every crate from static.crates.io, and a refused DNS
       # lookup there fails the job (see issue #123).
       volumes:
@@ -131,7 +134,8 @@ jobs:
           git -C "$work" push -q origin HEAD:master \
             || git -C "$work" push -q origin HEAD:main
 
-  checks:
+  build-and-test:
+    name: Format, lint, test, and build
     runs-on: [self-hosted, Linux, X64]
     container:
       image: rust:1.98.0-bookworm
@@ -151,7 +155,37 @@ jobs:
         run: cargo fmt --all -- --check
       - name: Run clippy
         run: cargo clippy --all-targets --all-features -- -D warnings
+      - name: Check rustdoc
+        # Intra-doc links and doc-comment warnings are caught before they reach
+        # a published crate: a broken link or a missing page is a build failure
+        # rather than a silent omission.
+        env:
+          RUSTDOCFLAGS: "-D warnings"
+        run: cargo doc --no-deps --document-private-items
       - name: Run unit and integration tests
         run: cargo test --all-targets --all-features
       - name: Build release
         run: cargo build --release
+
+  dependency-check:
+    name: Check for unused dependencies
+    runs-on: [self-hosted, Linux, X64]
+    container:
+      image: rust:1.98.0-bookworm
+      # Shares the cached crates.io downloads with the other container jobs;
+      # see the note in the build-and-test job and issue #123.
+      volumes:
+        - tucanotestapi-cargo-registry:/usr/local/cargo/registry
+        - tucanotestapi-cargo-git:/usr/local/cargo/git
+    env:
+      RUSTUP_TOOLCHAIN: "1.98.0"
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install cargo-machete
+        run: cargo install cargo-machete --locked
+      - name: Check for unused dependencies
+        # cargo-machete scans the source for imports and flags any dependency
+        # listed in Cargo.toml but never referenced. A false positive is
+        # acknowledged with `--with-metadata`, which reads the `[package.metadata]`
+        # section to exempt intentional entries.
+        run: cargo machete --with-metadata
