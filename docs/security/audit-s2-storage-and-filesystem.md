@@ -17,16 +17,20 @@ boundary."* It carries findings only; nothing here is fixed. Remediation belongs
 
 - **Affected revision (the pinned target):** `c5e99431389854368ab3a8e07003622f34dfdd21`
 - **Method:** [audit-scope.md § 6](audit-scope.md#6-how-the-audit-tasks-run), steps 1–7.
-- **Findings so far:** **four**, all Low (`F-177-1`, `F-177-2`, `F-177-3`, `F-177-4`). §6 has
-  confirmed the calibration for the two worked examples and for these four pairs; the **count** stays
-  provisional because a sub-task still to run can add a finding.
-- **Pass entries so far:** fourteen, in the [Pass entries](#5-pass-entries) section.
-- **Executed:** S2-1, S2-2, S2-3 (partial), S2-4, S2-6 (partial), S2-7, S2-9
-  (partial), S2-13, S2-14 (partial), S2-15 (partial — its `#189` question is answered and recorded in
-  O-177-11; the file-boundary probes are owed with the stack). **Not executed:** S2-5, S2-8, S2-10,
-  S2-11, S2-12 (partial).
-- **Throwaway stack:** torn down, and the tear-down is recorded in [§7](#7-tear-down-step-7). A later
-  checkpoint must re-provision before the outstanding sub-tasks can run.
+- **Findings so far:** **six** — `F-177-1`…`F-177-4`, all Low, plus `F-177-5` (Medium) and `F-177-6`
+  (High), the two the configuration-file boundary's container arm produced. §6 has confirmed the
+  calibration for the two worked examples and for the first four pairs; the **count** stays provisional
+  because a sub-task still to run can add a finding, and §6's list of what it has re-read is updated
+  below to six.
+- **Pass entries so far:** seventeen, in the [Pass entries](#5-pass-entries) section.
+- **Executed:** S2-1, S2-2, S2-3 (partial), S2-4, S2-6 (partial), S2-7, S2-9 (partial), S2-13, S2-14
+  (partial), **S2-15 (complete — both halves: the `#189` question is answered and recorded in O-177-11,
+  and the file-boundary probes have run against the image, producing F-177-5, F-177-6, O-177-12 and pass
+  entries 15–17)**. **Not executed:** S2-5, S2-8, S2-10, S2-11, S2-12 (partial).
+- **Throwaway stack:** re-provisioned for the S2-15 container arm with every build step `CACHED` from
+  the pinned revision, and **retained** at `tucano-test-audit-177:c5e9943` for the next checkpoint; the
+  earlier tear-down and the re-provisioning are both recorded in [§7](#7-tear-down-step-7). A later
+  checkpoint starts the outstanding sub-tasks with `docker compose -p audit-177 up -d`.
 
 ## 1. Revision pinned
 
@@ -39,6 +43,18 @@ boundary."* It carries findings only; nothing here is fixed. Remediation belongs
 | Audit worktree | `/home/emanuelec/Documents/Github/Tucano-Test-eco`, branch `eco/177-storage-audit`, working tree clean at the seeded revision |
 | Throwaway data directory | `/tmp/audit-177/data`, bind-mounted at `/data`; **host filesystem `tmpfs`** (host `/tmp` is a tmpfs mount) |
 | Container's view of the same directory | `stat -f -c %T /data` → `tmpfs`; `stat -c '%a %n'` → `777 /data`, owner `root:root` |
+
+**Note on the image id.** The container arm of S2-15 needed the image after the tear-down, so it was
+rebuilt with `docker compose build` and **every step reported `CACHED`** (about 1.4 s), from a tree
+whose `Cargo.toml`, `Cargo.lock`, `src/`, `openapi.json`, `swagger.html` and `Dockerfile` are
+byte-identical to the pinned revision (`git diff c5e9943…dfdd21 HEAD` empty, and the `Cargo.lock`
+SHA-256 above is unchanged). The rebuilt artifact nevertheless reports a different id —
+`sha256:562447fb6539ddd68567a4c67f016dc5f96b7dd338bb90a78217dc976679fd9a` for the manifest list, with
+exported config `sha256:9358251216b11dc618b723673b0af73334ad6f425f2ba2a42cfecc4259ce5932` — because
+buildx attaches attestations and a manifest list, so the *tag* is not a stable identifier for the
+rootfs. All S2-15 measurements were taken against this rebuild and against the same revision as every
+earlier measurement; the table's original row is kept rather than overwritten so the divergence is
+visible. The image is **retained** for the next checkpoint.
 
 Two facts in that table are load-bearing for every measurement below and are recorded rather than
 hoped for:
@@ -557,6 +573,142 @@ every mutating call site, with the one deliberate exception above named rather t
   of F-177-1 (file mode). This is the 4 KiB row of the pending-triage table below, now scored and
   promoted to a finding; the reproduction above supersedes that table's entry.
 
+### F-177-5: A refused configuration file prints the error's `Debug` rendering, so the refusal names neither the setting nor the file
+
+- **Severity:** **Medium** — Trivial × Limited. No attacker action is needed to reach the path: it is
+  the refusal every misconfigured or partially-mounted deployment takes, which is precisely the case
+  the boundary exists to handle, so the *Trivial* row of the matrix applies and that row reaches
+  **Medium**. The impact stays Limited — the text reaches the refusing process's own console only, no
+  value is disclosed, nothing is written. Neither adjustment applies: nothing here is remotely
+  reachable in a default configuration (no escalation), and a de-escalation would require the defect
+  to depend on an *unrecommended* configuration, whereas the audited revision's documented contract is
+  that this refusal names the setting in **every** configuration.
+- **In scope:** trust boundaries 6/7 (the configuration file as a service input) and 8 (error text is
+  usable and discloses nothing); the S2-15 design probe's own words — "an unknown key, a bad
+  `version`, a malformed document, and a missing file each **refuse startup** with an error that names
+  the setting and never the value" — of which the refusal half holds and the *names the setting* half
+  does not.
+- **Where:** `src/main.rs:28` — `let file = config::load_from_env()?;` inside
+  `async fn main() -> Result<(), Box<dyn std::error::Error>>`. Rust's `Termination` impl for `Result`
+  prints the error's **`Debug`** rendering; the hand-written `Display` at `src/config.rs:183-196` —
+  the impl that names `{CONFIG_FILE_ENV}` — is therefore never reached at process level, and the
+  `#[derive(Debug)]` on `ConfigError` decides what an operator reads instead.
+- **Affected revision:** `c5e99431389854368ab3a8e07003622f34dfdd21` (`tucano-test-audit-177:c5e9943`).
+- **Reproduction.** With each fixture bind-mounted read-only at the path the environment variable
+  names, one probe per input:
+
+  ```text
+  for f in config-unknown-key config-bad-version config-malformed; do
+    docker run --rm -v /tmp/audit-177/$f.json:/etc/tucano/config.json:ro \
+      -e TUCANO_CONFIG_FILE=/etc/tucano/config.json tucano-test-audit-177:c5e9943 \
+      >out-$f.stdout 2>out-$f.stderr; echo "$f rc=$?"
+  done
+  docker run --rm -e TUCANO_CONFIG_FILE=/etc/tucano/absent.json tucano-test-audit-177:c5e9943 \
+    >out-missing.stdout 2>out-missing.stderr; echo "missing rc=$?"
+  ```
+
+- **Observed.** All four inputs exit **1**, with stdout empty in every case (the missing-file run:
+  `0` bytes stdout, `103` bytes stderr), and the text is the error type's `Debug` rendering:
+
+  ```text
+  Error: UnreadableFile { source: Os { code: 2, kind: NotFound, message: "No such file or directory" } }
+  Error: Malformed { detail: "unknown field `jwt_secrett`, expected one of `version`, … at line 3 column 15" }
+  Error: UnsupportedVersion { found: 2 }
+  Error: Malformed { detail: "EOF while parsing an object at line 4 column 0" }
+  ```
+
+  `TUCANO_CONFIG_FILE` appears in **none** of the four, and the unreadable-file case names no path
+  either, so an operator reading the failure cannot tell which setting was read or which file it
+  resolved to. The rendering that *does* name the setting is unit-tested and green —
+  `config::tests::an_unreadable_file_refuses_to_start_without_naming_the_path` asserts
+  `rendered.contains(CONFIG_FILE_ENV)` — so the tested rendering is the one no operator ever sees: the
+  test calls `Display` directly while the process reaches `Debug` implicitly through `Termination`.
+- **Expected.** The refusal should reach the console as the path-free, value-free text `Display`
+  already produces (for the unreadable case, text naming `TUCANO_CONFIG_FILE`), so the module's
+  documented contract and the design probe's "names the setting" hold at the level where the operator
+  actually reads them.
+- **Impact.** Diagnostic only, yet it inverts the boundary's purpose: the refusal is the one moment at
+  which the operator needs to know *which* setting was read, and the derived `Debug` also re-prints
+  the whole `source` chain (`Os { code: 2, kind: NotFound, … }`) instead of the curated text — the same
+  channel that carries a neighbouring boundary's raw path (O-177-12). A `Display`-only test cannot
+  notice the difference, so the defect is invisible to the test suite that was written to prevent it.
+- **Suggested fix.** Render with `Display` before exiting — e.g. catch the error at `main` and print
+  `{e}` to stderr, or give `ConfigError` a hand-written `Debug` that forwards to `Display` — and add a
+  **process-level** test that runs the binary with a missing file and asserts `TUCANO_CONFIG_FILE` in
+  stderr, since the in-process unit test cannot reach the rendering the process chooses. The audit
+  recommends the change and does not make it.
+- **CWE:** no clean CWE applies, and it is recorded that way rather than forced onto a
+  close-but-wrong entry: the refusal exists and does the right thing, only its rendering is wrong, so
+  CWE-390 (no action taken) and CWE-778 (insufficient logging) both misdescribe it.
+- **Duplicates / prerequisites:** not a duplicate of F-177-6 — that finding is a *value* appearing in
+  one variant's text, and its cause (`src/config.rs:104` sweeping serde's message into an unconstrained
+  `String`) survives any fix to this one; conversely, suppressing the leak by trimming `detail` would
+  still leave `Debug`-only output here. The two share the delivery channel and differ in cause, fix and
+  impact, which is why they stay two findings. Not a duplicate of F-177-1…4 (storage layer,
+  boundaries 3 and 4).
+
+### F-177-6: A configuration value whose JSON type contradicts its field is echoed verbatim in the startup error
+
+- **Severity:** **High** — Trivial × Moderate. Trivial: the input is a one-line edit to a file the
+  deployment already owns, and the refusal needs no privilege beyond reaching that file. Moderate: the
+  text discloses the literal value the operator supplied, and the band's own definition names
+  "credential disclosure" at this level. The competing *Limited* reading — which would score
+  **Medium** — is written out below and deliberately not taken.
+- **In scope:** trust boundaries 6/7 (the configuration file as a service input) and 8; the
+  non-disclosure half of the boundary's contract as `src/config.rs`'s own test states it —
+  `config::tests::no_error_text_carries_a_secret_value` — extended to the startup path where the
+  failure actually lands. That test passes because it only ever exercises *correctly-typed* values.
+- **Where:** `src/config.rs:104` — `detail: source.to_string()` in `ConfigFile::parse`: serde's message
+  is copied verbatim into `ConfigError::Malformed { detail }`, an unconstrained `String`, and
+  re-emitted. serde quotes the offending scalar when its JSON type contradicts the field's declared
+  type (`invalid type: string "…", expected a boolean`); its other messages quote only the *key*
+  (`unknown field \`jwt_secrett\``) or a position.
+- **Affected revision:** `c5e99431389854368ab3a8e07003622f34dfdd21` (`tucano-test-audit-177:c5e9943`).
+- **Reproduction.** A sentinel value typed into the wrong field with the wrong type, and three
+  controls in which the same sentinel sits in a field whose type matches while the failure is provoked
+  elsewhere:
+
+  ```text
+  printf '%s' '{"version":1,"auth_required":"SENTINEL-c0ffee-4815162342-abcdefghijklmnop"}' \
+    >/tmp/audit-177/config-wrong-type.json
+  docker run --rm -v /tmp/audit-177/config-wrong-type.json:/etc/tucano/config.json:ro \
+    -e TUCANO_CONFIG_FILE=/etc/tucano/config.json tucano-test-audit-177:c5e9943 2>&1
+  ```
+
+  Controls: the same sentinel as `jwt_secret` (a string in a string field) with the failure provoked
+  by an unknown key, by a bad `version`, and by a truncated document.
+- **Observed.** Exit **1**, and:
+
+  ```text
+  Error: Malformed { detail: "invalid type: string \"SENTINEL-c0ffee-4815162342-abcdefghijklmnop\", expected a boolean at line 3 column 64" }
+  ```
+
+  `grep -c SENTINEL` → **1**. All three controls → **0**. The echo therefore needs the *type mismatch*,
+  not merely a refusal: serde quotes the key for unknown fields and a position for parse errors. This
+  is a property of the message the loader builds, so it is independent of F-177-5 — had `main` printed
+  `Display`, the same `detail` would still have reached the console. The value chosen is the shape a
+  `jwt_secret` would have if the operator put it in the wrong key with the wrong type, which is the
+  misconfiguration class the "never the value" contract exists to cover.
+- **Expected.** The refusal should carry serde's position and field name but never the scalar — e.g.
+  replace serde's message for type errors with a two-field form (`expected: "boolean"`,
+  `found: "string"`), or refuse to build `detail` from a message containing a quoted literal. Naming
+  the offending key is desirable and does not require quoting the value.
+- **Impact.** Disclosure of a supplied value into startup text — which is the standard first artifact of
+  an incident, copied into a ticket or a bug report. The reading not taken is **Limited → Medium**: the
+  leaked value is one the refused document could never have applied (the process exits before any
+  setting is used), and the only reader is already someone with access to that container's console or
+  log collector. It is stated here rather than omitted because it is defensible; **Moderate** is taken
+  because "never the value" is unconditional in the design and in the module's own test file, and
+  because the text is designed to be pasted into bug reports, where the audience is wider than the
+  container it came from.
+- **CWE:** CWE-209 (Generation of Error Message Containing Sensitive Information); CWE-532 (Insertion of
+  Sensitive Information into Log File) as the delivery-side framing.
+- **Duplicates / prerequisites:** not a duplicate of F-177-5 (different cause, fix and impact — see that
+  entry's note), nor of F-177-1…4 (storage layer, boundaries 3 and 4). Related but distinct
+  from O-177-12, a *path* echoed by a neighbouring setting's error that a `Display`-only fix would also
+  silence, and unrelated to O-177-11's recorded state (`#189` not landed), because this leak is in the
+  refusal text, not in the file.
+
 ### Recorded observations (not findings)
 
 **O-177-1 — A stray `.tucano-<suffix>.tmp` file is inert and unaddressable.** The atomic-write
@@ -691,15 +843,40 @@ can leak them by accident" (`src/config.rs`, module docs). That makes S2-15's **
 executable probe rather than a pending one: what it owes is the container arm the design specifies —
 a read-only mount, a good file, an unknown key, a bad `version`, a malformed document, a missing file,
 then `docker diff` plus an in-container `touch` to confirm invariant 9 (the service never writes the
-file) and that no error text names a value. Those probes need the image, which is torn down (§7), so
-they are owed rather than run. Two source-level baselines exist for them and were **re-run green** as
-part of this checkpoint's baseline pass (see §5): `config::tests::no_error_text_carries_a_secret_value`
-and `::an_unreadable_file_refuses_to_start_without_naming_the_path`. They are unit baselines over a
-deliberately pure `resolve`, not container evidence, so this entry does **not** credit them as a pass
-entry — it names them as what the owed probe will test against. **Not scored:** nothing here is
-scored; the clear-text state is a documented, pre-committed limitation of the audited revision, and
-the audit's job with respect to it is to record which state applied, which this entry does.
+file) and that no error text names a value. Those probes need the image; at the time this entry was
+first written the stack was torn down (§7), so they were owed rather than run, and two source-level
+baselines were **re-run green** against them as part of this checkpoint's baseline pass (see §5):
+`config::tests::no_error_text_carries_a_secret_value` and
+`::an_unreadable_file_refuses_to_start_without_naming_the_path`. The probes have since run against the
+rebuilt image (pass entries 15–17), and the outcome is the opposite of what those baseline names
+suggest: both refusals hold, but the text the process prints is the `Debug` rendering (F-177-5) and one
+variant of it echoes the value (F-177-6). The baselines are unit tests over a deliberately pure
+`resolve`, not container evidence, so this entry still does **not** credit them as a pass entry — it
+records what they were to be tested against and what the test actually showed. **Not scored:** nothing
+here is scored; the clear-text state is a documented, pre-committed limitation of the audited revision,
+and the audit's job with respect to it is to record which state applied, which this entry does.
 (Trust boundaries 6/7.)
+
+**O-177-12 — A `jwt_secret_file` naming a missing file reports the raw path in the startup text.** The
+same window's container arm produced one result that belongs to the *key* half of the configuration
+boundary rather than to the file half S2-15 is bounded to, so it is recorded here and not scored. With
+`{"version":1,"auth_required":true,"jwt_secret_file":"/etc/tucano/absent-secret"}`, the run exits `1`
+with
+
+```text
+Error: SecretFile { path: "/etc/tucano/absent-secret", source: Os { code: 2, kind: NotFound, message: "No such file or directory" } }
+```
+
+— a raw absolute path in the console text, which is the rule the ADR's secret-handling section states
+and which `auth::ConfigError::SecretFile { path: String, … }` contradicts by construction. Two further
+variants of that error type carry *values* by construction as well (`InvalidTtl { key, value }`,
+`InvalidBool { value }`), which is the shape F-177-6 measures on the file boundary; a fix to F-177-5's
+rendering would silence the path here without touching those. **Recorded, not scored**, for the reason
+the design gives: S2-15 is bounded to the file named by `TUCANO_CONFIG_FILE`, and the secret-file
+settings and their error text belong to the Configuration-key boundary's owner (#178) — the same
+boundary split O-177-11 records for the `#189` question. It is kept because this run is the one that
+produced it, and because #178 should test these variants with a sentinel rather than with a path.
+(Boundaries 6/7, 8.)
 
 **Pending triage — measured, and now decided.** The following results were produced by the S2-4
 identifier probes. They are recorded so the measurement is not lost; every row is now either a scored
@@ -809,6 +986,28 @@ Controls tested **and not broken** in this checkpoint:
     the project-child level, entry 3, and nest harmlessly one level deeper, O-177-9). The control is
     exactly `validate_component`'s refusals, not a charset restriction. Accepted by decision; the
     reading not taken is recorded in O-177-10. (Trust boundary 3.)
+15. **Every bad configuration file stops the service before it serves anything.** With
+    `TUCANO_CONFIG_FILE` naming a scratch file mounted read-only, all four inputs the design names —
+    an unknown key, a bad `version`, a malformed document, and a missing file — exit **1** with stdout
+    empty and no listener bound; nothing under `/data` is created or changed. The refusal half of the
+    design's expectation therefore holds (invariant 8). What does **not** hold is the diagnostic half,
+    which is `F-177-5`; this entry is deliberately limited to the refusal. (Invariant 8; boundaries
+    6/7.)
+16. **A well-formed configuration file resolves, and its settings are applied.** The same file with a
+    valid document starts the service: the container reaches `Up`, `/proc/net/tcp` shows
+    `00000000:0BB8 … 0A` (listening on `0.0.0.0:3000` as uid `10001`), and the settings took effect —
+    the bootstrap pass created `/data/auth/users.json`, `/data/auth/projects`, `/data/projects` and
+    `/data/.tucano.lock` under the mounted data directory. `docker logs` is **empty**: nothing is
+    logged at startup, a fact S2-12's error-leak table will need for its log column. (Boundaries 6/7.)
+17. **The running service never writes the file named by `TUCANO_CONFIG_FILE`.** Across a full
+    start-and-serve run the host file is byte-identical: `sha256`
+    `642bab0dd836c259cc4427429e18ff690fcb9d72106103e60705a7e14ba7040d`, mode `664`, and mtime/ctime
+    `1789536326` all unchanged before and after. `docker diff` lists the mount as `C /etc`,
+    `A /etc/tucano`, `A /etc/tucano/config.json` — an *addition* relative to the image with **no
+    modification** entry — and in-container writes are refused twice over: as the service uid `10001` a
+    `touch`/append fails `Permission denied` (rc 1), and isolated with `--user 0:0 --entrypoint sh` the
+    same write fails `Read-only file system` (rc 1) with the host hash still unchanged. (Invariant 9;
+    boundary 6/7 — the storage side of the configuration-file boundary.)
 
 Outside the numbered entries, S2-14 found the same shape on the auth tree: `/auth`, `/auth//`,
 `/data/auth`, `/auth/projects`, and `/projects/../auth` all return **404**, and `/auth/me` returns
@@ -817,7 +1016,7 @@ That is recorded here rather than as an entry because it is a `partial` sub-task
 arm (with an auth store actually created) has not been probed. (Boundary 6/7.)
 
 **Repository baselines, re-run.** The baselines `audit-scope.md` names are not pass entries in their
-own right, but S2-3, S2-4 and S2-7 each owe one, and S2-15's owed container probe has two, so they
+own right, but S2-3, S2-4 and S2-7 each owe one, and S2-15's container probe named two, so they
 were executed *after* the stack was torn down, on the host, against the audit worktree — whose
 `src/`, `tests/`, `Cargo.toml` and `Cargo.lock` are byte-identical to the pinned revision
 (`git diff c5e9943…dfdd21 HEAD` empty). Three commands, all green:
@@ -839,30 +1038,36 @@ binary's `path_traversal_tests::*` (four tests, including
 `test_rejects_traversal_through_a_case_identifier`) and `symlink_tests::test_rejects_symlink_escape`
 also pass, independently corroborating pass entries 1–2 and 5. The third command is the `config::`
 filter, which selects both the loader's own `config::tests::*` (16) and the auth layer's
-`auth::config::tests::*` (24) — the baselines S2-15's owed probe will be measured against, including
+`auth::config::tests::*` (24) — the baselines S2-15's probe was to be measured against, including
 `config::tests::no_error_text_carries_a_secret_value`,
 `::an_unreadable_file_refuses_to_start_without_naming_the_path`, and
 `auth::config::tests::no_startup_error_from_the_file_layer_carries_a_secret_value`. Passing them
-credits nothing by itself: they exercise a deliberately pure `resolve` over an in-memory document and
-say nothing about a read-only mount or `docker diff`, which is why S2-15 stays owed (O-177-11). This
-is source-level evidence at the pinned revision, not evidence about the built image: the image was
+credited nothing by itself: they exercise a deliberately pure `resolve` over an in-memory document and
+said nothing about a read-only mount or `docker diff`, which is why S2-15 was owed (O-177-11). The
+probe has since run against the image (pass entries 15–17), and the two `config::` baselines are the
+clearest illustration in this report of why a green baseline can be narrower than its name suggests:
+`an_unreadable_file_refuses_to_start_without_naming_the_path` passes while the process prints the
+`Debug` rendering in which no setting is named (`F-177-5`), and
+`no_error_text_carries_a_secret_value` passes because it only ever exercises correctly-typed values,
+which is the one case that does not echo the value (`F-177-6`). This is source-level evidence at the
+pinned revision, not evidence about the built image: the image was
 audited by the API probes, the baselines by the test binaries compiled from the same revision.
 
 Not yet credited in this checkpoint (and deliberately not listed as passes): atomicity under `SIGKILL`
 (S2-5), two replicas on one data directory (S2-8), attachment and revision publication (S2-10), the
-overwrite table (S2-11), the full error-leak table (S2-12), and the configuration-file boundary
-(S2-15) — of which only the *file* half is still owed, and only because it needs a container: the
-*key* half is settled by O-177-11 (`#189` is open, so the key boundary is documented-pending by the
-design's own pre-commitment, not unprobed). The three symlink baselines correspond to the fixtures
-measured in entries 5–6 above; the symlinked-*attachment* fixture S2-3 also names has not been
-planted, so S2-3 stays partial. `F-177-3` names `test_concurrent_writes_do_not_corrupt` — now re-run
-green — as the place a durability regression test belongs, because the baseline as written cannot
-fail on an acknowledged-but-lost write.
+overwrite table (S2-11), and the full error-leak table (S2-12). The configuration-file boundary
+(S2-15) is no longer on this list: both of its halves are settled — the *key* half by O-177-11 (`#189`
+is open, so the key boundary is documented-pending by the design's own pre-commitment, not unprobed),
+the *file* half by pass entries 15–17 after the container arm ran. The three symlink baselines
+correspond to the fixtures measured in entries 5–6 above; the symlinked-*attachment* fixture S2-3 also
+names has not been planted, so S2-3 stays partial. `F-177-3` names
+`test_concurrent_writes_do_not_corrupt` — now re-run green — as the place a durability regression test
+belongs, because the baseline as written cannot fail on an acknowledged-but-lost write.
 
 ## 6. Calibration confirmed
 
-Confirmed at this checkpoint for the two worked examples and for the four findings written so far.
-The count itself stays provisional, and the section says below what that costs and where it is
+Confirmed at this checkpoint for the two worked examples and for the six findings written so far. The
+count itself stays provisional, and the section says below what that costs and where it is
 re-confirmed.
 
 - **The Critical worked example** ([audit-scope.md](audit-scope.md) § 5): "With the shipped Compose
@@ -871,12 +1076,16 @@ re-confirmed.
   with the S2 surface's own part stated rather than borrowed from S3's: the band is unchanged, and on
   this surface the example's hypothesis **did not materialize**. Confinement holds where S2 measured
   it — pass entries 1–6 (traversal, symlink and hostile-component refusals on every path built from a
-  request field, plus the reserved-collection rule) and O-177-10 — so all four S2 findings stay
+  request field, plus the reserved-collection rule) and O-177-10 — so the four storage findings stay
   **inside the caller's own authorization scope**, and none of them could be scored on this band. The
-  example's premise also holds at this revision, read from the served contract rather than restated:
-  `openapi.json` declares `GET /openapi.json` with `security: []`, i.e. public by design, which matches
-  the five public operations [authentication-decision.md](authentication-decision.md) names and S3's
-  §6 records.
+  two findings the configuration-file boundary added are not candidates for the example either, and for
+  a stronger reason than a failed hypothesis: they are decided **before the listener binds**, so no
+  request field exists yet and path confinement is not the control in question — F-177-6's disclosure
+  reaches the refusing process's own console, which is why it is scored on boundary 8 rather than on
+  boundary 3. The example's premise also holds at this revision, read from the served contract rather
+  than restated: `openapi.json` declares `GET /openapi.json` with `security: []`, i.e. public by
+  design, which matches the five public operations
+  [authentication-decision.md](authentication-decision.md) names and S3's §6 records.
 - **The Info worked example** ([audit-scope.md](audit-scope.md) § 5, left by it to "**#179** or #178 to
   confirm against the code"): `scripts/clear-data.mjs`. S4 confirmed it against the code and S3
   re-checked it at its own revision; re-read here, the facts are unchanged —
@@ -884,23 +1093,29 @@ re-confirmed.
   and the three localhost URLs, filtered) and `:46` falls back to the first candidate when none answers
   `/health`, and `Authorization` does not appear in the file at all. The calibration holds, nothing in
   S2 changes it, and it is **not** raised as a finding.
-- **The four findings re-read against § 5.** Each states both axes and the matrix cell it reads off
+- **The six findings re-read against § 5.** Each states both axes and the matrix cell it reads off
   them, which the rubric requires before the pair becomes a number: F-177-1 *Difficult × Moderate* →
   **Low**, with the design's competing **Medium** reading ("another local principal on a default
   deployment") written down and the reason the lower one is taken; F-177-2 *Difficult × Moderate* →
-  **Low**; F-177-3 *Difficult × Moderate* → **Low**; F-177-4 *Moderate × Limited* → **Low**. No
-  finding is scored below its impact axis, and the two that could have escalated (F-177-1, F-177-2)
-  state why escalation does not apply: neither is reachable in the shipped default without a position
-  on the data volume. One consequence is recorded here rather than left for a reader to notice —
-  **all four are Low, so §4's order is not a severity ranking.** It follows the order §3 enumerates the
-  surface: the permission call sites (F-177-1), then the document path (F-177-2, F-177-3), then the
-  identifier and error-class path (F-177-4). Comparing severity across S2's findings means comparing
-  the pairs, not the sequence.
-- **What this section does not yet confirm:** that four is the final count. S2-5, S2-8, S2-10, S2-11,
-  S2-12 and S2-15 can each still add a finding, and a new finding changes the surface's distribution —
-  which is why the header marks the count provisional. §6 is re-confirmed, not rewritten, in the
-  closing checkpoint; the two examples and the four pairs above will not change unless a later
-  sub-task contradicts one of them.
+  **Low**; F-177-3 *Difficult × Moderate* → **Low**; F-177-4 *Moderate × Limited* → **Low**; F-177-5
+  *Trivial × Limited* → **Medium**, the Trivial row of the matrix, with the de-escalation question
+  answered in the entry (the defect does not depend on an unrecommended configuration — the revision's
+  contract is that the refusal names the setting in every configuration); F-177-6 *Trivial × Moderate*
+  → **High**, with the competing *Limited → Medium* reading written down and the reason the higher one
+  is taken. No finding is scored below its impact axis, and the two that could have escalated
+  (F-177-1, F-177-2) state why escalation does not apply: neither is reachable in the shipped default
+  without a position on the data volume. One consequence is recorded here rather than left for a reader
+  to notice — **four of the six are Low and the two the configuration-file boundary added are not
+  (Medium and High), so §4's order is neither a severity ranking nor an order by band.** It follows the
+  order §3 enumerates the surface: the permission call sites (F-177-1), then the document path
+  (F-177-2, F-177-3), then the identifier and error-class path (F-177-4), and finally the
+  configuration-file boundary, whose two findings were written last because they were measured last.
+  Comparing severity across S2's findings means comparing the pairs, not the sequence.
+- **What this section does not yet confirm:** that six is the final count. S2-5, S2-8, S2-10, S2-11 and
+  S2-12 can each still add a finding, and a new finding changes the surface's distribution — which is
+  why the header marks the count provisional. §6 is re-confirmed, not rewritten, in the closing
+  checkpoint; the two examples and the six pairs above will not change unless a later sub-task
+  contradicts one of them.
 
 ## 7. Tear-down (step 7)
 
@@ -920,14 +1135,26 @@ this checkpoint's stack (see the *Not yet executed* row): the sub-task has to be
 disk-backed directory. The audit's own scratch state is gone; the evidence that survives is this file
 and the pushed commits.
 
+**Re-provisioned, later in the same window, for S2-15's container arm.** The sub-task's file half needs
+the image, so the stack was rebuilt from the same revision with `docker compose build` — every step
+`CACHED`, about 1.4 s (the build cache survived the `docker rmi` above), producing the manifest-list id
+recorded in §1's *Note on the image id* — and `/tmp/audit-177/` was recreated with `compose.yml`, the
+six configuration fixtures, the captured `out-*.txt` files and the split stdout/stderr pair. The image
+was **deliberately retained**, and only the one named probe container (`audit-s2-15-good`) was removed,
+so the remaining sub-tasks start with `docker compose -p audit-177 up -d` instead of a rebuild. Nothing
+else was left running: `docker ps` reports only the operator's `tucano-test-api-1`, `tucano-test-gui-1`
+and `open-webui`. This is a change of state from the tear-down table above and is recorded here rather
+than by editing that table, which keeps the record of what the tear-down did.
+
 ## Not yet executed in this checkpoint
 
 The following sub-tasks of [audit-design-176-178.md](audit-design-176-178.md) §"#177" §3 have not run
 to completion. Each names what it is for, so a reader can see the shape of what is missing rather
 than only its absence. Rows marked **partial** have measured results in §4/§5; what they still owe is
 in the second column. S2-3, S2-6, S2-9 and S2-14 have run and keep a row only to name what their run
-did **not** cover; S2-1, S2-4, S2-7 and S2-13 have now run in full, so their rows are gone; S2-15 has
-run its stack-free half and keeps a row only for the container arm.
+did **not** cover; S2-1, S2-4, S2-7 and S2-13 have now run in full, so their rows are gone, and S2-15
+has now run both halves — the `#189` question in O-177-11 and the file-boundary probes in pass entries
+15–17 — so its row is gone as well (its two findings and one observation are in §4).
 
 | Sub-task | What is missing |
 | --- | --- |
@@ -938,9 +1165,8 @@ run its stack-free half and keeps a row only for the container arm.
 | **S2-9 (partial)** | Lock release is measured for the **document** and **attachment** failure paths (pass entries 10–11). The revision path's failure-then-success pair has not been run, and no lock was observed *held* at any point (the probes measure release, not exclusion). |
 | **S2-10** | Attachment publication in place (torn read), orphan handling, and revision immutability. Only the attachment lock half has run. |
 | **S2-11** | The overwrite-contract table for every mutating operation, including the two imports whose conflict behaviour the design says is measured rather than assumed. |
-| **S2-12 (partial)** | The error samples recorded so far are in §4's pending-triage and pass entries 7–11 (`storage_error` for corruption, the wrong-shape-JSON `200`, traversal `invalid_request` 400, conflict 409, not-found 404, the empty-body 404 fallback, unauthorized 401, and the length-overflow `500 storage_error` of `F-177-4`). The DoD item — the full `DomainError`-by-layer table — is not written, and `O-177-5` records that the storage failures collapse into one undifferentiated `storage_error`. |
+| **S2-12 (partial)** | The error samples recorded so far are in §4's pending-triage and pass entries 7–11 (`storage_error` for corruption, the wrong-shape-JSON `200`, traversal `invalid_request` 400, conflict 409, not-found 404, the empty-body 404 fallback, unauthorized 401, and the length-overflow `500 storage_error` of `F-177-4`). The DoD item — the full `DomainError`-by-layer table — is not written, and `O-177-5` records that the storage failures collapse into one undifferentiated `storage_error`. One measured fact already belongs in that table's log column: the service logs **nothing** at startup, cleanly or otherwise (pass entry 16), so a failure that only appears in the console is the configuration refusal and nothing else. |
 | **S2-14 (partial)** | The auth surface is unreachable anonymously (§5, unnumbered note): `/auth`, `/auth//`, `/data/auth`, `/auth/projects`, `/projects/../auth` → **404**, `/auth/me` → **401**. What is owed is the **authenticated** arm, i.e. creating an auth store and confirming no project route can then reach it. |
-| **S2-15 (partial)** | Its design-level question is answered and recorded: `#189`'s AEAD envelope has **not** landed at the audited revision (`#188` closed 2026-09-14, `#189` and `#190` open with no PR; the source search finds no crypto), so the *Configuration key* boundary stays **documented-pending** by the design's own pre-commitment rather than exercised, and the two `config::` baselines are re-run green (§5, O-177-11). What is still missing is the **container arm** of the file boundary: a well-formed file mounted read-only resolves; an unknown key, a bad `version`, a malformed document and a missing file each refuse startup with errors that name the setting and never the value; and the running service never writes the file (invariant 9), confirmed by `docker diff` and an in-container `touch`. Needs the image. |
 
 Also outstanding for the finished report: the full local gate (`actionlint`, `node
 scripts/check-matrix.mjs`, `cargo fmt --check`, `cargo clippy`, `cargo test`, `cargo build --release`)
