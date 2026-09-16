@@ -21,8 +21,9 @@ boundary."* It carries findings only; nothing here is fixed. Remediation belongs
   calibration across the surface (§6) has not been completed, so this count is provisional.
 - **Pass entries so far:** fourteen, in the [Pass entries](#5-pass-entries) section.
 - **Executed:** S2-1, S2-2, S2-3 (partial), S2-4, S2-6 (partial), S2-7, S2-9
-  (partial), S2-13, S2-14 (partial). **Not executed:** S2-5, S2-8, S2-10, S2-11,
-  S2-12 (partial), S2-15.
+  (partial), S2-13, S2-14 (partial), S2-15 (partial — its `#189` question is answered and recorded in
+  O-177-11; the file-boundary probes are owed with the stack). **Not executed:** S2-5, S2-8, S2-10,
+  S2-11, S2-12 (partial).
 - **Throwaway stack:** torn down, and the tear-down is recorded in [§7](#7-tear-down-step-7). A later
   checkpoint must re-provision before the outstanding sub-tasks can run.
 
@@ -664,6 +665,41 @@ regression tests (text only, per the design's "tests recommended, not written"):
 than only measured; and plant a case whose id equals a temp name in the same directory, with a
 matching suffix, then assert the sibling document write still succeeds.
 
+**O-177-11 — The configuration-file loader has landed; the encrypted-secret envelope has not, so
+S2-15's key boundary stays documented-pending.** The design leaves one question to the executor:
+"**Whether `#189` has landed at the audited revision** changes S2-15's boundary from 'documented
+pending' to 'must be exercised'." Queried 2026-09-16: `#188` ("[P3] Config: define and implement the
+config file schema and loader") is **closed** (`closed_at 2026-09-14T15:17:32Z`); `#189` ("[P3]
+Config: encrypted secrets at rest") is **open, `closed_at` null, no linked PR**; `#190` ("[P3] Config:
+precedence and validation across file, environment, and defaults") is **open** too. So the answer is
+**not landed**, and S2-15's *Configuration key* boundary is recorded as documented-pending rather
+than exercised — which is the design's own pre-committed limit, and therefore not a finding. The
+revision's documentation already says so in advance, in the *Decided* section of `threat-model.md`:
+"**The file has no encryption yet**: #189's AEAD envelope and externally supplied key are still
+pending, so a secret held in the file is in the clear and the *Configuration key* boundary above is
+not yet exercised." Two pieces of evidence corroborate that the documented state is also the state of
+the artifact. First, the source: a case-insensitive search of `src/` and `Cargo.toml` at the pinned
+revision for `aead`, `xchacha`, `chacha20`, `envelope` and `encrypt` returns **only** the API's
+error envelope (`src/api/error.rs`, `src/api/mod.rs:231`, `src/api/auth.rs`, `src/api/request_id.rs`)
+and the doc-comment in `src/config.rs` — no AEAD type, no key-identifier field, and no crypto
+dependency in the manifest. A secret in the configuration file is in the clear at this revision by
+construction, not by omission of a probe. Second, the *loader* half **is** implemented and reachable,
+which the same revision records: `src/config.rs` reads only the file named by the environment-only
+`TUCANO_CONFIG_FILE`, and its error type "carries none of those by construction, so no `Display` impl
+can leak them by accident" (`src/config.rs`, module docs). That makes S2-15's **file** half a real,
+executable probe rather than a pending one: what it owes is the container arm the design specifies —
+a read-only mount, a good file, an unknown key, a bad `version`, a malformed document, a missing file,
+then `docker diff` plus an in-container `touch` to confirm invariant 9 (the service never writes the
+file) and that no error text names a value. Those probes need the image, which is torn down (§7), so
+they are owed rather than run. Two source-level baselines exist for them and were **re-run green** as
+part of this checkpoint's baseline pass (see §5): `config::tests::no_error_text_carries_a_secret_value`
+and `::an_unreadable_file_refuses_to_start_without_naming_the_path`. They are unit baselines over a
+deliberately pure `resolve`, not container evidence, so this entry does **not** credit them as a pass
+entry — it names them as what the owed probe will test against. **Not scored:** nothing here is
+scored; the clear-text state is a documented, pre-committed limitation of the audited revision, and
+the audit's job with respect to it is to record which state applied, which this entry does.
+(Trust boundaries 6/7.)
+
 **Pending triage — measured, and now decided.** The following results were produced by the S2-4
 identifier probes. They are recorded so the measurement is not lost; every row is now either a scored
 **finding**, a **pass entry**, or a recorded **observation**, and no row is left unscored:
@@ -780,14 +816,15 @@ That is recorded here rather than as an entry because it is a `partial` sub-task
 arm (with an auth store actually created) has not been probed. (Boundary 6/7.)
 
 **Repository baselines, re-run.** The baselines `audit-scope.md` names are not pass entries in their
-own right, but S2-3, S2-4 and S2-7 each owe one, so they were executed *after* the stack was torn
-down, on the host, against the audit worktree — whose `src/`, `tests/`, `Cargo.toml` and `Cargo.lock`
-are byte-identical to the pinned revision (`git diff c5e9943…dfdd21 HEAD` empty). Two commands, both
-green:
+own right, but S2-3, S2-4 and S2-7 each owe one, and S2-15's owed container probe has two, so they
+were executed *after* the stack was torn down, on the host, against the audit worktree — whose
+`src/`, `tests/`, `Cargo.toml` and `Cargo.lock` are byte-identical to the pinned revision
+(`git diff c5e9943…dfdd21 HEAD` empty). Three commands, all green:
 
 ```text
 cargo test --lib "storage::layout::tests::"   → 21 passed; 0 failed (346 filtered out; 0.00s)
 cargo test --test security_tests              → 11 passed; 0 failed (0.00s)
+cargo test --lib "config::"                   → 40 passed; 0 failed (327 filtered out; 0.00s)
 ```
 
 That covers the four baselines S2-4 credits — `layout.rs::a_document_identifier_is_validated_before_any_path_is_built`,
@@ -799,17 +836,27 @@ while asserting only that the stored document stays *valid*: validity holds and 
 every acknowledged write does not, which is exactly the distinction `F-177-3` records. The same
 binary's `path_traversal_tests::*` (four tests, including
 `test_rejects_traversal_through_a_case_identifier`) and `symlink_tests::test_rejects_symlink_escape`
-also pass, independently corroborating pass entries 1–2 and 5. This is source-level evidence at the
-pinned revision, not evidence about the built image: the image was audited by the API probes, the
-baselines by the test binaries compiled from the same revision.
+also pass, independently corroborating pass entries 1–2 and 5. The third command is the `config::`
+filter, which selects both the loader's own `config::tests::*` (16) and the auth layer's
+`auth::config::tests::*` (24) — the baselines S2-15's owed probe will be measured against, including
+`config::tests::no_error_text_carries_a_secret_value`,
+`::an_unreadable_file_refuses_to_start_without_naming_the_path`, and
+`auth::config::tests::no_startup_error_from_the_file_layer_carries_a_secret_value`. Passing them
+credits nothing by itself: they exercise a deliberately pure `resolve` over an in-memory document and
+say nothing about a read-only mount or `docker diff`, which is why S2-15 stays owed (O-177-11). This
+is source-level evidence at the pinned revision, not evidence about the built image: the image was
+audited by the API probes, the baselines by the test binaries compiled from the same revision.
 
 Not yet credited in this checkpoint (and deliberately not listed as passes): atomicity under `SIGKILL`
 (S2-5), two replicas on one data directory (S2-8), attachment and revision publication (S2-10), the
 overwrite table (S2-11), the full error-leak table (S2-12), and the configuration-file boundary
-(S2-15). The three symlink baselines correspond to the fixtures measured in entries 5–6 above; the
-symlinked-*attachment* fixture S2-3 also names has not been planted, so S2-3 stays partial. `F-177-3`
-names `test_concurrent_writes_do_not_corrupt` — now re-run green — as the place a durability regression
-test belongs, because the baseline as written cannot fail on an acknowledged-but-lost write.
+(S2-15) — of which only the *file* half is still owed, and only because it needs a container: the
+*key* half is settled by O-177-11 (`#189` is open, so the key boundary is documented-pending by the
+design's own pre-commitment, not unprobed). The three symlink baselines correspond to the fixtures
+measured in entries 5–6 above; the symlinked-*attachment* fixture S2-3 also names has not been
+planted, so S2-3 stays partial. `F-177-3` names `test_concurrent_writes_do_not_corrupt` — now re-run
+green — as the place a durability regression test belongs, because the baseline as written cannot
+fail on an acknowledged-but-lost write.
 
 ## 6. Calibration confirmed
 
@@ -842,7 +889,8 @@ The following sub-tasks of [audit-design-176-178.md](audit-design-176-178.md) §
 to completion. Each names what it is for, so a reader can see the shape of what is missing rather
 than only its absence. Rows marked **partial** have measured results in §4/§5; what they still owe is
 in the second column. S2-3, S2-6, S2-9 and S2-14 have run and keep a row only to name what their run
-did **not** cover; S2-1, S2-4, S2-7 and S2-13 have now run in full, so their rows are gone.
+did **not** cover; S2-1, S2-4, S2-7 and S2-13 have now run in full, so their rows are gone; S2-15 has
+run its stack-free half and keeps a row only for the container arm.
 
 | Sub-task | What is missing |
 | --- | --- |
@@ -855,7 +903,7 @@ did **not** cover; S2-1, S2-4, S2-7 and S2-13 have now run in full, so their row
 | **S2-11** | The overwrite-contract table for every mutating operation, including the two imports whose conflict behaviour the design says is measured rather than assumed. |
 | **S2-12 (partial)** | The error samples recorded so far are in §4's pending-triage and pass entries 7–11 (`storage_error` for corruption, the wrong-shape-JSON `200`, traversal `invalid_request` 400, conflict 409, not-found 404, the empty-body 404 fallback, unauthorized 401, and the length-overflow `500 storage_error` of `F-177-4`). The DoD item — the full `DomainError`-by-layer table — is not written, and `O-177-5` records that the storage failures collapse into one undifferentiated `storage_error`. |
 | **S2-14 (partial)** | The auth surface is unreachable anonymously (§5, unnumbered note): `/auth`, `/auth//`, `/data/auth`, `/auth/projects`, `/projects/../auth` → **404**, `/auth/me` → **401**. What is owed is the **authenticated** arm, i.e. creating an auth store and confirming no project route can then reach it. |
-| **S2-15** | The storage side of the configuration-file boundary, including the check of whether `#189`'s AEAD envelope has landed at the audited revision (which decides whether the *key* boundary is exercised or recorded as documented-pending). |
+| **S2-15 (partial)** | Its design-level question is answered and recorded: `#189`'s AEAD envelope has **not** landed at the audited revision (`#188` closed 2026-09-14, `#189` and `#190` open with no PR; the source search finds no crypto), so the *Configuration key* boundary stays **documented-pending** by the design's own pre-commitment rather than exercised, and the two `config::` baselines are re-run green (§5, O-177-11). What is still missing is the **container arm** of the file boundary: a well-formed file mounted read-only resolves; an unknown key, a bad `version`, a malformed document and a missing file each refuse startup with errors that name the setting and never the value; and the running service never writes the file (invariant 9), confirmed by `docker diff` and an in-container `touch`. Needs the image. |
 
 Also outstanding for the finished report: the README documentation-table row, the full local gate
 (`actionlint`, `node scripts/check-matrix.mjs`, `cargo fmt --check`, `cargo clippy`, `cargo test`,
