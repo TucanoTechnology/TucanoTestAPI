@@ -9,11 +9,15 @@ file permissions on documents and on the authentication store, and the on-disk t
 boundary."* It carries findings only; nothing here is fixed. Remediation belongs to the tickets
 [#180](https://github.com/TucanoTechnology/TucanoTestAPI/issues/180) raises.
 
-> **Status of this file: CHECKPOINT, not a finished audit.** The sub-tasks named in *Not yet
-> executed* below have not all run. **Do not read this as the S2 report and do not merge it as one.**
-> It exists so that measured evidence survives the end of an off-peak window; the report is
-> complete only when every sub-task in [audit-design-176-178.md](audit-design-176-178.md) §"#177"
-> §3 has a result and §6 below is filled in.
+> **Status of this file: the finished S2 report.** Every sub-task the design names in
+> [audit-design-176-178.md](audit-design-176-178.md) §"#177" §3 has run and has a result: the seven
+> findings are §4, the observatory notes `O-177-14`, `O-177-15` and `O-177-16` sit next to the
+> measurements that produced them, the pass entries are §5, §6 below is filled in — including the
+> calibration of all seven findings and the statement that the count is final — and §7 records the
+> tear-down plus the containers that were live when it was written. §"What the sub-tasks of this
+> checkpoint do not cover" states the limit each sub-task measured within, so that no later reader
+> reads a pass entry as a stronger claim than it is. The pull request carrying this report is opened
+> against `main`, assigned to `ECiurleo`, and is **not** merged by the auditor.
 
 - **Affected revision (the pinned target):** `c5e99431389854368ab3a8e07003622f34dfdd21`
 - **Method:** [audit-scope.md § 6](audit-scope.md#6-how-the-audit-tasks-run), steps 1–7.
@@ -24,11 +28,13 @@ boundary."* It carries findings only; nothing here is fixed. Remediation belongs
   entry 24, the reason being recorded in the finding) and `F-177-5` (Trivial × Limited); High is
   `F-177-6` (Trivial × Moderate). The last two are what the configuration-file boundary's container
   arm produced. §6 has confirmed the calibration for the two worked examples and for all seven pairs;
-  the **count** stays provisional because exactly one sub-task still to run — S2-12 — can add a
-  finding, and §6's list of what it has re-read is updated below to seven.
-- **Pass entries so far:** twenty-four, in the [Pass entries](#5-pass-entries) section.
-- **Executed:** S2-1, S2-2, S2-3, S2-4, S2-6 (partial), S2-7, S2-8, S2-9, S2-13, S2-14
-  (partial), **S2-15 (complete — both halves: the `#189` question is answered and recorded in O-177-11,
+  the **count is final for S2**: S2-12 was the last sub-task that could still have added a finding, it
+  has run, and it added none — the error-leak control holds on every path measured, and the one shape
+  those probes did turn up is recorded as `O-177-16` rather than scored. §6's list of what it has
+  re-read is updated below to seven.
+- **Pass entries so far:** twenty-seven, in the [Pass entries](#5-pass-entries) section.
+- **Executed:** S2-1, S2-2, S2-3, S2-4, S2-6 (partial), S2-7, S2-8, S2-9, S2-13, S2-14, **S2-15
+  (complete — both halves: the `#189` question is answered and recorded in O-177-11,
   and the file-boundary probes have run against the image, producing F-177-5, F-177-6, O-177-12 and pass
   entries 15–17)**. S2-3 is complete rather than partial as of this checkpoint: its owed symlinked
   *attachment* fixtures were planted and refused at the API (pass entries 18–19, O-177-13) and its
@@ -42,13 +48,24 @@ boundary."* It carries findings only; nothing here is fixed. Remediation belongs
   and it produced O-177-14. S2-8 is complete as well: it was re-provisioned on a disk-backed volume,
   and its three arms — two replicas on one data directory, the single-replica control, and the
   slow-writer race — are pass entry 24, which localises `F-177-3`'s mechanism without adding a finding
-  of its own. It also produced O-177-15.
-  **Not executed:** S2-12 (partial).
+  of its own. It also produced O-177-15. S2-12 is complete as well: its `DomainError`-by-layer table —
+  every variant against identifier validation, not-found, conflict, authorization, storage IO,
+  corrupted document, oversize, unsupported type, and the router's own fallbacks — is pass entries
+  25–26 and sits in §4, and it produced O-177-16. The leak control held on all of them: no path, no OS
+  error, no stack trace and no file content appears in any response or in `docker logs`. S2-14 is
+  complete as well, both arms: its anonymous half and its authenticated half — with an auth store
+  created, an administrator's token, a viewer's token and write methods — are pass entry 27.
+  **Not executed:** nothing. Every sub-task in the design's §3 has a result, so §"What the sub-tasks
+  of this checkpoint do not cover" is no longer a work list: its one surviving row notes that S2-6
+  owes no further variants, and the paragraph after it states what each finished sub-task does not
+  show.
 - **Throwaway stack:** re-provisioned for the S2-15 container arm with every build step `CACHED` from
-  the pinned revision, and **retained** at `tucano-test-audit-177:c5e9943` for the next checkpoint; the
+  the pinned revision, and **retained** at `tucano-test-audit-177:c5e9943` for the rest of the audit; the
   earlier tear-down and the re-provisioning are both recorded in [§7](#7-tear-down-step-7). The S2-8
-  pair is a separate stack on a disk-backed directory — see §7's *live at the end of this checkpoint*.
-  A later checkpoint starts the outstanding sub-tasks with `docker compose -p audit-177 up -d`.
+  pair is a separate stack on a disk-backed directory, and the two S2-12 stacks (`audit-177-auth-1`
+  with authentication on, `audit-177-ttl-1` with a one-second access-token TTL) are a third — see
+  §7's *live at the end of the audit*. The stacks can be brought back with
+  `docker compose -p audit-177 up -d` if a reviewer wants to re-run a probe.
 
 ## 1. Revision pinned
 
@@ -1049,9 +1066,10 @@ which is the capability boundary 3 exists to contain rather than to be probed fr
 and not scored** — and recorded chiefly so S2-12's `DomainError`-by-layer table does not rediscover it.
 (Boundary 3; boundary 8.)
 
-Two later observations are recorded in §5 instead of here, each next to the measurement that produced
-it: `O-177-14`, the identifier the API reports against the one it accepts (pass entry 23), and
-`O-177-15`, the readiness probe advancing `lastWriteUnix` (pass entry 24).
+Three later observations are recorded in §5 instead of here, each next to the measurement that
+produced it: `O-177-14`, the identifier the API reports against the one it accepts (pass entry 23),
+`O-177-15`, the readiness probe advancing `lastWriteUnix` (pass entry 24), and `O-177-16`, the
+effective request-body ceiling against the declared one (pass entry 26).
 
 **Pending triage — measured, and now decided.** The following results were produced by the S2-4
 identifier probes. They are recorded so the measurement is not lost; every row is now either a scored
@@ -1082,6 +1100,86 @@ expected refused by the design, and recorded as an observation rather than a fin
 control the repository specifies and tests is the narrower one. **The pending table is therefore
 empty of undecided rows**, and every value it lists is either a finding, a pass entry, or a recorded
 observation.
+
+### The `DomainError`-by-layer table (S2-12) — the error path leaks nothing, and six of its rows answer without a code
+
+S2-12 asks for every `DomainError` variant against each layer that can produce one, recording the
+status, `error.code`, `error.message`, whether either of them names a setting or a path, and whether
+`docker logs` carries anything the response does not — in the response **or the logs**, in the
+design's words (`audit-design-176-178.md:1079`). The table below is that check, and it is also the
+DoD item the design states as "the error-leak check (S2-12) must cover **every** error path,
+presented as a table" (`:1153`).
+
+The rows were measured against this checkpoint's stacks of the pinned image — the auth-enabled
+`audit-177-auth-1` (127.0.0.1:3323) unless a row names another container — and the `docker logs`
+column was read on every audit container after the whole battery (startup, `/health`, dozens of
+401/403/404/405/409/413/415/500 responses, successful logins, an expired token and a deliberately
+corrupted stored document). Every row of that column reports the same value: `0` lines. One row
+(`conflict, two parents`) is re-read from pass entry 23 rather than re-measured here, and says so.
+
+| Layer — the probe that produces it | Request | Status | `error.code` | `error.message` | Names a setting or a path? | `docker logs` |
+| --- | --- | --- | --- | --- | --- | --- |
+| identifier validation — `invalid_id`, the nested route | `GET /projects/{project}/test_cases/{case}` with case id `a/b`, `..`, `""`, or a control character | **400** | `invalid_id` | `Invalid resource ID` | no — neither the field nor the value is named | `0` |
+| not-found — a project | `GET /projects/missing.json` | **404** | `not_found` | `Resource not found` | no | `0` |
+| not-found — a test case | `GET /test_cases/missing` | **404** | `not_found` | `Test case not found` | no | `0` |
+| conflict — a duplicate identifier | `POST /projects` twice with one name (and `POST /projects` again as the admin control) | **409** | `conflict` | `Resource already exists` | no | `0` |
+| conflict — two parents | compose a case into a suite that already holds it (pass entry 23, re-read; truncated there in the same way) | **409** | `conflict` | ``This identifier is used by 2 parents (S23 symlink fixture.json, S23 symlink fixture.json/S11s.json); address the intended one through …`` | **partly** — the two containers are named by *identifier*, which is data the caller addressed; no path, no setting | `0` |
+| authorization — no credentials | any protected route, no `Authorization` header | **401** | `missing_token` | `Authentication required` | no | `0` |
+| authorization — unparseable token | `Authorization: Bearer <garbage>` | **401** | `invalid_token` | `Invalid access token` | no | `0` |
+| authorization — expired token | `audit-177-ttl-1` (3324, `TUCANO_ACCESS_TOKEN_TTL=1s`), access token replayed after its TTL | **401** | `token_expired` | `Access token has expired` | no — no setting and no TTL value is named | `0` |
+| authorization — credentials | `POST /auth/login`, wrong password and unknown username | **401** | `invalid_credentials` | `Invalid username or password` | no — one body for both, so it is not a username oracle | `0` |
+| authorization — refresh token | `POST /auth/refresh` with a bad token | **401** | `invalid_refresh_token` | `Invalid refresh token` | no | `0` |
+| authorization — role | `POST /projects` with a viewer's token (control: the same request with an administrator's token → **201**) | **403** | `forbidden` | `This account needs the system administrator role` | no — a role name, not a setting or a path | `0` |
+| storage IO — the unit variant | case identifier of 256 bytes, one past `NAME_MAX` (the row `F-177-4` scores) | **500** | `storage_error` | `Storage operation failed` | no — `DomainError::Storage` carries no payload at all (`src/domain/error.rs:135–151` maps every unmatched `io::Error` to it) | `0` |
+| corrupted document — read path | `GET /test_cases/internal-probe` with `test-case.json` overwritten to `{ this is not json` | **500** | `storage_error` | `Storage operation failed` | no — the same unit variant as the row above | `0` |
+| corrupted document — write path | `PUT /test_cases/internal-probe` against that same document | **500** | `storage_error` | `Stored JSON is invalid` — **the `Internal(String)` arm, reached and rendered verbatim** | no — every `Internal(` site passes a constant (`src/domain/error.rs:157`; `src/domain/service.rs:624, 754, 1069–1078, 1433, 1448, 1463, 1552`; `src/auth/session.rs:271`), so the variant cannot carry a parser message or a path | `0` |
+| oversize — at the effective ceiling | `POST /test_cases/{id}/attachments`, multipart body of 2,097,152 bytes | **201** | — (success) | stored, `size` 2,096,991 | no | `0` |
+| oversize — one byte past it | the same request with a 2,097,153-byte body, and with 3 MiB, 8 MiB and 32 MiB bodies | **400** | `invalid_multipart` | `Unable to read uploaded file` | no | `0` |
+| oversize — past the *declared* limit | multipart bodies of 52,428,801 and 62,914,560 bytes | **413** | **none** — `text/plain; charset=utf-8`, no envelope | `length limit exceeded` | no | `0` |
+| oversize — JSON body | `POST /test_cases` with a 2,097,223-byte body | **413** | **none** — `text/plain; charset=utf-8` | `Failed to buffer the request body: length limit exceeded` | no | `0` |
+| unsupported type | a `text/plain` body, and a request with no `Content-Type` at all | **415** | **none** — `text/plain` | ``Expected request with `Content-Type: application/json` `` | no | `0` |
+| malformed JSON | `POST /projects` with a trailing comma, and with an unquoted value | **400** | **none** — `text/plain` | `Failed to parse the request body as JSON: trailing comma at line 1 column 13` | no — the message echoes one **field name** and a byte offset, never a value: the sentinel value `SENTINEL-c0ffee-4815162342-abcdefghijklmnop` was never echoed by any probe | `0` |
+| router fallback — unknown path | `GET /nowhere` | **404** | **none** — no `content-type`, `content-length: 0`, `x-request-id` present | (empty) | no | `0` |
+| router fallback — known path, wrong method | `PUT /projects` | **405** | **none** — `allow:` header carries the methods, body empty | (empty) | no | `0` |
+| control — a route that is public by design | `GET /health`, `GET /openapi.json` | **200** | — | — | no | `0` |
+
+Four things this table settles, in the order the design asks for them, plus one row-level caution.
+
+*Invariant 6 holds on every row.* No path, no OS error, no stack trace and no file content appears in
+a response or in the logs — including on the two rows where the layer had an OS error to report. The
+only messages that name anything name a role, a field, a byte offset, a content type, or identifiers
+the caller itself supplied.
+
+*The 401 challenge is correct and carries no secret.* Every 401 carries
+`WWW-Authenticate: Bearer realm="Tucano Test API"`, and `error="invalid_token"` is appended for
+`invalid_token` and `token_expired` only (`src/api/error.rs:33`), which is exactly what RFC 6750 asks
+for: a request with nothing to authenticate with gets the realm alone, and an expired token — the
+code that tells a client to refresh — is reported as one. That is measured on all five
+authorization rows above, not read from the code alone.
+
+*Every variant of `DomainError` is accounted for.* The eight are `NotFound`, `InvalidRequest`,
+`Conflict`, `PayloadTooLarge`, `Internal`, `Storage`, `Unauthenticated` and `Forbidden`
+(`src/domain/error.rs:14–31`; the mapping to status and code is `impl IntoResponse` in
+`src/api/error.rs`): the first seven each have a measured row, and `PayloadTooLarge` alone has none —
+its four guard sites are unreachable through these routes, which is measured in `O-177-16` and not
+scored.
+
+*One row is route-specific, and labelled so rather than generalised.* The `invalid_id` **400** comes
+from the nested `GET /projects/{project}/test_cases/{case}` route; §4's pending-triage table records
+`400` `invalid_request` for the same rejected identifiers on the flat creation routes. Both are as
+measured, and the difference is a code-naming one in the HTTP layer — neither refuses anything
+differently at the filesystem.
+
+*Where the invariants part company.* Six rows answer with **no** `error.code`: the multipart and JSON
+oversize refusals, the 415, the malformed-JSON 400, and the two router fallbacks. None of them
+reaches `IntoResponse for DomainError` — they are extractor and router rejections — so invariant 3's
+"client-visible errors use stable codes and safe messages" does not hold on them even though
+invariant 6 does. The messages are safe in the narrow sense that matters here (they name a field, a
+byte offset or a content type, and none echoes a value), so this is a shape defect of the **HTTP
+surface**, recorded and not scored in this report and left to S1-10.2 / `#176`, which owns the
+surface's error contract. The two leak findings this report does carry are elsewhere on purpose:
+`F-177-5` and `F-177-6` are on the startup and file layer, where the process prints a `Debug`
+rendering and echoes a wrongly-typed value — not on the request path S2-12 measures.
 
 ## 5. Pass entries
 
@@ -1173,7 +1271,8 @@ Controls tested **and not broken** in this checkpoint:
     `00000000:0BB8 … 0A` (listening on `0.0.0.0:3000` as uid `10001`), and the settings took effect —
     the bootstrap pass created `/data/auth/users.json`, `/data/auth/projects`, `/data/projects` and
     `/data/.tucano.lock` under the mounted data directory. `docker logs` is **empty**: nothing is
-    logged at startup, a fact S2-12's error-leak table will need for its log column. (Boundaries 6/7.)
+    logged at startup, a fact S2-12's error-leak table carries in its log column — every row of it
+    reads `0` (see entry 26). (Boundaries 6/7.)
 17. **The running service never writes the file named by `TUCANO_CONFIG_FILE`.** Across a full
     start-and-serve run the host file is byte-identical: `sha256`
     `642bab0dd836c259cc4427429e18ff690fcb9d72106103e60705a7e14ba7040d`, mode `664`, and mtime/ctime
@@ -1249,8 +1348,9 @@ Controls tested **and not broken** in this checkpoint:
 
 Two S2-10 notes that are not entries. First, the history routes answer every write method with
 **405 and an empty body**, in contrast to the `{"code":…,"message":…,"requestId":…}` shape every other
-refusal in this report uses; the API's error contract expects a `code`, so this is a gap for S2-12's
-table rather than a control. Second, a fixture caveat for any later comparison: the case file
+refusal in this report uses; the API's error contract expects a `code`, so it is one of the six rows
+of S2-12's table that answer without one — a gap for the HTTP surface (S1-10.2 / `#176`) rather than a
+control. Second, a fixture caveat for any later comparison: the case file
 `…/C1/1789536837251789433-escape.txt` was restored by hand after the short-body probe, from
 `/etc/hostname`, and is **not** byte-identical to the original — sha256
 `c5194672d129fc5ad717be5ee1cd7dea3bacc28e61f262b410a5dbb5c0868c74` against the original's
@@ -1372,11 +1472,74 @@ who monitors `/ready` keeps the field moving by monitoring it, and since `write_
 `.tucano-<suffix>.tmp` convention, a fresh `lastWriteUnix` is not evidence that a *client* write
 landed. (Boundary 4.)
 
-Outside the numbered entries, S2-14 found the same shape on the auth tree: `/auth`, `/auth//`,
-`/data/auth`, `/auth/projects`, and `/projects/../auth` all return **404**, and `/auth/me` returns
-**401** without a token — no route lists, reads, or writes the store under `TUCANO_DATA_DIR/auth/`.
-That is recorded here rather than as an entry because it is a `partial` sub-task: the authenticated
-arm (with an auth store actually created) has not been probed. (Boundary 6/7.)
+25. **With authentication on, every refusal answers with a stable code, a safe message and a
+    correlation id, and none of them names a path, a setting or a secret.** S2-12's authorization
+    half, on the auth-enabled stack: an absent token (`missing_token`), an unparseable one
+    (`invalid_token`), one replayed past its TTL on the 1-second-TTL stack (`token_expired`), a wrong
+    password and an unknown username (`invalid_credentials` — one body for both, so the refusal is not
+    a username oracle), a bad refresh token (`invalid_refresh_token`), and a viewer token on an
+    admin-only route (**403** `forbidden`). All of them carry `x-request-id` on the response and the
+    same value as `error.requestId` in the envelope, and every 401 carries
+    `WWW-Authenticate: Bearer realm="Tucano Test API"` with `error="invalid_token"` appended only for
+    the two token-shaped failures (`src/api/error.rs:33`). The administrator control passed: the same
+    request that drew the 403 answered **201** with an administrator's token. (Invariant 3; invariant
+    6; boundary 6.)
+26. **No error path writes anything to the service's own logs, so the logs cannot carry what a
+    response does not.** S2-12's log column, read on every audit container in this checkpoint after
+    the whole battery — startup, `/health`, dozens of 401/403/404/405/409/413/415/500 responses,
+    successful logins, an expired token, and a deliberately corrupted stored document:
+    `docker logs <container> | wc -l` is **`0`** on all of them, and it was `0` before the battery too.
+    `src/main.rs` installs no `tracing_subscriber`, so the `TraceLayer` spans that
+    `src/api/mod.rs:208` builds have no consumer: the correlation id reaches the client and is
+    recorded nowhere. The control therefore holds in the strong form the design asked for — the logs
+    carry nothing the response does not, because they carry nothing at all — and what it costs is
+    diagnosability rather than confidentiality: the `requestId` is a client-only handle an operator
+    cannot look up, the same shape as `O-177-5`'s single undifferentiated `storage_error` (recorded,
+    not scored). (Invariant 6; the design's expectation at `audit-design-176-178.md:1079`.)
+
+**O-177-16 — the effective request-body ceiling is 2 MiB, not the 50 MiB the code declares, and the
+four `PayloadTooLarge` guards behind it are unreachable.** `MAX_BODY_BYTES` *is* `MAX_ATTACHMENT_BYTES`
+(`src/api/mod.rs:49`, `:41`; `src/domain/mod.rs:29`) — 50 MiB — and
+`RequestBodyLimitLayer::new(MAX_BODY_BYTES)` is installed (`src/api/mod.rs:207`); nothing in `src/`
+touches `DefaultBodyLimit`. What the probes measure is a boundary at exactly **2,097,152** bytes:
+a multipart attachment body of that size is stored (**201**, `size` 2,096,991), while 2,097,153 is
+refused as **400** `invalid_multipart` `"Unable to read uploaded file"` — the `field.bytes()` error
+arm at `src/api/cases.rs:77–104`, whose message describes a read failure rather than a size limit —
+and a 2,097,223-byte JSON body is refused as an unenveloped **413**
+`Failed to buffer the request body: length limit exceeded`. Multipart bodies that exceed the
+*declared* 50 MiB (52,428,801 and 62,914,560 bytes) are refused too, as an unenveloped **413**
+`length limit exceeded`. The four `PayloadTooLarge` guard sites (`src/api/cases.rs:97`, `:168`;
+`src/domain/service.rs:900`, `:955`) therefore cannot fire through these routes as installed: no
+request that reaches them can be larger than 2 MiB. **Recorded and not scored**, for three reasons.
+The enforced ceiling is *tighter* than the declared one, so the mismatch fails closed — nothing the
+code means to accept is accepted and then mis-handled, and no data is lost or disclosed; what it
+costs is a misleading refusal, because a legitimate 3 MiB attachment is told the upload could not be
+read instead of that it is over a limit. The unreachable guards are a dead-control observation of the
+same family as `O-177-5`, not a bypass. And the **missing `error.code`** on the unenveloped rows of
+§4's table is an HTTP-surface shape defect — invariant 3, not invariant 6 — which S1-10.2 / `#176`
+owns; scoring it here would put one defect in two reports. The probes fix the boundary and the two
+responses either side of it; they do **not** separate which installed layer answers which body shape,
+and this note does not claim to. (Invariants 3 and 6; the S2-12 table in §4.)
+
+27. **No project route can reach the authentication store — not anonymously, and not with a token or
+    a write.** S2-14, both arms, on the auth-enabled stack `audit-177-auth-1` (authentication on, an
+    auth store created and populated by the bootstrap pass). Anonymous: `/auth`, `/auth//`,
+    `/data/auth`, `/auth/projects` and `/projects/../auth` answer **404**, and `/auth/me` answers
+    **401** `invalid_token` — the same result, path for path and on the auth-**off** stack
+    `audit-177-api-1` (3320) as well, so the isolation is not an artifact of the configuration. With an
+    administrator's token: the same paths, plus `/projects/../../auth/users.json`,
+    `/projects/Audit%20177/../../auth/users.json` and the percent-encoded
+    `/projects/%2e%2e/auth/users.json`, all answer **404** with an **empty** body, and so do the
+    store's own filenames under the traversal path (`/auth/users.json`,
+    `/auth/projects/audit177proj.json`) and the same paths with a viewer's token. `PUT`, `POST` and
+    `DELETE` on `/projects/../auth/users.json` answer 404 as well, and leave
+    `TUCANO_DATA_DIR/auth/users.json` byte-identical (sha256 `b373b83d…55e9e4` before and after). The
+    one route in the `/auth` namespace that answers is `/auth/me` — **200** for an administrator and
+    **200** for the viewer — and what it returns is the *caller's own* record,
+    `{"id":…,"username":…,"systemAdmin":…,"roles":{…}}`, with no password hash and nothing about
+    another account; the viewer's `roles` map names only the project file the viewer holds a role on.
+    Nothing was logged either: `docker logs audit-177-auth-1 | wc -l` is still **0** after the write
+    attempts. (Boundary 6/7; invariant 6.)
 
 **Repository baselines, re-run.** The baselines `audit-scope.md` names are not pass entries in their
 own right, but S2-3, S2-4 and S2-7 each owe one, and S2-15's container probe named two, so they
@@ -1416,8 +1579,10 @@ which is the one case that does not echo the value (`F-177-6`). This is source-l
 pinned revision, not evidence about the built image: the image was
 audited by the API probes, the baselines by the test binaries compiled from the same revision.
 
-Not yet credited in this checkpoint (and deliberately not listed as passes): the full error-leak table
-(S2-12). Five sub-tasks have left this list since the
+Not withheld in this checkpoint, and so no longer exclusive of the pass list: the full error-leak
+table (S2-12) is written in §4 and credited by pass entries 25–26, and what its probes turned up
+beyond the control they prove — the effective 2 MiB body ceiling against the declared 50 MiB — is
+recorded as `O-177-16` rather than scored. Six sub-tasks have left this list since the
 previous checkpoint:
 atomicity under `SIGKILL` (S2-5), whose ten timed kills and clean-aftermath walk are pass entry 22,
 the overwrite contract (S2-11), whose per-operation table is pass entry 23,
@@ -1427,7 +1592,9 @@ is open, so the key boundary is documented-pending by the design's own pre-commi
 the *file* half by pass entries 15–17 after the container arm ran. The fifth is the two-replica arm
 (S2-8), whose three arms are pass entry 24: it was re-provisioned on a real volume because the row it
 left behind said a `tmpfs` result would not transfer, and it is the measurement `F-177-3`'s re-grade
-rests on. The three symlink baselines
+rests on. The sixth is the error-leak table (S2-12), whose DoD item — every error path, presented as
+a table — is the §4 subsection named for it, credited by pass entries 25–26 and answering `0` in its
+`docker logs` column on every container it was read from. The three symlink baselines
 correspond to the fixtures measured in entries 5–6 above; the symlinked-*attachment* fixture S2-3 also
 names has since been planted and refused at the API — the attachment file, the dangling variant of it
 and the case folder itself (pass entries 18–19, O-177-13) — so S2-3 is no longer partial; its fixture 6
@@ -1493,10 +1660,14 @@ re-confirmed.
   (F-177-2, F-177-3), then the identifier and error-class path (F-177-4), and finally the
   configuration-file boundary, whose two findings were written last because they were measured last.
   Comparing severity across S2's findings means comparing the pairs, not the sequence.
-- **What this section does not yet confirm:** that seven is the final count. S2-12 is the one
-  sub-task left that can still add a finding, and a new finding changes the surface's distribution —
-  which is why the header marks the count provisional. §6 is re-confirmed, not rewritten, in the closing
-  checkpoint; the two examples and the seven pairs above will not change unless a later sub-task
+- **The count is now final, and this is what settled it.** Seven is the count for S2. S2-12 was the last
+  sub-task that could still have added a finding; it has run, and it added none — the error-leak control
+  holds on every path it measured, which is why pass entries 25–26 credit it rather than §4 taking a
+  finding, and the one shape those probes did turn up is recorded as `O-177-16` instead of scored, for
+  the two reasons that entry gives (the enforced 2 MiB ceiling is tighter than the declared 50 MiB, so
+  the mismatch fails closed; and the missing `error.code` on the unenveloped rows belongs to S1-10.2 /
+  `#176`, not to S2). §6 has been re-confirmed here rather than rewritten, which is what completes the
+  report: the two examples and the seven pairs above will not change unless a later sub-task
   contradicts one of them.
 
 ## 7. Tear-down (step 7)
@@ -1514,7 +1685,7 @@ Recorded 2026-09-16, at the end of the window that produced this checkpoint.
 
 The throwaway volume of the first stack was `tmpfs` on the host's `/tmp`, which is why S2-8's result
 could not be taken from it: the sub-task was re-provisioned on a disk-backed directory, and that is
-pass entry 24 (see also *live at the end of this checkpoint* below). The audit's own scratch state is
+pass entry 24 (see also *live at the end of the audit* below). The audit's own scratch state is
 gone; the evidence that survives is this file and the pushed commits.
 
 **Re-provisioned, later in the same window, for S2-15's container arm.** The sub-task's file half needs
@@ -1528,40 +1699,60 @@ else was left running: `docker ps` reports only the operator's `tucano-test-api-
 and `open-webui`. This is a change of state from the tear-down table above and is recorded here rather
 than by editing that table, which keeps the record of what the tear-down did.
 
-**Live at the end of this checkpoint.** Three audit containers are up, all from the pinned revision's
+**Live at the end of the audit.** Five audit containers are up, all from the pinned revision's
 image: the S2-8 pair `audit-177-disk-a-1` (127.0.0.1:3321) and `audit-177-disk-c-1` (127.0.0.1:3322),
-each bind-mounting `/var/tmp/audit-177-disk/data`, plus the earlier `audit-177-api-1` (3320) on the
-`tmpfs` fixture at `/tmp/audit-177/data`. The S2-8 fixtures sit on `/var/tmp`, which is `ext4` on this
+each bind-mounting `/var/tmp/audit-177-disk/data`; the earlier `audit-177-api-1` (3320) on the
+`tmpfs` fixture at `/tmp/audit-177/data`; and the two S2-12 stacks — `audit-177-auth-1` (127.0.0.1:3323),
+the configuration with authentication **on** (`TUCANO_AUTH_REQUIRED=true` and a 32-byte
+`TUCANO_JWT_SECRET`) over `/var/tmp/audit-177-auth/data`, and `audit-177-ttl-1` (127.0.0.1:3324), the
+same stack with `TUCANO_ACCESS_TOKEN_TTL=1s` and `TUCANO_REFRESH_TOKEN_TTL=60s` over
+`/var/tmp/audit-177-ttl/data` — the latter added so `token_expired` could be measured inside one
+checkpoint rather than a day later. Both new data directories were created on the host and needed
+`chmod 777` before the container could write into them at all: the service runs as `uid=10001` and
+does not create a missing bind-mount source, so without the mode change the stack failed at startup
+with `PermissionDenied` (the same ownership shape §7's tear-down table records for the `tmpfs`
+stack). The S2-8 fixtures sit on `/var/tmp`, which is `ext4` on this
 host and survives a reboot, so the pair's state — `data/.tucano.lock`, `projects/S28/` with `C1` (27
 revisions, `version` 28), `C2` (25, 26) and `C3` (11, 12), and the `s28-storm.log`, `s28-single.log`,
 `s28-stale.log` and `c3-slow-*.{json,code}` transcripts — is the evidence pass entry 24 is written
-from and can be re-read by a later checkpoint. The `/tmp/audit-177/` fixtures are on `tmpfs` and are
+from and can be re-read by a later checkpoint. The two S2-12 stacks are durable in the same way —
+`/var/tmp/audit-177-auth/data/auth/users.json` and the whole of `/var/tmp/audit-177-ttl/data/` are on
+`ext4`, so the corrupt-document probe's `projects/Internal Probe/internal-probe/test-case.json` and
+the two uploaded `.bin` attachments under the auth stack can be re-read too. What is *not* durable is
+the pair of seeded credential files the probes authenticate with: `/tmp/audit-177/auth-admin.json`,
+`auth-viewer.json` and `auth-ttl.json` are on `tmpfs` and vanish with the reboot, while the stores
+they authenticate against do not. The `/tmp/audit-177/` fixtures are on `tmpfs` and are
 not: they survive only until the next reboot.
 
-## Not yet executed in this checkpoint
+## What the sub-tasks of this checkpoint do not cover
 
-The following sub-tasks of [audit-design-176-178.md](audit-design-176-178.md) §"#177" §3 have not run
-to completion. Each names what it is for, so a reader can see the shape of what is missing rather
-than only its absence. Rows marked **partial** have measured results in §4/§5; what they still owe is
-in the second column. S2-6 and S2-14 have run and keep a row only to name what their run
-did **not** cover; S2-1, S2-3, S2-4, S2-5, S2-7, S2-8, S2-9, S2-10 and S2-13 have now run in full, so their rows are gone
-(S2-5's ten timed `SIGKILL`s are pass entry 22 and it claims no power-loss durability;
-S2-9's third arm, the revision write, is pass entry 20; what S2-9 still cannot
-show is a lock observed *held* — its probes measure release, not exclusion; S2-10's three arms are
-pass entry 21, and what S2-10 still cannot show is a torn body: the recipe that was to produce one
-turned out unreachable, so the *consequence* of a short body was measured instead, not its
-production; S2-8's three arms are pass entry 24, run on a disk-backed volume as its old row demanded,
-and it claims nothing about cross-host lock scope), and
-S2-15 has now run both halves — the `#189` question in O-177-11 and the file-boundary probes in pass
-entries 15–17 — so its row is gone as well (its two findings and one observation are in §4). S2-3's row
-is gone for the same reason: the attachment fixtures it owed are pass entries 18–19, and its fixture 6
-ran too — as F-177-7 in §4, because the hardlink arm did not hold.
+Every sub-task of [audit-design-176-178.md](audit-design-176-178.md) §"#177" §3 has now run, so this is
+not a work list any more. It is kept because it states the *limits* each sub-task measured within —
+what a later checkpoint would otherwise have to rediscover from the sections above — for the one row
+that survives as a note, and for the sub-tasks whose rows are gone.
 
 | Sub-task | What is missing |
 | --- | --- |
-| **S2-6 (partial)** | Truncation, invalid UTF-8, and a 100 MiB replacement are measured (pass entries 7–9). The wrong-shape JSON case is measured **and is a finding** instead of a pass (`F-177-2`). No further variants are owed, and the calibration pass §6 owed `F-177-2` has now run; the row stays only until §6 is re-confirmed at the closing checkpoint. |
-| **S2-12 (partial)** | The error samples recorded so far are in §4's pending-triage and pass entries 7–11 (`storage_error` for corruption, the wrong-shape-JSON `200`, traversal `invalid_request` 400, conflict 409, not-found 404, the empty-body 404 fallback, unauthorized 401, and the length-overflow `500 storage_error` of `F-177-4`, plus the history routes' **405 with an empty body** measured for S2-10). The DoD item — the full `DomainError`-by-layer table — is not written, and `O-177-5` records that the storage failures collapse into one undifferentiated `storage_error`. One measured fact already belongs in that table's log column: the service logs **nothing** at startup, cleanly or otherwise (pass entry 16), so a failure that only appears in the console is the configuration refusal and nothing else. |
-| **S2-14 (partial)** | The auth surface is unreachable anonymously (§5, unnumbered note): `/auth`, `/auth//`, `/data/auth`, `/auth/projects`, `/projects/../auth` → **404**, `/auth/me` → **401**. What is owed is the **authenticated** arm, i.e. creating an auth store and confirming no project route can then reach it. |
+| **S2-6 (partial)** | Truncation, invalid UTF-8, and a 100 MiB replacement are measured (pass entries 7–9). The wrong-shape JSON case is measured **and is a finding** instead of a pass (`F-177-2`). The calibration pass §6 owed `F-177-2` has run, and no further variants are owed: the row survives as a note, not as outstanding work. |
+
+What the rows that have gone still do not show, in the order they left: S2-5's ten timed `SIGKILL`s
+are pass entry 22 and it claims no power-loss durability.
+S2-9's third arm, the revision write, is pass entry 20; what S2-9 still cannot
+show is a lock observed *held* — its probes measure release, not exclusion. S2-10's three arms are
+pass entry 21, and what S2-10 still cannot show is a torn body: the recipe that was to produce one
+turned out unreachable, so the *consequence* of a short body was measured instead, not its
+production. S2-8's three arms are pass entry 24, run on a disk-backed volume as its old row demanded,
+and it claims nothing about cross-host lock scope. S2-12's DoD item — the full
+`DomainError`-by-layer table — is written as the §4 subsection named for it, pass entries 25–26
+credit it, and the log column of that table answers **`0`** on every container it was read from.
+S2-15 has now run both halves — the `#189` question in O-177-11 and the file-boundary probes in pass
+entries 15–17 — so its row is gone as well (its two findings and one observation are in §4). S2-3's row
+is gone for the same reason: the attachment fixtures it owed are pass entries 18–19, and its fixture 6
+ran too — as F-177-7 in §4, because the hardlink arm did not hold. S2-14 was the last row to go: its
+authenticated arm is measured (pass entry 27), and the limit the pair of arms leaves is that
+`/auth/me` is a route of the authentication namespace rather than of a project, so it answers the
+caller's own record — and that both arms were measured against a single-process stack, so nothing here
+speaks to two replicas sharing one auth store.
 
 Also outstanding for the finished report: the full local gate (`actionlint`, `node
 scripts/check-matrix.mjs`, `cargo fmt --check`, `cargo clippy`, `cargo test`, `cargo build --release`)
