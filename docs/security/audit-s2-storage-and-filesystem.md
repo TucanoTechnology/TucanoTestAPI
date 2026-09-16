@@ -17,11 +17,12 @@ boundary."* It carries findings only; nothing here is fixed. Remediation belongs
 
 - **Affected revision (the pinned target):** `c5e99431389854368ab3a8e07003622f34dfdd21`
 - **Method:** [audit-scope.md § 6](audit-scope.md#6-how-the-audit-tasks-run), steps 1–7.
-- **Findings so far:** **two** Low (`F-177-1`, `F-177-2`). Severity calibration across the surface
-  (§6) has not been completed, so this count is provisional.
-- **Pass entries so far:** eleven, in the [Pass entries](#5-pass-entries) section.
-- **Executed:** S2-1 (partial), S2-2, S2-3, S2-4, S2-6, S2-9, S2-14 (partial). **Not executed:**
-  S2-5, S2-7, S2-8, S2-10, S2-11, S2-12 (partial), S2-13, S2-15.
+- **Findings so far:** **four**, all Low (`F-177-1`, `F-177-2`, `F-177-3`, `F-177-4`). Severity
+  calibration across the surface (§6) has not been completed, so this count is provisional.
+- **Pass entries so far:** thirteen, in the [Pass entries](#5-pass-entries) section.
+- **Executed:** S2-1 (partial), S2-2, S2-3 (partial), S2-4 (partial), S2-6 (partial), S2-7
+  (partial), S2-9 (partial), S2-13, S2-14 (partial). **Not executed:** S2-5, S2-8, S2-10, S2-11,
+  S2-12 (partial), S2-15.
 
 ## 1. Revision pinned
 
@@ -392,6 +393,102 @@ design asks for, and a path built outside `layout.rs` would not yet have been ca
   not a duplicate of either — F-177-1 is about the mode bits of the file, this is about the content
   the API is willing to serve from it.
 
+### F-177-3: Concurrent writes are acknowledged with `200` and then silently discarded
+
+- **Severity:** **Low** — Difficult × Moderate. The trigger is a race, which the rubric places on the
+  Difficult row, and the effect is loss of data inside a scope the writer is already authorised to
+  write. The default-configuration escalation was considered and **not** applied: it would apply to
+  any authenticated client with two open requests, but no attacker gains anything — the loss is
+  symmetric among the writers who are entitled to the resource, and the report chose the reading that
+  the race precondition already carries the weight. The Medium reading (Trivial × Moderate, or Low
+  escalated one level) is arguable and a later reader may take it; the evidence below is what matters.
+- **In scope:** S2-7; trust boundary 4 (service → stored JSON); invariant 2 — the surviving document
+  is always complete and always valid, but a write the API *acknowledged* can be absent from it.
+- **Where:** the document write path (`src/domain/service.rs` → the storage layer's read-modify-write
+  for a case document) and the advisory lock at `src/storage/fs.rs:36` with its eight unlock sites.
+  The audit measured the behaviour and did **not** localise the exact window this checkpoint, so the
+  mechanism below is inferred from the two experiments and said so.
+- **Affected revision:** `c5e99431389854368ab3a8e07003622f34dfdd21` (`tucano-test-audit-177:c5e9943`).
+- **Reproduction.** Against the throwaway stack in §2 (authentication off, host port 3320):
+  1. `POST /projects {"name":"S27"}` → `201`; `POST /projects/S27.json/test_cases
+     {"testCaseId":"TC-S27","title":"S27 base","expectedResult":"ok"}` → `201`.
+  2. Fire 32 concurrent writes with distinct bodies:
+     `for i in $(seq 1 32); do curl -s -o /dev/null -w '%{http_code}' -X PUT
+     http://127.0.0.1:3320/test_cases/TC-S27 -H 'content-type: application/json'
+     --data-binary "{\"title\":\"S27 writer $i\",\"expectedResult\":\"ok\"}" & done; wait`
+  3. `GET /test_cases/TC-S27` and `GET /test_cases/TC-S27/history`.
+  4. Control: repeat the same 32 requests **sequentially** in a fresh project (`S27seq`).
+- **Observed.** Concurrent run: **all 32 requests returned `200`**, and the stored document reports
+  `"version": 17` with **16** history entries and **16** files in `revisions/`. Sequential control:
+  **all 20 requests returned `200`** with `"version": 21`, **20** history entries and **20**
+  revisions. The concurrent run therefore acknowledged twice as many writes as it persisted. A
+  tight reproduction — ten rounds of exactly two concurrent writers — is fully deterministic:
+  `20` acknowledged writes, version `2 → 12` (delta `1` per round), **11** revisions on disk, and the
+  surviving titles in `revisions/` show one writer per round, e.g. round 4 kept writer A and silently
+  dropped writer B. No document was ever left malformed, no partial file appeared, and the failed
+  writes of the over-long-identifier probe (F-177-4) left nothing behind.
+- **Expected.** Either a write the service acknowledges is durable — 32 accepted writes produce 32
+  versions — or a write that will not be applied is refused with a `409` conflict, as duplicate
+  creation already is. An accepted `200` that leaves no trace is a false success signal, and a client
+  cannot tell which of its two concurrent edits survived.
+- **Impact.** Silent, non-recoverable loss of a collaborator's or of the same client's just-accepted
+  edit. `changedFields` history loses the entry too, so the loss leaves no audit trail. Confined to
+  the writers' own authorisation scope, so Moderate rather than Severe. The overwrite/locking
+  semantics are still listed as an **open decision** in `threat-model.md` ("Locking implementation
+  and overwrite/conflict semantics"), which is why the design asks for this to be *measured*; the
+  measurement now exists and the decision can be made against it.
+- **Suggested fix.** Hold the advisory lock across the read-modify-write, or make the write
+  conditional on the version the client read and return `409` when it has moved. A regression test
+  belongs beside `tests/security_tests.rs::data_integrity_tests::test_concurrent_writes_do_not_corrupt`,
+  which checks that the *document stays valid* and does not check that *every acknowledged write
+  landed* — that gap is why this finding was not caught by the baseline. The audit recommends the
+  test and does not write it.
+- **CWE:** CWE-362 (Concurrent Execution Using Shared Resource with Improper Synchronization);
+  CWE-367 (TOCTOU) is the related read-modify-write pattern.
+- **Duplicates / prerequisites:** shares its probe with S2-7 (pass entry 13 records what did *not*
+  break: no corruption, no partial document). Not a duplicate of F-177-1/F-177-2. Requires two
+  concurrent clients; in a default deployment that means a valid account with write access.
+
+### F-177-4: An identifier longer than the filesystem's name limit is accepted and then fails as `500 storage_error`
+
+- **Severity:** **Low** — Moderate × Limited. Triggering it needs an account (in the shipped
+  configuration, authentication is on), so not Trivial; the effect is confined to the caller's own
+  request, so Limited.
+- **In scope:** trust boundary 3 (resource ID → filesystem); invariant 3 (client-visible errors use
+  stable codes and safe messages) — the code is stable and the message is safe, but a bad *input*
+  produces a server-error class, which is what invariant 3 exists to prevent.
+- **Where:** `validate_document_id` / `validate_component` (`src/storage/layout.rs:236`, `:367`) —
+  neither bounds the length — with the resulting `ENAMETOOLONG` surfacing through the storage layer
+  as `DomainError::Storage`.
+- **Affected revision:** `c5e99431389854368ab3a8e07003622f34dfdd21` (`tucano-test-audit-177:c5e9943`).
+- **Reproduction.** Create any project, then post a case whose `testCaseId` is `N` bytes of `B`:
+  `for n in 254 255 256 300; do id=$(printf 'B%.0s' $(seq 1 $n)); curl -s -o /dev/null -w '%{http_code}\n'
+  -X POST http://127.0.0.1:3320/projects/S24fresh.json/test_cases -H 'content-type: application/json'
+  --data-binary "{\"testCaseId\":\"$id\",\"title\":\"t\",\"expectedResult\":\"r\"}"; done`
+- **Observed.** `254` → **201**, `255` → **201**, `256` → **500**
+  `{"code":"storage_error","message":"Storage operation failed"}`, `300` → **500**. The boundary is
+  exactly the filesystem's `NAME_MAX`, so the identifier is passed to the filesystem unvalidated and
+  the host limit becomes the API's limit. The same shape holds for a suite **name** of 4096 bytes
+  (**500**). No partial directory was left behind (nothing longer than 255 bytes exists on the
+  volume), the project still accepted a normal write (`AFTER-500` → `201`), and no lock was left
+  held — so this is an error-class defect, not a corruption one.
+- **Expected.** A refusal in the 4xx class with an `invalid_request`-style code, before the name
+  reaches the filesystem, so that the same request behaves identically on every volume. `255` is also
+  a *successful* identifier, which means the limit is host-dependent: a deployment on a filesystem
+  with a different `NAME_MAX` would accept a different set of identifiers.
+- **Impact.** Availability/error-class only, confined to the caller's own request: an authenticated
+  client can produce `500`s at will, which pollutes monitoring and, more importantly, makes the
+  boundary between "your input is wrong" and "the service is broken" invisible — the same
+  undifferentiated message the corruption variants produce (O-177-5).
+- **Suggested fix.** Bound the identifier length in `validate_document_id` /
+  `validate_component` at the point where the other reserved-name rules live, and refuse with the
+  existing `invalid_request` code. The audit recommends the change and does not make it.
+- **CWE:** CWE-20 (Improper Input Validation); CWE-1287 is the related "improper validation of
+  specified type of input" framing.
+- **Duplicates / prerequisites:** not a duplicate of F-177-2 (content shape vs. identifier length) or
+  of F-177-1 (file mode). This is the 4 KiB row of the pending-triage table below, now scored and
+  promoted to a finding; the reproduction above supersedes that table's entry.
+
 ### Recorded observations (not findings)
 
 **O-177-1 — A stray `.tucano-<suffix>.tmp` file is inert and unaddressable.** The atomic-write
@@ -450,6 +547,23 @@ mode is irrelevant to that write. The probe was re-run against the case folder a
 expected refusal (§5, pass entries 10–11). The incident is recorded because it is the reason the report
 names the write target explicitly in each lock probe.
 
+**O-177-8 — There is no `/attachments/<filename>` route; an attachment is reached through its case.**
+`GET /attachments/<stored-filename>` returns **404** with an empty body, while the same filename
+appears in `GET /test_cases/<id>` under `attachments[]` and can be deleted through the case
+(`DELETE /test_cases/<id>/attachments/<filename>` → `200`). Recorded because S2-10 asks about
+attachment publication and a reader will look for a direct download route; the 404 also shows the
+router-level fallback produces an empty body rather than the JSON error shape used everywhere else
+(only `/no-such-route-213` and `GET /attachments/..%2F..%2Fetc%2Fpasswd` behave this way).
+
+**O-177-9 — A run or configuration may be named after a reserved collection because it nests inside
+it.** `POST /projects/S24fresh.json/test_runs {"name":"test_runs"}` → **201**, stored at
+`projects/S24fresh/test_runs/test_runs.json`, and `POST .../configurations {"name":"test_runs"}` →
+**201** at `projects/S24fresh/configurations/test_runs.json`. The reserved-child rule that refuses
+`test_runs` as a *suite* name (and as a case id) is therefore about the project's own child
+directories only; a run or configuration identifier is one level deeper and cannot collide. Recorded
+so the asymmetry — refused at one level, accepted at the next — is not later mistaken for an
+inconsistency.
+
 **Pending triage — measured, not yet scored.** The following results were produced by the S2-4
 identifier probes and are **candidates** whose severity has not been scored. They are recorded so the
 measurement is not lost; they are not findings until scored and written in the §"Required finding
@@ -465,17 +579,19 @@ shape" form:
 | case id `a%2Fb` | **201** — stored literally, no traversal |
 | case id `""` | **400** `Required fields are missing` |
 | case id `"   "` (whitespace only) | **201** — accepted, producing a whitespace-named directory |
-| case id 4096 bytes long | **500** `storage_error` `"Storage operation failed"` — an uncontrolled failure class where the identifier-length check should have refused with a 4xx |
+| case id 4096 bytes long | **500** `storage_error` `"Storage operation failed"` — **scored and promoted to `F-177-4`**; the boundary is `NAME_MAX` (`255` → 201, `256` → 500) |
 | case id `cafe\u0301` (combining accent) | **201** — accepted as its own distinct identifier |
 | duplicate case id `TC-LOGIN-1` | **409** `conflict` |
 | project names `test_runs`, `milestones`, `configurations`, `smoke`, `audit probe` | **201** — project-level names are not subject to the reserved-child rule, as expected |
-| suite created with body `{"suiteId":"test_runs","name":"t"}` | **201** with `{"id":"t.json"}` — the suite id is derived from `name`, so this probe did **not** test a reserved suite name and must be re-run against the correct field |
+| suite created with body `{"suiteId":"test_runs","name":"t"}` (the invalid probe) | **201** with `{"id":"t.json"}` — the suite id is derived from `name`, so that probe did **not** test a reserved suite name |
+| suite name `test_runs`, `milestones`, `configurations` in a **freshly created** project, re-run against `name` | **409** `conflict` — refused by validation, not by a pre-existing directory; the control `Smoke` → **201** and a repeat `Smoke` → **409** `conflict` |
+| run and configuration names `test_runs` in the same fresh project | **201** each — recorded as O-177-9 (one level deeper, no collision) |
 
-The 4 KiB → 500 result is the most promising of these (an identifier that should be refused produces a
-server error class instead); it needs a severity score and, if it holds, a finding in the required
-shape with its own reproduction. The accepted whitespace-only and dotfile identifiers need a decision
-against the design's §2.7 reasoning — dotfiles in particular, since `.tucano.lock` and
-`.tucano-*.tmp` are names the storage layer itself uses.
+Two rows are now closed by this checkpoint: the 4 KiB row became **`F-177-4`**, and the invalid
+suite probe was re-run against the correct field and confirms the reserved-child rule for suites. The
+accepted whitespace-only and dotfile identifiers still need a decision against the design's §2.7
+reasoning — dotfiles in particular, since `.tucano.lock` and `.tucano-*.tmp` are names the storage
+layer itself uses.
 
 ## 5. Pass entries
 
@@ -526,6 +642,25 @@ Controls tested **and not broken** in this checkpoint:
     attachment POST returned **500**; after restoring `0755` the same POST returned **201** with a
     stored `filename`. Both failure paths therefore unlock. (Invariant 9; S2-10's lock half only —
     torn reads and orphans are still owed.)
+12. **Nothing outside `/data` and `/tmp` is read or written.** A full mutating workload was run —
+    project, suite, case create; case update and duplicate; history read; run and configuration
+    create; attachment upload and delete; a case delete and a project delete; plus a 404 and a 400 —
+    on a container whose start time was identical for both measurements (`04:59:10Z`, unbroken
+    uptime), and measured before and after: a `find / -xdev` + `stat` digest of everything outside
+    `/data` and `/tmp` is **byte-identical**
+    (`f283060083e00446f2e6ffd42a3e1fb511cb79cd867e70e9fb91d67f8b7dc156`), and `docker diff` lists
+    **zero** changes (empty before and after; the empty-set sha256 is `e3b0c442…`). The image layer
+    is mounted read-only (`overlay … ro`) and the workload's footprint is confined to the two mounts.
+    Caveat recorded: the digest covers what uid `10001` can read — `find` could not descend into
+    `/etc/ssl/private`, `/var/cache/apt/archives/partial`, `/var/cache/ldconfig`, or `/root` — which
+    is why `docker diff`, taken host-side with full privileges, is included as the complete check.
+    (Invariant 1.)
+13. **Concurrent writers never corrupt the document or leave debris.** After the 32-writer storm of
+    `F-177-3` the stored document is complete, parseable JSON served with `200`; the atomic
+    temp-and-rename left **no** `.tucano-*` file anywhere under `/data` (the only such name in the
+    tree is the S2-4 fixture *directory*); and a collision is refused rather than merged (`409`).
+    What did **not** hold is the durability of every acknowledged write — that is `F-177-3`, and this
+    entry is deliberately limited to what passed. (Invariant 2's atomicity half; boundary 4.)
 
 Outside the numbered entries, S2-14 found the same shape on the auth tree: `/auth`, `/auth//`,
 `/data/auth`, `/auth/projects`, and `/projects/../auth` all return **404**, and `/auth/me` returns
@@ -534,17 +669,19 @@ That is recorded here rather than as an entry because it is a `partial` sub-task
 arm (with an auth store actually created) has not been probed. (Boundary 6/7.)
 
 Not yet credited in this checkpoint (and deliberately not listed as passes): atomicity under `SIGKILL`
-(S2-5), concurrent writers (S2-7, S2-8), attachment and revision publication (S2-10), the overwrite
-table (S2-11), the full error-leak table (S2-12), the read/write confinement to the root (S2-13), and
-the configuration-file boundary (S2-15). The
+(S2-5), two replicas on one data directory (S2-8), attachment and revision publication (S2-10), the
+overwrite table (S2-11), the full error-leak table (S2-12), and the configuration-file boundary
+(S2-15). The
 repository's own tests — `src/storage/layout.rs::a_symlink_that_escapes_the_root_is_rejected`,
 `::a_symlinked_collection_directory_that_escapes_the_root_is_rejected`,
 `::a_symlinked_project_folder_that_escapes_the_root_is_rejected`,
 `tests/security_tests.rs::symlink_tests::test_rejects_symlink_escape`,
 `tests/security_tests.rs::data_integrity_tests::test_concurrent_writes_do_not_corrupt` — are baselines per
 `audit-scope.md`, not findings, and this audit has not yet re-run them. The three symlink baselines
-correspond to the fixtures measured in entries 5–6 above; the concurrency baseline is named so the
-next checkpoint's S2-7 either credits it with a fresh run or records the gap.
+correspond to the fixtures measured in entries 5–6 above. The concurrency baseline is still owed a
+fresh run: S2-7's evidence is the API-level measurement recorded in `F-177-3` and pass entry 13, and
+`F-177-3` names that baseline — which asserts only that the document stays valid — as the place a
+durability regression test belongs.
 
 ## 6. Calibration confirmed
 
@@ -568,23 +705,22 @@ ownership workaround was needed, as it was for S3), and the operator-instance ch
 The following sub-tasks of [audit-design-176-178.md](audit-design-176-178.md) §"#177" §3 have not run
 to completion. Each names what it is for, so a reader can see the shape of what is missing rather
 than only its absence. Rows marked **partial** have measured results in §4/§5; what they still owe is
-in the second column. S2-3 and S2-9 have run and are credited in pass entries 5–6 and 10–11; those
-rows are kept here only to name what the run did **not** cover.
+in the second column. S2-3, S2-4, S2-7 and S2-9 have run; their rows are kept only to name what the
+run did **not** cover (S2-13 has run in full and its row is gone).
 
 | Sub-task | What is missing |
 | --- | --- |
 | **S2-1 (remainder)** | The closed mutating-call-site table required by report §3 (see §3.3). |
 | **S2-3 (partial)** | The six fixtures were planted and refused (pass entries 5–6, O-177-4), but a **symlinked attachment** was not planted, and the repository's own symlink baselines (`src/storage/layout.rs::a_symlink_that_escapes_the_root_is_rejected`, `::a_symlinked_collection_directory_that_escapes_the_root_is_rejected`, `::a_symlinked_project_folder_that_escapes_the_root_is_rejected`, `tests/security_tests.rs::symlink_tests::test_rejects_symlink_escape`) were not re-run. |
-| **S2-4 (remainder)** | The reserved-suite-name probe re-run against the correct body field (`name`), and the scoring of the pending-triage table in §4. |
+| **S2-4 (partial)** | The reserved-suite-name probe was re-run against the correct body field: in a freshly created project `name: test_runs` → **409** `conflict` (refused by validation, not by a pre-existing directory), control `Smoke` → **201** and a repeat → **409**; the 4 KiB row is scored and promoted to `F-177-4` (the boundary is `NAME_MAX`: 255 → 201, 256 → 500). What remains is the decision on the two unrefused degenerate identifiers — whitespace-only and the dotfile names (`.tucano.lock`, `.tucano-<suffix>.tmp`, accepted as case ids → 201). |
 | **S2-5** | Atomicity: ten `SIGKILL`s of the container process mid-write, then a JSON validation pass over every stored document and an inspection of leftover `.tucano-*.tmp` files. No power-loss durability is claimed either way; a missing parent-directory `fsync` is an observation by pre-commitment, never a finding. |
 | **S2-6 (partial)** | Truncation, invalid UTF-8, and a 100 MiB replacement are measured (pass entries 7–9). The wrong-shape JSON case is measured **and is a finding** instead of a pass (`F-177-2`). No further variants are owed, but `F-177-2` needs the calibration pass in §6. |
-| **S2-7** | 32 concurrent writers to one document inside one replica, and a fresh run of `tests/security_tests.rs::data_integrity_tests::test_concurrent_writes_do_not_corrupt`. |
+| **S2-7 (partial)** | Measured: 32 concurrent PUTs of one document all returned **200** but only 16 persisted (`version: 17`), against a sequential control of 20 × 200 → 20 persisted (`version: 21`), and a 2-writer × 10-round reproduction where all 20 acknowledged writes yielded one new version per round. Written up as `F-177-3`, with `tests/security_tests.rs::data_integrity_tests::test_concurrent_writes_do_not_corrupt` still owed a fresh run — it asserts only that the document stays valid, which the measurement confirms. |
 | **S2-8** | Two replicas against one data directory, with the filesystem type of the throwaway volume recorded — note that this checkpoint's volume is `tmpfs`, so this sub-task's result does **not** transfer to a real volume and the arm must be re-provisioned on a disk-backed directory before its result may be written up. |
 | **S2-9 (partial)** | Lock release is measured for the **document** and **attachment** failure paths (pass entries 10–11). The revision path's failure-then-success pair has not been run, and no lock was observed *held* at any point (the probes measure release, not exclusion). |
 | **S2-10** | Attachment publication in place (torn read), orphan handling, and revision immutability. Only the attachment lock half has run. |
 | **S2-11** | The overwrite-contract table for every mutating operation, including the two imports whose conflict behaviour the design says is measured rather than assumed. |
-| **S2-12 (partial)** | Seven error samples are recorded in §4's pending-triage and pass entries 7–11 (`storage_error` for corruption, traversal `invalid_request` 400, conflict 409, not-found 404, the empty-body 404 fallback, unauthorized 401). The DoD item — the full `DomainError`-by-layer table — is not written. |
-| **S2-13** | The root-is-the-only-area-read-or-written probe: a filesystem hash of the container outside `/data` and `/tmp` before and after a full workload, plus `docker diff` on a container with unbroken uptime (O-177-6). |
+| **S2-12 (partial)** | The error samples recorded so far are in §4's pending-triage and pass entries 7–11 (`storage_error` for corruption, the wrong-shape-JSON `200`, traversal `invalid_request` 400, conflict 409, not-found 404, the empty-body 404 fallback, unauthorized 401, and the length-overflow `500 storage_error` of `F-177-4`). The DoD item — the full `DomainError`-by-layer table — is not written, and `O-177-5` records that the storage failures collapse into one undifferentiated `storage_error`. |
 | **S2-14 (partial)** | The auth surface is unreachable anonymously (§5, unnumbered note): `/auth`, `/auth//`, `/data/auth`, `/auth/projects`, `/projects/../auth` → **404**, `/auth/me` → **401**. What is owed is the **authenticated** arm, i.e. creating an auth store and confirming no project route can then reach it. |
 | **S2-15** | The storage side of the configuration-file boundary, including the check of whether `#189`'s AEAD envelope has landed at the audited revision (which decides whether the *key* boundary is exercised or recorded as documented-pending). |
 
