@@ -22,11 +22,13 @@ boundary."* It carries findings only; nothing here is fixed. Remediation belongs
   calibration for the two worked examples and for the first four pairs; the **count** stays provisional
   because a sub-task still to run can add a finding, and §6's list of what it has re-read is updated
   below to six.
-- **Pass entries so far:** seventeen, in the [Pass entries](#5-pass-entries) section.
-- **Executed:** S2-1, S2-2, S2-3 (partial), S2-4, S2-6 (partial), S2-7, S2-9 (partial), S2-13, S2-14
+- **Pass entries so far:** nineteen, in the [Pass entries](#5-pass-entries) section.
+- **Executed:** S2-1, S2-2, S2-3, S2-4, S2-6 (partial), S2-7, S2-9 (partial), S2-13, S2-14
   (partial), **S2-15 (complete — both halves: the `#189` question is answered and recorded in O-177-11,
   and the file-boundary probes have run against the image, producing F-177-5, F-177-6, O-177-12 and pass
-  entries 15–17)**. **Not executed:** S2-5, S2-8, S2-10, S2-11, S2-12 (partial).
+  entries 15–17)**. S2-3 is complete rather than partial as of this checkpoint: its owed symlinked
+  *attachment* fixtures were planted and refused at the API, producing pass entries 18–19 and O-177-13.
+  **Not executed:** S2-5, S2-8, S2-10, S2-11, S2-12 (partial).
 - **Throwaway stack:** re-provisioned for the S2-15 container arm with every build step `CACHED` from
   the pinned revision, and **retained** at `tucano-test-audit-177:c5e9943` for the next checkpoint; the
   earlier tear-down and the re-provisioning are both recorded in [§7](#7-tear-down-step-7). A later
@@ -878,6 +880,19 @@ boundary split O-177-11 records for the `#189` question. It is kept because this
 produced it, and because #178 should test these variants with a sentinel rather than with a path.
 (Boundaries 6/7, 8.)
 
+**O-177-13 — The confinement refusal reaches the caller as a `500 storage_error`, and the status it does
+not use still answers a question about the host.** The attachment probes of pass entries 18–19 produced
+two refusals with different shapes for one and the same check. A name that is a symlink to an *existing*
+path outside the root is refused as **500** `storage_error`; a symlink whose outside target is *absent*
+is refused as **404** `not_found` — the same body as a name that has never existed. The `500` is the
+layer's mapping of the `PermissionDenied` that `ensure_within` returns: it names no path and no setting,
+so it keeps invariant 6, but it reports a condition no well-formed request can cause as a server fault.
+The `404`/`500` split is, for a caller who can already plant a symlink inside the storage root, a
+one-bit "does this outside path exist" oracle; that precondition is write access to the storage tree,
+which is the capability boundary 3 exists to contain rather than to be probed from, so this is **recorded
+and not scored** — and recorded chiefly so S2-12's `DomainError`-by-layer table does not rediscover it.
+(Boundary 3; boundary 8.)
+
 **Pending triage — measured, and now decided.** The following results were produced by the S2-4
 identifier probes. They are recorded so the measurement is not lost; every row is now either a scored
 **finding**, a **pass entry**, or a recorded **observation**, and no row is left unscored:
@@ -1008,6 +1023,27 @@ Controls tested **and not broken** in this checkpoint:
     `touch`/append fails `Permission denied` (rc 1), and isolated with `--user 0:0 --entrypoint sh` the
     same write fails `Read-only file system` (rc 1) with the host hash still unchanged. (Invariant 9;
     boundary 6/7 — the storage side of the configuration-file boundary.)
+18. **A symlinked *attachment file* inside a real case folder is refused in every direction, and an
+    upload of the same name is de-collided rather than followed.** With `escape.txt` planted in
+    `/data/projects/S23 symlink fixture/C1/` as a symlink to `/tmp/outside-canary.txt` — the container's
+    own tmpfs, so a write-through is visible inside the container and harmless on the host — `GET
+    /test_cases/C1/attachments/escape.txt` returns **500** `storage_error` and `DELETE` of the same path
+    also returns **500** `storage_error` (102-byte bodies, `{"code":"storage_error","message":"Storage
+    operation failed"}`). `POST /test_cases/C1/attachments` carrying that filename returns **201** and
+    stores the bytes as `1789536837251789433-escape.txt`: the collision is resolved by suffixing a new
+    name rather than by opening the link. Nothing crossed the boundary — the outside file still reads
+    `ORIGINAL`, `escape.txt` is still a symlink, and the case folder gained only the suffixed file. A
+    *dangling* outside-root symlink gives the same answer as a name that was never there: `GET
+    …/dangling.txt` → **404** `{"code":"not_found","message":"File not found"}`, identical to the control
+    body apart from `requestId`, so the refusal does not report whether the target exists. (Boundary 3;
+    invariant 1.)
+19. **A symlinked *case folder* is unreachable rather than followed.** Replacing the case folder itself
+    (`C1` → symlink to `/tmp`) makes the case unaddressable: `GET`, `DELETE` and `POST` on
+    `/test_cases/C1/attachments/…` all return **404** `{"code":"not_found","message":"Test case not
+    found"}`, even when the linked directory holds a valid `test-case.json` for that id and an
+    `escapee.txt` reading `SENTINEL-ESCAPED` — the response body carries no trace of it
+    (`grep -c SENTINEL` = 0). The container's `/tmp` was unchanged afterwards: no upload landed in it,
+    and the outside file still read `ORIGINAL`. (Boundary 3; invariant 1.)
 
 Outside the numbered entries, S2-14 found the same shape on the auth tree: `/auth`, `/auth//`,
 `/data/auth`, `/auth/projects`, and `/projects/../auth` all return **404**, and `/auth/me` returns
@@ -1060,7 +1096,8 @@ overwrite table (S2-11), and the full error-leak table (S2-12). The configuratio
 is open, so the key boundary is documented-pending by the design's own pre-commitment, not unprobed),
 the *file* half by pass entries 15–17 after the container arm ran. The three symlink baselines
 correspond to the fixtures measured in entries 5–6 above; the symlinked-*attachment* fixture S2-3 also
-names has not been planted, so S2-3 stays partial. `F-177-3` names
+names has since been planted and refused at the API — the attachment file, the dangling variant of it
+and the case folder itself (pass entries 18–19, O-177-13) — so S2-3 is no longer partial. `F-177-3` names
 `test_concurrent_writes_do_not_corrupt` — now re-run green — as the place a durability regression test
 belongs, because the baseline as written cannot fail on an acknowledged-but-lost write.
 
@@ -1151,14 +1188,14 @@ than by editing that table, which keeps the record of what the tear-down did.
 The following sub-tasks of [audit-design-176-178.md](audit-design-176-178.md) §"#177" §3 have not run
 to completion. Each names what it is for, so a reader can see the shape of what is missing rather
 than only its absence. Rows marked **partial** have measured results in §4/§5; what they still owe is
-in the second column. S2-3, S2-6, S2-9 and S2-14 have run and keep a row only to name what their run
-did **not** cover; S2-1, S2-4, S2-7 and S2-13 have now run in full, so their rows are gone, and S2-15
-has now run both halves — the `#189` question in O-177-11 and the file-boundary probes in pass entries
-15–17 — so its row is gone as well (its two findings and one observation are in §4).
+in the second column. S2-6, S2-9 and S2-14 have run and keep a row only to name what their run
+did **not** cover; S2-1, S2-3, S2-4, S2-7 and S2-13 have now run in full, so their rows are gone, and
+S2-15 has now run both halves — the `#189` question in O-177-11 and the file-boundary probes in pass
+entries 15–17 — so its row is gone as well (its two findings and one observation are in §4). S2-3's row
+is gone for the same reason: the attachment fixtures it owed are pass entries 18–19.
 
 | Sub-task | What is missing |
 | --- | --- |
-| **S2-3 (partial)** | The six fixtures were planted and refused (pass entries 5–6, O-177-4), and the repository's own symlink baselines (`src/storage/layout.rs::a_symlink_that_escapes_the_root_is_rejected`, `::a_symlinked_collection_directory_that_escapes_the_root_is_rejected`, `::a_symlinked_project_folder_that_escapes_the_root_is_rejected`, `tests/security_tests.rs::symlink_tests::test_rejects_symlink_escape`) have now been **re-run green** (§5, "Repository baselines, re-run"). What is still missing is the **symlinked attachment** fixture: a symlinked *attachment file* inside a real case's attachments directory, pointing outside the root. |
 | **S2-5** | Atomicity: ten `SIGKILL`s of the container process mid-write, then a JSON validation pass over every stored document and an inspection of leftover `.tucano-*.tmp` files. No power-loss durability is claimed either way; a missing parent-directory `fsync` is an observation by pre-commitment, never a finding. |
 | **S2-6 (partial)** | Truncation, invalid UTF-8, and a 100 MiB replacement are measured (pass entries 7–9). The wrong-shape JSON case is measured **and is a finding** instead of a pass (`F-177-2`). No further variants are owed, and the calibration pass §6 owed `F-177-2` has now run; the row stays only until §6 is re-confirmed at the closing checkpoint. |
 | **S2-8** | Two replicas against one data directory, with the filesystem type of the throwaway volume recorded — note that this checkpoint's volume is `tmpfs`, so this sub-task's result does **not** transfer to a real volume and the arm must be re-provisioned on a disk-backed directory before its result may be written up. |
