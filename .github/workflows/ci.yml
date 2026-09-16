@@ -110,31 +110,35 @@ jobs:
           set -euo pipefail
           wiki_url="https://x-access-token:${WIKI_TOKEN}@github.com/${GITHUB_REPOSITORY}.wiki.git"
           work="$RUNNER_TEMP/wiki-repo"
-          # GitHub creates the wiki repository when its first page is pushed,
-          # so it may not exist yet. Three states are possible:
+          # Read access is probed with `git ls-remote`, which never creates a
+          # repository as a side effect. A clone that fails does not tell an
+          # unauthenticated caller apart from a wiki that has not been created
+          # yet — both answer 403/Repository not found (issue #254) — so the
+          # two cases are separated here, before anything is pushed:
           #
-          #   1. Wiki repo exists with commits — shallow clone succeeds.
-          #   2. Wiki repo exists but is empty — shallow clone succeeds with
-          #      an unborn HEAD; the commit below seeds it.
-          #   3. Wiki repo was never created — clone fails with "Repository
-          #      not found" (exit 128). In this case we initialise a fresh
-          #      repo locally, add the first pages, and push — which creates
-          #      the remote wiki repo on GitHub's side.
+          #   1. The remote answers, so the token was accepted for read. The
+          #      wiki may be empty (unborn HEAD); the commit below seeds it.
+          #   2. The remote refuses, so the token is missing, expired, or holds
+          #      no access to this repository — report that and stop, instead
+          #      of failing on a push whose access error would be hidden behind
+          #      the misleading "initialising from scratch" path.
           #
-          # A clone that fails for any *other* reason (bad token, network
-          # error) also falls through to the init path, which will fail at
-          # the push step with an auth error — distinguishing a genuine
-          # access problem from a first-run.
-          if git clone --depth 1 "$wiki_url" "$work" 2>/dev/null; then
+          # A wiki that was never created cannot be seeded from CI: GitHub
+          # answers an unauthenticated caller, so giving the token read access
+          # is a prerequisite for the first publish, not something the job can
+          # work around.
+          if git ls-remote "$wiki_url" >/dev/null 2>&1; then
+            git clone --depth 1 "$wiki_url" "$work"
             # Remove the predecessors of every mirrored page, so a page
             # dropped from docs/wiki/ is dropped here too and a hand edit
             # in the browser is overwritten rather than merged.
             find "$work" -maxdepth 1 -name '*.md' -delete
           else
-            echo "Wiki repository does not exist yet; initialising from scratch."
-            mkdir -p "$work"
-            git -C "$work" init -q
-            git -C "$work" remote add origin "$wiki_url"
+            echo "::error::WIKI_TOKEN was refused by $GITHUB_REPOSITORY.wiki.git (403 or not found)." >&2
+            echo "The wiki repository is not readable with this token, so the pages cannot be published." >&2
+            echo "Check that the token can read the wiki of this repository and has Contents: read and write." >&2
+            echo "A wiki that has never been created is not readable either; save any first page in the browser to create it." >&2
+            exit 1
           fi
           cp "$RUNNER_TEMP/wiki"/*.md "$work"/
           git -C "$work" config user.name  "github-actions[bot]"
