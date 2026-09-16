@@ -3,6 +3,7 @@ use serde_json::{Map, Value};
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+use std::time::UNIX_EPOCH;
 
 use super::layout::{
     Parent, Placement, RESERVED_PROJECT_CHILDREN, attachment_path, case_dir, case_marker,
@@ -11,7 +12,7 @@ use super::layout::{
     set_private_permissions, step_attachment_path, suite_dir, suite_marker, unique_suffix,
     validate_document_id,
 };
-use super::{Repository, Resource};
+use super::{Repository, Resource, StorageProbe};
 
 /// Filesystem-backed [`Repository`]: a folder tree for projects, suites, and
 /// cases, and one JSON document per run, milestone and configuration inside the
@@ -740,6 +741,95 @@ impl Repository for FileRepository {
         lock.unlock()?;
         result
     }
+
+    fn probe_readiness(&self) -> StorageProbe {
+        if !self.root.is_dir() {
+            return StorageProbe::UNREACHABLE;
+        }
+        // The newest write is read before the writability check writes its
+        // scratch file, so a store that is only ever polled never looks busy.
+        let last_write_unix = newest_mtime(&self.root);
+        let (lockable, lock_held) = probe_lock(&self.root);
+        StorageProbe {
+            exists: true,
+            writable: probe_writable(&self.root),
+            lockable,
+            lock_held,
+            last_write_unix,
+        }
+    }
+}
+
+/// Whether a scratch file can be created, written and removed in `root`, which
+/// is the whole of what persisting a document needs.
+///
+/// The scratch file follows the atomic-write temporary convention, so a probe
+/// interrupted part-way can never be mistaken for a stored document.
+fn probe_writable(root: &Path) -> bool {
+    let scratch = root.join(format!(".tucano-{}.tmp", unique_suffix()));
+    match OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&scratch)
+    {
+        Ok(mut file) => {
+            let wrote = file.write_all(b"probe").is_ok();
+            drop(file);
+            let _ = fs::remove_file(&scratch);
+            wrote
+        }
+        Err(_) => false,
+    }
+}
+
+/// Whether the write lock is available, and whether someone else holds it.
+///
+/// A lock a peer holds right now is not a fault: the store is serialising
+/// writers exactly as designed, so it reports as available *and* held rather
+/// than as unavailable. Only a lock that cannot be taken for some other reason
+/// means the store is not lockable.
+fn probe_lock(root: &Path) -> (bool, bool) {
+    let Ok(lock) = OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(root.join(".tucano.lock"))
+    else {
+        return (false, false);
+    };
+    match lock.try_lock_exclusive() {
+        Ok(()) => (lock.unlock().is_ok(), false),
+        Err(error) if error.kind() == io::ErrorKind::WouldBlock => (true, true),
+        Err(_) => (false, false),
+    }
+}
+
+/// Newest modification time under the data root, one level deep.
+///
+/// Walking the whole tree would cost as much as the work a probe is meant to
+/// precede; the root and its immediate entries are enough to tell a live volume
+/// from a cold or detached one.
+fn newest_mtime(root: &Path) -> Option<u64> {
+    let mut newest = mtime_seconds(root);
+    for entry in fs::read_dir(root)
+        .into_iter()
+        .flatten()
+        .filter_map(Result::ok)
+    {
+        if let Some(seconds) = mtime_seconds(&entry.path()) {
+            newest = Some(newest.map_or(seconds, |current| current.max(seconds)));
+        }
+    }
+    newest
+}
+
+fn mtime_seconds(path: &Path) -> Option<u64> {
+    fs::metadata(path)
+        .and_then(|metadata| metadata.modified())
+        .ok()
+        .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
+        .map(|since| since.as_secs())
 }
 
 /// Reach the object of one structured step inside a stored case document.
@@ -2284,5 +2374,121 @@ mod tests {
             .mode()
             & 0o777;
         assert_eq!(mode, 0o666);
+    }
+
+    #[test]
+    fn a_fresh_root_is_ready_and_holds_no_lock() {
+        let (_directory, repository) = repository();
+
+        let probe = repository.probe_readiness();
+        assert!(probe.exists);
+        assert!(probe.writable);
+        assert!(probe.lockable);
+        assert!(!probe.lock_held);
+        assert!(probe.last_write_unix.is_some());
+        assert!(probe.ready());
+    }
+
+    #[test]
+    fn a_root_that_is_gone_is_not_ready() {
+        let (directory, repository) = repository();
+        fs::remove_dir_all(directory.path()).expect("remove root");
+
+        let probe = repository.probe_readiness();
+        assert_eq!(probe, StorageProbe::UNREACHABLE);
+        assert!(!probe.ready());
+    }
+
+    #[test]
+    fn a_lock_another_process_holds_is_busy_rather_than_broken() {
+        let (_directory, repository) = repository();
+        let held = repository.acquire_lock().expect("lock");
+
+        let probe = repository.probe_readiness();
+        assert!(probe.lockable, "a lock a peer holds is not a fault");
+        assert!(probe.lock_held);
+        assert!(probe.ready());
+
+        drop(held);
+        assert!(!repository.probe_readiness().lock_held);
+    }
+
+    #[test]
+    fn a_probe_removes_the_scratch_file_it_wrote() {
+        let (directory, repository) = repository();
+        repository.probe_readiness();
+
+        let mut names = fs::read_dir(directory.path())
+            .expect("root")
+            .filter_map(Result::ok)
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        names.sort();
+        assert_eq!(
+            names,
+            vec![".tucano.lock".to_owned(), "projects".to_owned()],
+            "the writability probe left something behind"
+        );
+    }
+
+    #[test]
+    fn a_probe_sees_writes_below_the_root_not_only_the_root() {
+        let (directory, repository) = repository();
+        let opened = mtime_seconds(directory.path()).expect("root mtime");
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+        create_project(&repository, "checkout.json");
+
+        let seen = repository
+            .probe_readiness()
+            .last_write_unix
+            .expect("a visible write");
+        assert!(
+            seen > opened,
+            "the probe reported the root alone: {seen} is not after {opened}"
+        );
+    }
+
+    #[test]
+    fn polling_a_probe_never_counts_as_a_write_itself() {
+        let (_directory, repository) = repository();
+        let first = repository.probe_readiness().last_write_unix;
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+        let second = repository.probe_readiness().last_write_unix;
+
+        assert_eq!(
+            first, second,
+            "the probe's own scratch file advanced the write clock"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_unwritable_root_is_not_ready() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let (directory, repository) = repository();
+        let root = directory.path();
+        fs::set_permissions(root, fs::Permissions::from_mode(0o555)).expect("make read-only");
+        let restore = || fs::set_permissions(root, fs::Permissions::from_mode(0o755));
+
+        // A privileged user writes through the mode bits, so there is nothing to
+        // observe and nothing to assert.
+        let privileged = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(root.join(".tucano-privilege-check"))
+            .is_ok();
+        if privileged {
+            let _ = fs::remove_file(root.join(".tucano-privilege-check"));
+            restore().expect("restore permissions");
+            return;
+        }
+
+        let probe = repository.probe_readiness();
+        assert!(probe.exists);
+        assert!(!probe.writable);
+        assert!(!probe.ready());
+
+        restore().expect("restore permissions");
     }
 }
