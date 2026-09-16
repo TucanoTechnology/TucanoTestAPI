@@ -23,6 +23,8 @@ boundary."* It carries findings only; nothing here is fixed. Remediation belongs
 - **Executed:** S2-1 (partial), S2-2, S2-3 (partial), S2-4 (partial), S2-6 (partial), S2-7
   (partial), S2-9 (partial), S2-13, S2-14 (partial). **Not executed:** S2-5, S2-8, S2-10, S2-11,
   S2-12 (partial), S2-15.
+- **Throwaway stack:** torn down, and the tear-down is recorded in [§7](#7-tear-down-step-7). A later
+  checkpoint must re-provision before the outstanding sub-tasks can run.
 
 ## 1. Revision pinned
 
@@ -692,13 +694,21 @@ while sub-tasks are outstanding.
 
 ## 7. Tear-down (step 7)
 
-**Recorded at the end of the window in a follow-up commit to this file.** At the time of writing this
-checkpoint the scratch project `audit-177` and `/tmp/audit-177` are still live, because the volume
-holds the seeded tree the *Not yet executed* sub-tasks will reuse. The tear-down entry will record:
-`docker compose -p audit-177 down -v`, removal of the container and of the
-`tucano-test-audit-177:c5e9943` image, removal of `/tmp/audit-177` (including whether the uid-10001
-ownership workaround was needed, as it was for S3), and the operator-instance check that
-`tucano-test-api-1` is still `Up` on `tucano-test-api:local` = `8f075af3c2e7`.
+Recorded 2026-09-16, at the end of the window that produced this checkpoint.
+
+| Step | Command | Result |
+| --- | --- | --- |
+| Stop and remove the stack and its volume | `docker compose -p audit-177 down -v` | Container `audit-177-api-1` stopped and removed; network `audit-177_default` removed |
+| Remove container-written files | `docker run --rm --entrypoint /bin/bash -v /tmp/audit-177/data:/w tucano-test-audit-177:c5e9943 -c 'cd /w && find . -mindepth 1 -maxdepth 1 -exec rm -rf {} +'` | Ran as `uid=10001(tucano)` — **the ownership workaround was needed**, exactly as for S3: the 142 entries the service wrote are owned on the host by `110000:100998` with `0755` directories, which the operator's own uid cannot unlink. The helper ran **before** the image was removed, so it could borrow the image's uid mapping |
+| Remove the scratch directory | `rm -rf /tmp/audit-177` | Gone, including the `outside-canary.json` planted outside the tree's document area and every captured output |
+| Remove the audit image | `docker rmi tucano-test-audit-177:c5e9943` | Untagged; `8db4b338b31c36d55fa168962c5d9522466a959c5bb86512652636c44e41a173` deleted |
+| Confirm nothing is left | `docker ps -a --filter name=audit-177`; `docker images \| grep audit-177` | No container, no image |
+| Confirm the operator's instance is untouched | `docker ps` | `tucano-test-api-1` still `Up 34 hours`, `tucano-test-gui-1` still `Up 34 hours`. **Note for the next reader:** `docker inspect` reports that container's `Config.Image` as `tucano-test-api:local` but its image id as `13f10c0e9208` (built 2026-09-09), while the tag `tucano-test-api:local` now resolves to `8f075af3c2e7` (built 2026-09-15) — the tag was rebuilt at some point without the running container being recreated. This audit did not build or re-tag that image and did not touch that container; the observation is recorded only so a later checkpoint does not read the mismatch as evidence of this window's work |
+
+The throwaway volume was `tmpfs` on the host's `/tmp`, which is why S2-8's result cannot be taken from
+this checkpoint's stack (see the *Not yet executed* row): the sub-task has to be re-provisioned on a
+disk-backed directory. The audit's own scratch state is gone; the evidence that survives is this file
+and the pushed commits.
 
 ## Not yet executed in this checkpoint
 
