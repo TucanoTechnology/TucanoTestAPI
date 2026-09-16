@@ -32,6 +32,35 @@ jobs:
       - name: Check the coverage matrix against the API contract
         run: node scripts/check-matrix.mjs
 
+  # The documentation set is published, so a page cannot go missing or a route
+  # list cannot go stale without failing the build. The three checks are the
+  # ones the wiki decision record states
+  # (docs/architecture/wiki-structure-and-publication.md, "What CI checks"):
+  # every relative link resolves and every page is listed in SUMMARY.md and the
+  # README table; the operation reference regenerated from openapi.json produces
+  # no diff; and the book builds. It reads files and starts nothing, so it is
+  # cheap enough to run on every pull request.
+  docs:
+    runs-on: [self-hosted, Linux, X64]
+    container:
+      image: rust:1.98.0-bookworm
+      # Same reasoning as the `checks` job: without the registry cache this
+      # would re-download every crate from static.crates.io, and a refused DNS
+      # lookup there fails the job (see issue #123).
+      volumes:
+        - tucanotestapi-cargo-registry:/usr/local/cargo/registry
+        - tucanotestapi-cargo-git:/usr/local/cargo/git
+    steps:
+      - uses: actions/checkout@v5
+      - name: Check documentation links and page listings
+        run: node scripts/check-docs-links.mjs
+      - name: Check the operation reference is regenerated
+        run: node scripts/generate-operations-reference.mjs --check
+      - name: Install mdBook
+        run: cargo install mdbook --locked
+      - name: Build the documentation site
+        run: mdbook build docs
+
   checks:
     runs-on: [self-hosted, Linux, X64]
     container:
