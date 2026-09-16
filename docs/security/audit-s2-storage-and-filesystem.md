@@ -10,17 +10,18 @@ boundary."* It carries findings only; nothing here is fixed. Remediation belongs
 [#180](https://github.com/TucanoTechnology/TucanoTestAPI/issues/180) raises.
 
 > **Status of this file: CHECKPOINT, not a finished audit.** The sub-tasks named in *Not yet
-> executed* below have not run. **Do not read this as the S2 report and do not merge it as one.**
+> executed* below have not all run. **Do not read this as the S2 report and do not merge it as one.**
 > It exists so that measured evidence survives the end of an off-peak window; the report is
 > complete only when every sub-task in [audit-design-176-178.md](audit-design-176-178.md) §"#177"
 > §3 has a result and §6 below is filled in.
 
 - **Affected revision (the pinned target):** `c5e99431389854368ab3a8e07003622f34dfdd21`
 - **Method:** [audit-scope.md § 6](audit-scope.md#6-how-the-audit-tasks-run), steps 1–7.
-- **Findings so far:** **one** Low (`F-177-1`). Severity calibration across the surface (§6) has not
-  been completed, so this count is provisional.
-- **Pass entries so far:** four, in the [Pass entries](#5-pass-entries) section.
-- **Executed:** S2-1 (partial), S2-2, S2-4. **Not executed:** S2-3, S2-5, S2-6…S2-15.
+- **Findings so far:** **two** Low (`F-177-1`, `F-177-2`). Severity calibration across the surface
+  (§6) has not been completed, so this count is provisional.
+- **Pass entries so far:** eleven, in the [Pass entries](#5-pass-entries) section.
+- **Executed:** S2-1 (partial), S2-2, S2-3, S2-4, S2-6, S2-9, S2-14 (partial). **Not executed:**
+  S2-5, S2-7, S2-8, S2-10, S2-11, S2-12 (partial), S2-13, S2-15.
 
 ## 1. Revision pinned
 
@@ -317,6 +318,80 @@ design asks for, and a path built outside `layout.rs` would not yet have been ca
 
 - **Duplicates / prerequisites:** none.
 
+### F-177-2: Validate the shape of a stored document before serving it
+
+- **Severity:** Low
+- **In scope:** S2 — storage and filesystem invariants; trust boundary 4 (*Service → stored JSON*).
+- **Where:** the document read path of the case service, `src/domain/service.rs`'s read of a stored
+  case document (the same read path the corruption probe exercises). The defect is in the read, not
+  in the write: the stored bytes are returned to the client without a shape check against the
+  document type the route declares in `openapi.json`.
+- **Affected revision:** `c5e99431389854368ab3a8e07003622f34dfdd21`
+- **Reproduction** — from a clean seeded deployment (the §2 scratch target, authentication off):
+
+  ```bash
+  # Replace a stored case document with valid JSON of the wrong shape.
+  docker run --rm --entrypoint sh -v /tmp/audit-177/data:/d tucano-test-audit-177:c5e9943 -c '
+    printf "[1,2,3]" > /d/projects/Checkout/TC-COPY-1/test-case.json
+    sha256sum /d/projects/Checkout/TC-COPY-1/test-case.json'
+
+  curl -s -w '\n%{http_code}\n' http://127.0.0.1:3320/test_cases/TC-COPY-1
+  ```
+
+- **Observed.** **HTTP 200** with the hostile payload as the response body, echoed verbatim:
+
+  ```
+  [1,2,3]
+  200
+  ```
+
+  The stored file's SHA-256 is unchanged by the read
+  (`a615eeaee21de5179de080de8c3052c8da901138406ba71c38c032845f7d54f4` before and after, size 7), so
+  the bytes are served as-is rather than reinterpreted. `openapi.json` declares this route's 200
+  schema as the case-document object, not an array. By contrast, the three *malformed* variants of
+  the same probe (`truncate`, invalid UTF-8, a 100 MiB blob) are each refused with
+  `500 storage_error` and leave the file byte-identical — those are pass entries (§5), and they show
+  the read path does detect *unparseable* documents. It is the *parseable but wrong-shaped* document
+  that is passed through unfiltered.
+
+- **Expected.** The read path should refuse a stored document that does not deserialize into the
+  document type the route declares — the design anticipated exactly this and pre-committed to the
+  expected outcome: *"A **safe storage error** (500 `storage_error` with a stable, non-disclosing
+  message) and **the original file is preserved**"* ([audit-design-176-178.md](audit-design-176-178.md),
+  S2-6). Preserving the bytes is observed; refusing the document is not. Trust boundary 4 treats the
+  stored JSON as data crossing a boundary, and the audit's acceptance criterion is that a violation
+  reachable in a deployed configuration is a finding whatever the code intends.
+
+- **Impact.** An actor with write access to the volume can dictate the body the API returns from any
+  case route, with a 200 status and no schema check, to every client of the installation — the GUI
+  included. The XML/JSON consumer that trusts the declared schema receives a type it did not expect
+  (an array where an object is declared). The effect is bounded by the same excluded precondition as
+  F-177-1 (write access to the volume), and it discloses nothing the actor did not already possess;
+  what it defeats is the API's own statement about the shape of what it returns, which is why it is
+  scored rather than recorded. With authentication **off** the modified body is served to any caller
+  of the unauthenticated API; with authentication **on** it is served to any authenticated client.
+
+- **Severity.** Impact axis: **Moderate** — tampered data served to a party other than the tamperer,
+  plus the defeat of one control (the response schema) that by itself grants nothing further.
+  Exploitability axis: **Difficult** — write access to the volume, a precondition `audit-scope.md` §3
+  excludes, and therefore already the reason the axis is not Trivial or Moderate.
+  *Difficult × Moderate = **Low***. No escalation applies: the defect is not reachable remotely in a
+  default configuration without the volume position.
+
+- **Suggested fix.** Confine the read to a shape check: deserialize the stored bytes into the
+  document type at the storage boundary and let a mismatch become the same safe `500 storage_error`
+  the malformed variants already produce, rather than returning the raw `serde_json::Value`. A
+  regression test belongs next to `tests/security_tests.rs::malformed_json_tests`, which covers the
+  unparseable case and not this one — the audit recommends it and does not write it.
+
+- **CWE:** CWE-502 is not the fit (no deserialization of untrusted types into code); CWE-1287
+  (Improper Validation of Specified Type of Input) and CWE-20 (Improper Input Validation) fit the
+  read-side shape gap.
+
+- **Duplicates / prerequisites:** shares its probe with S2-6 and its precondition with F-177-1; it is
+  not a duplicate of either — F-177-1 is about the mode bits of the file, this is about the content
+  the API is willing to serve from it.
+
 ### Recorded observations (not findings)
 
 **O-177-1 — A stray `.tucano-<suffix>.tmp` file is inert and unaddressable.** The atomic-write
@@ -339,6 +414,41 @@ change to the lock file would not propagate to an existing volume without a migr
 off.** `/data/auth` (0755) and `/data/auth/projects` (0755) exist after startup with no store document
 inside them. This is why F-177-1's auth-store call site is credited by inspection only, and it is the
 starting state an authenticated arm must differ from.
+
+**O-177-4 — A symlinked collection directory inside a project is refused, but as a `storage_error`
+rather than a controlled refusal.** Planting `test_runs -> /tmp` inside a project folder and posting a
+run to it yields `500 {"code":"storage_error","message":"Storage operation failed"}`. The control
+holds — nothing was written into `/tmp`, the symlink was left in place, and the container's `/tmp`
+listed empty afterwards — so this is not an escape and not a finding. It is recorded because the
+refusal surfaces as a server-error class, the same shape the 4 KiB identifier and the read-only
+directory probes produce (O-177-6), and because a client cannot distinguish "the volume is hostile"
+from "the service is broken". Same family as the pending-triage 4 KiB row.
+
+**O-177-5 — Every corrupted-document variant is refused with one undifferentiated `storage_error`.**
+Truncation, invalid UTF-8, and a 100 MiB replacement all produce
+`500 {"code":"storage_error","message":"Storage operation failed"}` — a stable, non-disclosing message
+with no path, no OS error, no stack trace, and no file content, which is what invariant 6 and
+boundary 8 require (pass entries 7–9). The observation is the granularity: three distinct causes share
+one message, so an operator cannot tell corruption from a permissions problem from an oversize
+document in the logs by the response alone. Recorded, not scored.
+
+**O-177-6 — The audited container restarted during the window, which bounds what `docker diff` can
+show.** The S2-4 probes ran against a container whose uptime reset partway through, so the writable
+layer was re-created from the image and `docker diff audit-177-api-1` reports **no changes at all** —
+consistent with "nothing outside the mounts is written", but only for the current incarnation, and it
+cannot distinguish "never wrote" from "wrote, then restarted". S2-13 therefore requires a controlled
+before/after filesystem hash and `docker diff` on a container with a known, unbroken uptime; the empty
+`docker diff` in this checkpoint is corroboration, not the probe. The read-only-directory probes
+(S2-9) show that the write paths that can fail do fail cleanly, which is the part of writable-layer
+behaviour this checkpoint *can* speak to.
+
+**O-177-7 — The S2-9 probe was corrected mid-run, and the first attempt is recorded because it is
+informative.** The first S2-9 attempt removed write permission from the *project* folder
+(`chmod 0555 /data/projects/Checkout`) and the write **succeeded** (HTTP 200). That is correct
+behaviour, not a defect: a case document is written into the case folder, and the project folder's own
+mode is irrelevant to that write. The probe was re-run against the case folder and produced the
+expected refusal (§5, pass entries 10–11). The incident is recorded because it is the reason the report
+names the write target explicitly in each lock probe.
 
 **Pending triage — measured, not yet scored.** The following results were produced by the S2-4
 identifier probes and are **candidates** whose severity has not been scored. They are recorded so the
@@ -383,19 +493,58 @@ Controls tested **and not broken** in this checkpoint:
    `src/storage/layout.rs:23`'s `RESERVED_PROJECT_CHILDREN` as an enforced control.
 4. **A duplicate identifier is a conflict, not an overwrite.** Creating `TC-LOGIN-1` twice returns
    **409** `conflict` and leaves the stored document unchanged.
+5. **Symlink fixtures planted inside the tree are refused, and nothing follows the link.** A case
+   folder replaced by a symlink to a file outside the tree is refused on both **GET** and **PUT**
+   (**404**, no body); a reserved collection directory replaced by `test_runs -> /tmp` is refused
+   with **500** `storage_error`, the symlink is left in place, and the container's `/tmp` was
+   verified **empty** afterwards. The second refusal is recorded for its error class in O-177-4;
+   the control itself holds — no write landed outside `/data`. (Trust boundary 3.)
+6. **A hardlink inside the tree is not written through.** With a second hardlink to a case document
+   planted in the tree, a write through the service replaced the **directory entry** (atomic temp +
+   rename) rather than following the link: the other link's inode (`120396`), its link count (`3`),
+   and its content (the hand-written canary, unchanged) all survived, and the attempt returned **500**
+   `storage_error` `"Stored JSON is invalid"`. A hardlink is therefore not a write-through path into
+   or out of the document store. (Trust boundary 3; the DoD's hardlink item.)
+7. **A truncated document is refused, byte-for-byte.** Replacing a stored document with 20 bytes of
+   valid-JSON prefix yields **500** `storage_error`; afterwards the file's length is still `20` and
+   its sha256 is still `cfc187ab0ba90ae84aadf438241756e837d73c78ac9e7dfd6fa9b3bdf7189dd1` — the
+   service neither repaired nor rewrote the corrupted bytes, and the response disclosed no path, OS
+   error, or stack. (Invariant 6; boundary 8.)
+8. **A document that is not valid UTF-8 is refused, byte-for-byte.** **500** `storage_error`, length
+   still `24`, sha256 still `190969eec63eea2cc4a9934ebbb705c3ad8e6ea4f6e5d535380eae3c0c1adc73`, and
+   the same non-disclosing body. (Invariant 6; boundary 8.)
+9. **An oversize document is refused, byte-for-byte.** A 100 MiB replacement (sha256
+   `cee41e98d0a6ad65cc0ec77a2ba50bf26d64dc9007f7f1c7d7df68b8b71291a6`, size `104857600`) is
+   refused with **500** `storage_error` and the bytes are left in place. No file content, path, or
+   limit value appears in the response. (Invariant 6; boundary 8.)
+10. **The document lock is released when the write fails.** With the case folder set to `0555` the
+    document write returned **500**; restoring `0755` and re-issuing the same request returned **200**
+    `{"message":"Resource updated"}`, i.e. no lock was left held by the failed attempt. No leftover
+    `.tucano-*` entry was found in the tree; the only such name present was the S2-4 fixture
+    *directory*. (Invariant 9's release half; see O-177-7 for the probe's correction.)
+11. **The attachment lock is released when the write fails.** With the case folder at `0555` the
+    attachment POST returned **500**; after restoring `0755` the same POST returned **201** with a
+    stored `filename`. Both failure paths therefore unlock. (Invariant 9; S2-10's lock half only —
+    torn reads and orphans are still owed.)
 
-Not yet credited in this checkpoint (and deliberately not listed as passes): symlink and hardlink
-escape fixtures (S2-3), atomicity under `SIGKILL` (S2-5), corrupted-document handling (S2-6),
-concurrent writers (S2-7, S2-8), lock release (S2-9), attachment and revision publication (S2-10),
-the overwrite table (S2-11), error-path disclosure (S2-12), the read/write confinement to the root
-(S2-13), the auth-tree unreachability (S2-14), and the configuration-file boundary (S2-15). The
+Outside the numbered entries, S2-14 found the same shape on the auth tree: `/auth`, `/auth//`,
+`/data/auth`, `/auth/projects`, and `/projects/../auth` all return **404**, and `/auth/me` returns
+**401** without a token — no route lists, reads, or writes the store under `TUCANO_DATA_DIR/auth/`.
+That is recorded here rather than as an entry because it is a `partial` sub-task: the authenticated
+arm (with an auth store actually created) has not been probed. (Boundary 6/7.)
+
+Not yet credited in this checkpoint (and deliberately not listed as passes): atomicity under `SIGKILL`
+(S2-5), concurrent writers (S2-7, S2-8), attachment and revision publication (S2-10), the overwrite
+table (S2-11), the full error-leak table (S2-12), the read/write confinement to the root (S2-13), and
+the configuration-file boundary (S2-15). The
 repository's own tests — `src/storage/layout.rs::a_symlink_that_escapes_the_root_is_rejected`,
 `::a_symlinked_collection_directory_that_escapes_the_root_is_rejected`,
 `::a_symlinked_project_folder_that_escapes_the_root_is_rejected`,
 `tests/security_tests.rs::symlink_tests::test_rejects_symlink_escape`,
 `tests/security_tests.rs::data_integrity_tests::test_concurrent_writes_do_not_corrupt` — are baselines per
-`audit-scope.md`, not findings, and this audit has not yet re-run them. They are named here so the
-next checkpoint's S2-3 and S2-7 either credit them with a fresh run or record the gap.
+`audit-scope.md`, not findings, and this audit has not yet re-run them. The three symlink baselines
+correspond to the fixtures measured in entries 5–6 above; the concurrency baseline is named so the
+next checkpoint's S2-7 either credits it with a fresh run or records the gap.
 
 ## 6. Calibration confirmed
 
@@ -417,24 +566,26 @@ ownership workaround was needed, as it was for S3), and the operator-instance ch
 ## Not yet executed in this checkpoint
 
 The following sub-tasks of [audit-design-176-178.md](audit-design-176-178.md) §"#177" §3 have not run
-at all. Each names what it is for, so a reader can see the shape of what is missing rather than only
-its absence.
+to completion. Each names what it is for, so a reader can see the shape of what is missing rather
+than only its absence. Rows marked **partial** have measured results in §4/§5; what they still owe is
+in the second column. S2-3 and S2-9 have run and are credited in pass entries 5–6 and 10–11; those
+rows are kept here only to name what the run did **not** cover.
 
 | Sub-task | What is missing |
 | --- | --- |
 | **S2-1 (remainder)** | The closed mutating-call-site table required by report §3 (see §3.3). |
-| **S2-3** | The six symlink and hardlink escape fixtures planted inside the throwaway tree: `a_symlink_that_escapes_the_root_is_rejected`, `a_symlinked_collection_directory_that_escapes_the_root_is_rejected`, `a_symlinked_project_folder_that_escapes_the_root_is_rejected`, `tests/security_tests.rs::symlink_tests::test_rejects_symlink_escape`, plus the hardlink fixture the DoD explicitly requires, and a symlinked *attachment* — each expected to be refused, with a bypass de-escalating one level per the design. |
+| **S2-3 (partial)** | The six fixtures were planted and refused (pass entries 5–6, O-177-4), but a **symlinked attachment** was not planted, and the repository's own symlink baselines (`src/storage/layout.rs::a_symlink_that_escapes_the_root_is_rejected`, `::a_symlinked_collection_directory_that_escapes_the_root_is_rejected`, `::a_symlinked_project_folder_that_escapes_the_root_is_rejected`, `tests/security_tests.rs::symlink_tests::test_rejects_symlink_escape`) were not re-run. |
 | **S2-4 (remainder)** | The reserved-suite-name probe re-run against the correct body field (`name`), and the scoring of the pending-triage table in §4. |
 | **S2-5** | Atomicity: ten `SIGKILL`s of the container process mid-write, then a JSON validation pass over every stored document and an inspection of leftover `.tucano-*.tmp` files. No power-loss durability is claimed either way; a missing parent-directory `fsync` is an observation by pre-commitment, never a finding. |
-| **S2-6** | Corrupted and hostile stored documents: truncated, invalid UTF-8, wrong-shape JSON, and a 100 MiB replacement — expecting a safe `500 storage_error` that preserves the corrupted bytes and discloses no path, stack, or file content. |
-| **S2-7** | 32 concurrent writers to one document inside one replica. |
+| **S2-6 (partial)** | Truncation, invalid UTF-8, and a 100 MiB replacement are measured (pass entries 7–9). The wrong-shape JSON case is measured **and is a finding** instead of a pass (`F-177-2`). No further variants are owed, but `F-177-2` needs the calibration pass in §6. |
+| **S2-7** | 32 concurrent writers to one document inside one replica, and a fresh run of `tests/security_tests.rs::data_integrity_tests::test_concurrent_writes_do_not_corrupt`. |
 | **S2-8** | Two replicas against one data directory, with the filesystem type of the throwaway volume recorded — note that this checkpoint's volume is `tmpfs`, so this sub-task's result does **not** transfer to a real volume and the arm must be re-provisioned on a disk-backed directory before its result may be written up. |
-| **S2-9** | Lock release on the failure path: a write that fails after the lock is acquired, then a normal write, for the document, attachment, and revision paths. |
-| **S2-10** | Attachment publication in place (torn read), orphan handling, and revision immutability. |
+| **S2-9 (partial)** | Lock release is measured for the **document** and **attachment** failure paths (pass entries 10–11). The revision path's failure-then-success pair has not been run, and no lock was observed *held* at any point (the probes measure release, not exclusion). |
+| **S2-10** | Attachment publication in place (torn read), orphan handling, and revision immutability. Only the attachment lock half has run. |
 | **S2-11** | The overwrite-contract table for every mutating operation, including the two imports whose conflict behaviour the design says is measured rather than assumed. |
-| **S2-12** | The error-leak table across every `DomainError` variant and every layer — the DoD item. |
-| **S2-13** | The root-is-the-only-area-read-or-written probe: a filesystem hash of the container outside `/data` and `/tmp` before and after a full workload, plus `docker diff`. |
-| **S2-14** | Confirmation that no route lists, reads, or writes anything under `TUCANO_DATA_DIR/auth/`. |
+| **S2-12 (partial)** | Seven error samples are recorded in §4's pending-triage and pass entries 7–11 (`storage_error` for corruption, traversal `invalid_request` 400, conflict 409, not-found 404, the empty-body 404 fallback, unauthorized 401). The DoD item — the full `DomainError`-by-layer table — is not written. |
+| **S2-13** | The root-is-the-only-area-read-or-written probe: a filesystem hash of the container outside `/data` and `/tmp` before and after a full workload, plus `docker diff` on a container with unbroken uptime (O-177-6). |
+| **S2-14 (partial)** | The auth surface is unreachable anonymously (§5, unnumbered note): `/auth`, `/auth//`, `/data/auth`, `/auth/projects`, `/projects/../auth` → **404**, `/auth/me` → **401**. What is owed is the **authenticated** arm, i.e. creating an auth store and confirming no project route can then reach it. |
 | **S2-15** | The storage side of the configuration-file boundary, including the check of whether `#189`'s AEAD envelope has landed at the audited revision (which decides whether the *key* boundary is exercised or recorded as documented-pending). |
 
 Also outstanding for the finished report: the README documentation-table row, the full local gate
