@@ -177,6 +177,27 @@ service is stopped first, and why the archive name carries a timestamp. And afte
 archive, remember that any run or result recorded since the backup is **gone**, not merged; a run is
 a point-in-time record, and the API will not reconstruct one from a later source.
 
+### Off-box copies and object storage
+
+The archive above is a copy on the same host. To get a copy *off* the host, an S3-compatible bucket
+may be used as a mirror or backup of the data directory — but this is produced by tooling **outside**
+the API, and the service never reads from it or writes to it. It is a copy, not a second backend:
+there is no backend setting to select, and the API makes no claim about what the copy tool produced.
+A copy taken while writes are in flight can capture a torn view, so the correctness of the mirror
+rests on the copy tool's own guarantees (snapshot first, or copy temporary-then-rename, or take the
+advisory lock briefly), never on this service. Restoring from a bucket means copying it back to a
+directory and mounting that, exactly as the steps above do.
+
+**No mirror runbook is published yet, because no mirror tooling is implemented in this repository.**
+The supported and verified way to move a copy off the host today is to produce the archive above and
+move *the archive*. The concrete recipe — which copy mechanism, how to keep it consistent, and the
+restore drill — is tracked as issue
+[#246](https://github.com/TucanoTechnology/TucanoTestAPI/issues/246) under epic
+[#167](https://github.com/TucanoTechnology/TucanoTestAPI/issues/167). The decision, the declined
+backend, and the terms of the mirror permission are in
+[Storage backends](../architecture/storage-backends.md) and
+[the ADR](../architecture/adr-object-storage.md).
+
 ## Rolling back a release
 
 Rollback means redeploying a previously recorded **immutable** tag — never moving a tag, never
