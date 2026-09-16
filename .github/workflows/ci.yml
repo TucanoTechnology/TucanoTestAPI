@@ -53,11 +53,12 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       # The rust image ships no Node, so the two file-reading checks need one
-      # installed before they can run; this is the only outbound dependency
-      # this job adds, and it pins the major version.
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
+      # installed before they can run. This is deliberately an apt install
+      # rather than actions/setup-node: a container job runs as the image's own
+      # root and setup-node's tarball extraction cannot chown to the runner's
+      # uid, so it fails with "Cannot change ownership to uid 1001" (see #238).
+      - name: Install Node
+        run: apt-get update -qq && apt-get install -y -qq nodejs
       - name: Check documentation links and page listings
         run: node scripts/check-docs-links.mjs
       - name: Check the operation reference is regenerated
