@@ -140,11 +140,13 @@ from `docs/`; nothing is authored in the published surface.
     flattens `docs/wiki/` accordingly and rewrites each cross-page link; a link to a page that is *not*
     mirrored (a decision record, `AGENTS.md`, the README) is rewritten to an absolute URL in this
     repository, so it still reaches the real file.
-  - GitHub creates the wiki repository when its **first page is saved**, so it may not exist yet. A
-    shallow clone handles both states — a repository with no commits clones successfully with an unborn
-    `HEAD`, and the publish commit seeds it — while a clone that genuinely fails, such as a missing
-    repository or a token without access, fails the job under `set -e` instead of being mistaken for an
-    empty wiki.
+  - GitHub creates the wiki repository when its **first page is saved**, so it may not exist yet.
+    Three states are possible: a wiki with commits clones normally; an empty wiki clones with an
+    unborn `HEAD` and the publish commit seeds it; a wiki that was never created fails the clone
+    with exit 128 ("Repository not found"). The publish step handles all three — when the clone
+    fails, it initialises a fresh local repository, stages the pages, and pushes, which creates
+    the remote wiki on GitHub's side. A genuine access problem (bad token, network error) still
+    surfaces as a push failure.
 
   The mirror is one-way by construction: the job deletes the staged pages' predecessors and copies
   afresh, so nothing written in the browser survives a publish. Publishing requires a `WIKI_TOKEN`
