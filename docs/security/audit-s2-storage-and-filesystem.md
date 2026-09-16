@@ -23,7 +23,7 @@ boundary."* It carries findings only; nothing here is fixed. Remediation belongs
   calibration for the two worked examples and for the first four pairs; the **count** stays provisional
   because a sub-task still to run can add a finding, and §6's list of what it has re-read is updated
   below to seven.
-- **Pass entries so far:** twenty-one, in the [Pass entries](#5-pass-entries) section.
+- **Pass entries so far:** twenty-two, in the [Pass entries](#5-pass-entries) section.
 - **Executed:** S2-1, S2-2, S2-3, S2-4, S2-6 (partial), S2-7, S2-9, S2-13, S2-14
   (partial), **S2-15 (complete — both halves: the `#189` question is answered and recorded in O-177-11,
   and the file-boundary probes have run against the image, producing F-177-5, F-177-6, O-177-12 and pass
@@ -32,8 +32,10 @@ boundary."* It carries findings only; nothing here is fixed. Remediation belongs
   fixture 6, the outside-file hardlink, was planted too and did not hold — that is F-177-7. S2-9 is
   complete as well: its third arm, the revision write, is pass entry 20. S2-10 is complete as well:
   its three arms — attachment publication, orphans, and revision immutability — are pass entry 21,
-  with the torn-read recipe it was written against measured unreachable through the API.
-  **Not executed:** S2-5, S2-8, S2-11, S2-12 (partial).
+  with the torn-read recipe it was written against measured unreachable through the API. S2-5 is
+  complete as well: ten timed `SIGKILL`s mid-write are pass entry 22, and it claims no power-loss
+  durability.
+  **Not executed:** S2-8, S2-11, S2-12 (partial).
 - **Throwaway stack:** re-provisioned for the S2-15 container arm with every build step `CACHED` from
   the pinned revision, and **retained** at `tucano-test-audit-177:c5e9943` for the next checkpoint; the
   earlier tear-down and the re-provisioning are both recorded in [§7](#7-tear-down-step-7). A later
@@ -1158,6 +1160,23 @@ table rather than a control. Second, a fixture caveat for any later comparison: 
 `c5194672d129fc5ad717be5ee1cd7dea3bacc28e61f262b410a5dbb5c0868c74` against the original's
 `c1d961124938394e3f5a6646de88e69535ad4d28799bcb987462a334fb574b21` — so no later hash comparison may
 rest on that name.
+22. **Ten `SIGKILL`s timed into a 1 MiB document write leave neither a half-written document nor a
+    temp file behind.** S2-5's atomicity arm. Ten rounds: a `PUT /test_cases/C1` carrying a 1 MiB
+    `description` was fired, and 30 ms later the service was killed with `docker compose -p audit-177
+    kill` (`SIGKILL`) and restarted; **every** restart answered `/health` **200**. After the ten
+    rounds: a walk of the whole data directory found **zero** files matching `.tucano-*` or `*.tmp`
+    — the design's leftover-marker check; all **8** stored `*.json` documents parsed as JSON; and
+    `GET /test_cases/C1` returned **200** in **0.003 s** with a complete 1,049,097-byte document. The
+    write that won landed whole — `test-case.json` at `version` 4, with `revisions/v4.json` (486
+    bytes) holding the *pre-update* snapshot, so the kill rounds produced no revision and no partial
+    document. Publications by temp file plus rename therefore held across ten abrupt deaths.
+    (Invariant 1; the DoD's atomicity item.)
+    *What this arm does not claim,* by the design's own pre-commitment: nothing about power-loss
+    durability — a missing parent-directory `fsync` stays an observation, never a finding — and the
+    kills were timed by a 30 ms delay rather than by observing the write syscall, so the rounds are
+    *consistent with* landing mid-write rather than proof of it. The per-round HTTP outcome was not
+    captured (the `curl` output was discarded); the measured end state is what is recorded here.
+    (Invariant 1; boundary 4.)
 
 Outside the numbered entries, S2-14 found the same shape on the auth tree: `/auth`, `/auth//`,
 `/data/auth`, `/auth/projects`, and `/projects/../auth` all return **404**, and `/auth/me` returns
@@ -1203,11 +1222,12 @@ which is the one case that does not echo the value (`F-177-6`). This is source-l
 pinned revision, not evidence about the built image: the image was
 audited by the API probes, the baselines by the test binaries compiled from the same revision.
 
-Not yet credited in this checkpoint (and deliberately not listed as passes): atomicity under `SIGKILL`
-(S2-5), two replicas on one data directory (S2-8), the overwrite table (S2-11), and the full
-error-leak table (S2-12). Two sub-tasks have left this list since the previous checkpoint: attachment
-and revision publication (S2-10), whose three arms are pass entry 21, and the configuration-file
-boundary (S2-15), both of whose halves are settled — the *key* half by O-177-11 (`#189`
+Not yet credited in this checkpoint (and deliberately not listed as passes): two replicas on one data
+directory (S2-8), the overwrite table (S2-11), and the full
+error-leak table (S2-12). Three sub-tasks have left this list since the previous checkpoint:
+atomicity under `SIGKILL` (S2-5), whose ten timed kills and clean-aftermath walk are pass entry 22,
+attachment and revision publication (S2-10), whose three arms are pass entry 21, and the
+configuration-file boundary (S2-15), both of whose halves are settled — the *key* half by O-177-11 (`#189`
 is open, so the key boundary is documented-pending by the design's own pre-commitment, not unprobed),
 the *file* half by pass entries 15–17 after the container arm ran. The three symlink baselines
 correspond to the fixtures measured in entries 5–6 above; the symlinked-*attachment* fixture S2-3 also
@@ -1268,7 +1288,7 @@ re-confirmed.
   (F-177-2, F-177-3), then the identifier and error-class path (F-177-4), and finally the
   configuration-file boundary, whose two findings were written last because they were measured last.
   Comparing severity across S2's findings means comparing the pairs, not the sequence.
-- **What this section does not yet confirm:** that seven is the final count. S2-5, S2-8, S2-11 and
+- **What this section does not yet confirm:** that seven is the final count. S2-8, S2-11 and
   S2-12 can each still add a finding, and a new finding changes the surface's distribution — which is
   why the header marks the count provisional. §6 is re-confirmed, not rewritten, in the closing
   checkpoint; the two examples and the seven pairs above will not change unless a later sub-task
@@ -1309,8 +1329,9 @@ The following sub-tasks of [audit-design-176-178.md](audit-design-176-178.md) §
 to completion. Each names what it is for, so a reader can see the shape of what is missing rather
 than only its absence. Rows marked **partial** have measured results in §4/§5; what they still owe is
 in the second column. S2-6 and S2-14 have run and keep a row only to name what their run
-did **not** cover; S2-1, S2-3, S2-4, S2-7, S2-9, S2-10 and S2-13 have now run in full, so their rows are gone
-(S2-9's third arm, the revision write, is pass entry 20; what S2-9 still cannot
+did **not** cover; S2-1, S2-3, S2-4, S2-5, S2-7, S2-9, S2-10 and S2-13 have now run in full, so their rows are gone
+(S2-5's ten timed `SIGKILL`s are pass entry 22 and it claims no power-loss durability;
+S2-9's third arm, the revision write, is pass entry 20; what S2-9 still cannot
 show is a lock observed *held* — its probes measure release, not exclusion; S2-10's three arms are
 pass entry 21, and what S2-10 still cannot show is a torn body: the recipe that was to produce one
 turned out unreachable, so the *consequence* of a short body was measured instead, not its
@@ -1322,7 +1343,6 @@ ran too — as F-177-7 in §4, because the hardlink arm did not hold.
 
 | Sub-task | What is missing |
 | --- | --- |
-| **S2-5** | Atomicity: ten `SIGKILL`s of the container process mid-write, then a JSON validation pass over every stored document and an inspection of leftover `.tucano-*.tmp` files. No power-loss durability is claimed either way; a missing parent-directory `fsync` is an observation by pre-commitment, never a finding. |
 | **S2-6 (partial)** | Truncation, invalid UTF-8, and a 100 MiB replacement are measured (pass entries 7–9). The wrong-shape JSON case is measured **and is a finding** instead of a pass (`F-177-2`). No further variants are owed, and the calibration pass §6 owed `F-177-2` has now run; the row stays only until §6 is re-confirmed at the closing checkpoint. |
 | **S2-8** | Two replicas against one data directory, with the filesystem type of the throwaway volume recorded — note that this checkpoint's volume is `tmpfs`, so this sub-task's result does **not** transfer to a real volume and the arm must be re-provisioned on a disk-backed directory before its result may be written up. |
 | **S2-11** | The overwrite-contract table for every mutating operation, including the two imports whose conflict behaviour the design says is measured rather than assumed. |
