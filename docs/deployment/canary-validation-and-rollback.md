@@ -38,7 +38,7 @@ balancer**. Because replicas are stateless and mutations are lock-guarded, the c
 serve real reads and writes. Step 1 only ever gives it the scratch CRUD of the smoke check, never
 live traffic, until Step 3.
 
-## Step 0 — record what is currently serving, and snapshot if the release changes stored shape
+## Step 0 — record what is currently serving, and snapshot if the release changes stored shape or layout
 
 ```sh
 IMAGE="ghcr.io/tucanotechnology/tucanotestapi"
@@ -48,16 +48,18 @@ CANDIDATE="$IMAGE:build-4711"       # the build under test
 
 Record `PREVIOUS` before touching anything; it is the rollback target.
 
-If the candidate changes the shape, strictness, or validation of any stored document, snapshot the
-volume first. Documents are plain JSON and inspectable on the host, so a filesystem snapshot or an
-archive of the data directory is enough:
+If the candidate changes the shape, strictness or validation of any stored document — or **where**
+documents live, as the storage layout v3 change ([#215](https://github.com/TucanoTechnology/TucanoTestAPI/issues/215))
+did — snapshot the volume first. Documents are plain JSON and inspectable on the host, so a
+filesystem snapshot or an archive of the data directory is enough:
 
 ```sh
 DATA_DIR=/srv/tucano/data           # the directory the stable replica mounts at /data
 tar -C "$DATA_DIR" -czf "tucano-data-$(date +%Y%m%d-%H%M%S).tgz" .
 ```
 
-See *What rollback guarantees about the shared volume* below for when this is mandatory.
+See *What rollback guarantees about the shared volume* below for when this is mandatory, and
+*Rolling back across a storage-layout change* for the case where it is the only way back.
 
 ## Step 1 — start the canary replica
 
@@ -80,6 +82,14 @@ the stable service uses (`--volume <volume-name>:/data`). Wait for the container
 ```sh
 docker logs --follow --tail 20 tucano-api-canary
 ```
+
+A candidate that expects a newer storage layout may **refuse to start** against an older volume.
+Since layout v3 ([#215](https://github.com/TucanoTechnology/TucanoTestAPI/issues/215)) the service
+will not start when `test_runs/`, `milestones/` or `configurations/` hold `*.json` documents at the
+root of the data directory; it logs `legacy flat storage layout detected: …` and exits rather than
+serve a partial view of the data. That is a volume to convert, not a canary to debug: stop here and
+follow *Storage layout v3 and legacy volumes* in the
+[deployment guide](deployment-guide.md), starting from the Step 0 snapshot.
 
 ## Step 2 — health and readiness checks, then the smoke sequence
 
@@ -206,9 +216,30 @@ The practical decision table:
 | only code and the HTTP contract — no stored-document field, no model strictness | Safe. Redeploy `$PREVIOUS`, check `/health`, run the smoke. |
 | a stored-document field, a model's strict field set, or validation | **Not automatic.** Follow the versioning/migration plan recorded in `docs/contracts/api-compatibility.md`, and restore the Step 0 snapshot if that plan calls for it. |
 | a new field that is written only when a client uses it | Safe for documents that never used it. A document that used it still reads on the previous build through `GET` and `PUT`, but any run or milestone operation over it answers `500 storage_error` — restore the snapshot or migrate before rolling back. |
+| where documents live — the storage layout, with no field or strictness change | **Not a drop-in rollback.** A build that predates the layout looks in the old places: it answers `404` for runs, milestones and configurations, and milestone progress reports zeros. No document is damaged and the rest of the surface still reads, but only the Step 0 snapshot brings those three resources back. See *Rolling back across a storage-layout change* below. |
 
-Taking a Step 0 snapshot before any release in the second or third row is the cheap insurance that
-makes the third row recoverable.
+Taking a Step 0 snapshot before any release in the last three rows is the cheap insurance that makes
+the strict-path and layout rows recoverable.
+
+### Rolling back across a storage-layout change
+
+A layout change is not a document-shape change, so the compatibility guarantees above do not cover
+it: no field moved and no model got stricter. No `formatVersion` bump is involved either, because
+the marker answers "is this document from the future", not "is this document where I expect it".
+
+Rolling a build back across storage layout v3
+([#215](https://github.com/TucanoTechnology/TucanoTestAPI/issues/215)) therefore loses exactly what
+the layout moved. The older build reads no root collections and finds nothing under the paths it
+knows: it answers `404` for runs, milestones and configurations, and `GET /milestones/{id}/progress`
+reports zeros because it skips the runs it cannot find. Projects, suites and cases are unaffected —
+their layout did not change — and the older build modifies and deletes nothing, so the loss is a
+view, not data.
+
+Because re-pinning the tag cannot bring those resources back, full rollback means restoring the
+Step 0 snapshot. The layout, the startup refusal a v3 build performs against a legacy volume, and
+the operator recipe for converting one are recorded in
+[`docs/architecture/adr-storage-layout-v3.md`](../architecture/adr-storage-layout-v3.md) and in
+*Storage layout v3 and legacy volumes* in the [deployment guide](deployment-guide.md).
 
 ## Evidence to record per validation
 
@@ -224,4 +255,6 @@ makes the third row recoverable.
 | [`docker-compose.yml`](../../docker-compose.yml) | Reference for the hardened container settings and the volume mount. |
 | [`Dockerfile`](../../Dockerfile) | Image build, `TUCANO_DATA_DIR=/data`, `PORT=3000`, unprivileged uid 10001. |
 | [`docs/contracts/api-compatibility.md`](../contracts/api-compatibility.md) | Compatibility rules and the versioning plans that govern rollback. |
+| [`docs/architecture/adr-storage-layout-v3.md`](../architecture/adr-storage-layout-v3.md) | Where runs, milestones and configurations live, the legacy-layout startup refusal, and the v3 rollback consequence. |
+| [`docs/deployment/deployment-guide.md`](deployment-guide.md) | The operator recipe for converting a legacy volume to layout v3. |
 | [`docs/architecture/rust-service-core.md`](../architecture/rust-service-core.md) | Phase 3 exit criteria this runbook satisfies. |
