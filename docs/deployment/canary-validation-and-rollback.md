@@ -81,11 +81,17 @@ the stable service uses (`--volume <volume-name>:/data`). Wait for the container
 docker logs --follow --tail 20 tucano-api-canary
 ```
 
-## Step 2 — health check and the smoke sequence
+## Step 2 — health and readiness checks, then the smoke sequence
 
 ```sh
 curl --fail --silent --show-error http://localhost:3101/health
 # {"status":"ok","storage":"filesystem"}
+
+curl --fail --silent --show-error http://localhost:3101/ready
+# {"status":"ready","storage":"filesystem"}
+# A canary that answers /health but not /ready is serving against a data
+# directory it cannot write: diagnose it with `GET /diagnostics`, which answers
+# 200 and reports the individual checks, then stop rather than send it traffic.
 
 scripts/smoke.sh http://localhost:3101
 ```
