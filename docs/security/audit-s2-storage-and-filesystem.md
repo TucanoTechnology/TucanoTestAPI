@@ -83,7 +83,7 @@ hoped for:
   both, so the *permission* results transfer; durability and `flock`-under-overlay results would not,
   and no such result is claimed in this checkpoint.
 - **Authentication was off in the audited arm.** No `TUCANO_JWT_SECRET` was supplied, so the service
-  ran in its default unauthenticated mode (see §2.1, deviation 6). Every request below was made
+  ran in its default unauthenticated mode (see §2.1, note 6). Every request below was made
   without credentials. Where a finding's impact depends on that, the finding says so.
 
 ## 2. Throwaway target (step 2)
@@ -136,9 +136,20 @@ auditor's.
    **but see F-177-1, where the operator's real `./data` is itself `drwxrwxrwx`**, so this deviation
    matches the deployment rather than departing from it. The report states the mode of both, and
    F-177-1's impact paragraph does not rest on the auditor's own chmod.
-6. **Authentication off.** No `TUCANO_JWT_SECRET`, no `TUCANO_AUTH_ENABLED`. The default
-   configuration is intended to be audited this way (`audit-scope.md` §5's escalation rule turns on
-   the *default* configuration), and every finding states the setting explicitly.
+6. **Authentication off — recorded here, but *not* a deviation from the shipped Compose file.** The
+   audited arm supplies no `TUCANO_JWT_SECRET` and sets no `TUCANO_AUTH_REQUIRED`; the shipped
+   `docker-compose.yml` sets no auth variable either, and the service's own default is off
+   (`src/auth/config.rs:130–133`: an absent `TUCANO_AUTH_REQUIRED` resolves to `false`; pinned
+   `README.md:218` documents the `false` default and that "when off, every guard returns and the API
+   is anonymous"; `docs/wiki/api-and-authentication.md` states "**Authentication is off by default.**").
+   So this arm *is* the shipped configuration rather than a departure from it, and every finding that
+   leans on the default's reachability rests on the shipped file rather than on an auditor's choice.
+   The default configuration is intended to be audited this way (`audit-scope.md` §5's escalation rule
+   turns on the *default* configuration), and every finding states the setting explicitly. An
+   auth-enabled arm — `TUCANO_AUTH_REQUIRED=true` with a `TUCANO_JWT_SECRET` of at least the minimum
+   length and one seeded account — is still required before the `Unauthenticated` and `Forbidden`
+   error variants (S2-12) and the auth-store permission call site (`src/auth/store.rs:405`, F-177-1)
+   may be described as measured; both are carried in §5.
 7. **A second arm, not a second Compose service.** The cross-principal arm is a one-shot
    `docker run --user 4242:4242 --entrypoint sh` against the same data directory, using the audited
    image (so the same `sh` availability as the service's own runtime).
@@ -516,9 +527,13 @@ every mutating call site, with the one deliberate exception above named rather t
   gains anything — the loss is symmetric among the writers who are entitled to the resource"; that is
   a statement about the impact axis, where it is already priced as *Moderate*, while the escalation
   clause asks about reachability rather than about what the attacker gains. Readings considered and
-  **not** taken: *Trivial × Moderate → **High*** — the Trivial row needs "no account and no special
-  position", and the shipped configuration authenticates, so the writer needs a valid account and a
-  grant on that case; and *Difficult × Moderate → Low* as previously scored — the reading a reviewer
+  **not** taken: *Trivial × Moderate → **High*** — the Trivial row is defined by the input's reach
+  ("no account and no special position, **single request** … no prerequisite state"), and this defect
+  is not a single request: it needs two requests in flight against the same case at the same instant,
+  and a case that already exists. The unauthenticated default is *why* § 5's escalation clause applies
+  to this defect, not a reason to claim the Trivial cell, whose own wording ("single request … no
+  prerequisite state") the defect does not meet; and *Difficult × Moderate → Low* as previously
+  scored — the reading a reviewer
   may prefer if they hold a race to be Difficult however reliably it is won, which is why the measured
   loss rates are quoted above rather than summarised. Nothing here is scored below its impact axis.
 - **In scope:** S2-7 and S2-8; trust boundary 4 (service → stored JSON); invariant 2 — the surviving
@@ -609,13 +624,19 @@ every mutating call site, with the one deliberate exception above named rather t
   CWE-367 (TOCTOU) is the related read-modify-write pattern.
 - **Duplicates / prerequisites:** shares its probe with S2-7 (pass entry 13 records what did *not*
   break: no corruption, no partial document). Not a duplicate of F-177-1/F-177-2. Requires two
-  concurrent clients; in a default deployment that means a valid account with write access.
+  concurrent clients and a case that already exists. In the shipped default — authentication off, no
+  `TUCANO_AUTH_REQUIRED` set — that is any client that can reach the listener; under
+  `TUCANO_AUTH_REQUIRED=true` it is a client holding write access on that case.
 
 ### F-177-4: An identifier longer than the filesystem's name limit is accepted and then fails as `500 storage_error`
 
-- **Severity:** **Low** — Moderate × Limited. Triggering it needs an account (in the shipped
-  configuration, authentication is on), so not Trivial; the effect is confined to the caller's own
-  request, so Limited.
+- **Severity:** **Low** — Moderate × Limited. *Exploitability:* **Moderate**, on the rubric's "or one
+  prerequisite step" clause — the request needs a project that already exists (the reproduction
+  creates one first) and is then repeatable without special conditions. *Trivial* is declined because
+  that row is defined by "no prerequisite state", which a project is not; it is **not** declined on the
+  ground that an account is required, since the shipped default authenticates nothing (§ 2.1, note 6).
+  *Impact:* **Limited** — the effect is confined to the caller's own request, and nothing is lost,
+  disclosed, or defeated.
 - **In scope:** trust boundary 3 (resource ID → filesystem); invariant 3 (client-visible errors use
   stable codes and safe messages) — the code is stable and the message is safe, but a bad *input*
   produces a server-error class, which is what invariant 3 exists to prevent.
@@ -638,8 +659,9 @@ every mutating call site, with the one deliberate exception above named rather t
   reaches the filesystem, so that the same request behaves identically on every volume. `255` is also
   a *successful* identifier, which means the limit is host-dependent: a deployment on a filesystem
   with a different `NAME_MAX` would accept a different set of identifiers.
-- **Impact.** Availability/error-class only, confined to the caller's own request: an authenticated
-  client can produce `500`s at will, which pollutes monitoring and, more importantly, makes the
+- **Impact.** Availability/error-class only, confined to the caller's own request: any client that can
+  reach the listener — in the shipped default, with authentication off and the project prerequisite
+  met — can produce `500`s at will, which pollutes monitoring and, more importantly, makes the
   boundary between "your input is wrong" and "the service is broken" invisible — the same
   undifferentiated message the corruption variants produce (O-177-5).
 - **Suggested fix.** Bound the identifier length in `validate_document_id` /
@@ -934,8 +956,9 @@ returned by the same listing routes that would return any case (the case listing
 created them; nothing is lost, disclosed, or defeated, so §5's impact axis has no loss to score and
 the entry stays an observation. The reading not taken is named: under §5, *Moderate* × *Limited* would
 be a **Low** finding and *Trivial* × *Limited* a **Medium** one; both presuppose an impact this
-measurement does not show, and the second would also overstate exploitability, since the shipped
-default requires a valid account and a project before a case id can be supplied at all. Two
+measurement does not show, and the second would also overstate exploitability, since such a name can
+only be supplied against a project that already exists — one prerequisite step, which is the Moderate
+row rather than the Trivial one, whatever the authentication setting. Two
 consequences are recorded for a reviewer and are **not** scored here. (a) A case directory named
 `.tucano.lock` or `.tucano-<suffix>.tmp` aliases the storage layer's *own* bookkeeping names; for the
 lock file the alias is nominal rather than a collision, because `acquire_lock` opens the lock at the
