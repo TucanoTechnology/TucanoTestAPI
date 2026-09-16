@@ -786,7 +786,7 @@ every mutating call site, with the one deliberate exception above named rather t
   elsewhere:
 
   ```text
-  printf '%s' '{"version":1,"auth_required":"SENTINEL-c0ffee-4815162342-abcdefghijklmnop"}' \
+  printf '%s' '{"version":1,"auth_required":"SENTINEL-audit-177-wrong-type"}' \
     >/tmp/audit-177/config-wrong-type.json
   docker run --rm -v /tmp/audit-177/config-wrong-type.json:/etc/tucano/config.json:ro \
     -e TUCANO_CONFIG_FILE=/etc/tucano/config.json tucano-test-audit-177:c5e9943 2>&1
@@ -797,7 +797,7 @@ every mutating call site, with the one deliberate exception above named rather t
 - **Observed.** Exit **1**, and:
 
   ```text
-  Error: Malformed { detail: "invalid type: string \"SENTINEL-c0ffee-4815162342-abcdefghijklmnop\", expected a boolean at line 3 column 64" }
+  Error: Malformed { detail: "invalid type: string \"SENTINEL-audit-177-wrong-type\", expected a boolean at line 3 column 64" }
   ```
 
   `grep -c SENTINEL` → **1**. All three controls → **0**. The echo therefore needs the *type mismatch*,
@@ -1138,7 +1138,7 @@ corrupted stored document). Every row of that column reports the same value: `0`
 | oversize — past the *declared* limit | multipart bodies of 52,428,801 and 62,914,560 bytes | **413** | **none** — `text/plain; charset=utf-8`, no envelope | `length limit exceeded` | no | `0` |
 | oversize — JSON body | `POST /test_cases` with a 2,097,223-byte body | **413** | **none** — `text/plain; charset=utf-8` | `Failed to buffer the request body: length limit exceeded` | no | `0` |
 | unsupported type | a `text/plain` body, and a request with no `Content-Type` at all | **415** | **none** — `text/plain` | ``Expected request with `Content-Type: application/json` `` | no | `0` |
-| malformed JSON | `POST /projects` with a trailing comma, and with an unquoted value | **400** | **none** — `text/plain` | `Failed to parse the request body as JSON: trailing comma at line 1 column 13` | no — the message echoes one **field name** and a byte offset, never a value: the sentinel value `SENTINEL-c0ffee-4815162342-abcdefghijklmnop` was never echoed by any probe | `0` |
+| malformed JSON | `POST /projects` with a trailing comma, and with an unquoted value | **400** | **none** — `text/plain` | `Failed to parse the request body as JSON: trailing comma at line 1 column 13` | no — the message echoes one **field name** and a byte offset, never a value: the sentinel value `SENTINEL-audit-177-wrong-type` was never echoed by any probe | `0` |
 | router fallback — unknown path | `GET /nowhere` | **404** | **none** — no `content-type`, `content-length: 0`, `x-request-id` present | (empty) | no | `0` |
 | router fallback — known path, wrong method | `PUT /projects` | **405** | **none** — `allow:` header carries the methods, body empty | (empty) | no | `0` |
 | control — a route that is public by design | `GET /health`, `GET /openapi.json` | **200** | — | — | no | `0` |
