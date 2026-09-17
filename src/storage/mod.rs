@@ -174,7 +174,7 @@ pub trait Repository: Send + Sync {
 
     /// Write a revision snapshot without acquiring the advisory lock.
     ///
-    /// For callers that already hold the lock (such as a [`transform_at`]
+    /// For callers that already hold the lock (such as a [`Self::transform_at`]
     /// closure) to avoid deadlocking on a second lock acquisition.
     fn save_revision_locked(
         &self,
