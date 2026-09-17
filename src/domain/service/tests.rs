@@ -1296,3 +1296,218 @@ fn a_parent_addressed_read_never_answers_a_conflict() {
         DomainError::NotFound(_)
     ));
 }
+
+// ---------------------------------------------------------------------------
+// Unit tests for pure helper functions
+// ---------------------------------------------------------------------------
+
+// --- merged_document -------------------------------------------------------
+
+#[test]
+fn merged_document_replaces_only_supplied_fields() {
+    let stored = json!({ "title": "old", "steps": "s", "priority": "high" });
+    let body = json!({ "title": "new" });
+    let merged = merged_document(&stored, &body).expect("merge");
+    assert_eq!(merged["title"], "new");
+    assert_eq!(merged["steps"], "s");
+    assert_eq!(merged["priority"], "high");
+}
+
+#[test]
+fn merged_document_null_keeps_stored_value() {
+    let stored = json!({ "title": "old", "steps": "s" });
+    let body = json!({ "title": null });
+    let merged = merged_document(&stored, &body).expect("merge");
+    assert_eq!(merged["title"], "old");
+    assert_eq!(merged["steps"], "s");
+}
+
+#[test]
+fn merged_document_non_object_stored_returns_error() {
+    let stored = json!("just a string");
+    let body = json!({ "title": "new" });
+    assert!(matches!(
+        merged_document(&stored, &body),
+        Err(DomainError::Internal(_))
+    ));
+}
+
+#[test]
+fn merged_document_empty_body_returns_stored_unchanged() {
+    let stored = json!({ "title": "old", "steps": "s" });
+    let body = json!({});
+    let merged = merged_document(&stored, &body).expect("merge");
+    assert_eq!(merged, stored);
+}
+
+// --- case_content_changed --------------------------------------------------
+
+#[test]
+fn case_content_changed_detects_title_change() {
+    let stored = json!({ "title": "a", "steps": "s" });
+    let merged = json!({ "title": "b", "steps": "s" });
+    assert!(case_content_changed(&stored, &merged));
+}
+
+#[test]
+fn case_content_changed_detects_steps_change() {
+    let stored = json!({ "title": "a", "steps": "s1" });
+    let merged = json!({ "title": "a", "steps": "s2" });
+    assert!(case_content_changed(&stored, &merged));
+}
+
+#[test]
+fn case_content_changed_detects_preconditions_change() {
+    let stored = json!({ "title": "a", "preconditions": "p1" });
+    let merged = json!({ "title": "a", "preconditions": "p2" });
+    assert!(case_content_changed(&stored, &merged));
+}
+
+#[test]
+fn case_content_changed_detects_expected_result_change() {
+    let stored = json!({ "title": "a", "expectedResult": "e1" });
+    let merged = json!({ "title": "a", "expectedResult": "e2" });
+    assert!(case_content_changed(&stored, &merged));
+}
+
+#[test]
+fn case_content_changed_ignores_non_qualifying_fields() {
+    let stored = json!({ "title": "a", "steps": "s", "tags": ["old"], "name": "x" });
+    let merged = json!({ "title": "a", "steps": "s", "tags": ["new"], "name": "y" });
+    assert!(!case_content_changed(&stored, &merged));
+}
+
+#[test]
+fn case_content_changed_false_when_identical() {
+    let doc = json!({ "title": "a", "steps": "s", "preconditions": "p", "expectedResult": "e" });
+    assert!(!case_content_changed(&doc, &doc));
+}
+
+// --- stamp_case_creation ---------------------------------------------------
+
+#[test]
+fn stamp_case_creation_sets_version_and_last_modified() {
+    let mut doc = json!({ "title": "new case" });
+    stamp_case_creation(&mut doc);
+    assert_eq!(doc["version"], 1);
+    assert!(doc["lastModified"].is_string());
+    assert!(!doc["lastModified"].as_str().unwrap().is_empty());
+}
+
+#[test]
+fn stamp_case_creation_overwrites_client_supplied_values() {
+    let mut doc = json!({ "title": "x", "version": 99, "lastModified": "client-time" });
+    stamp_case_creation(&mut doc);
+    assert_eq!(doc["version"], 1);
+    assert_ne!(doc["lastModified"], "client-time");
+}
+
+#[test]
+fn stamp_case_creation_noop_for_non_object() {
+    let mut doc = json!("not an object");
+    stamp_case_creation(&mut doc);
+    assert_eq!(doc, json!("not an object"));
+}
+
+// --- normalise_marker ------------------------------------------------------
+
+#[test]
+fn normalise_marker_project_sets_suite_collection_and_id() {
+    let mut doc = json!({ "name": "p" });
+    normalise_marker(Resource::Projects, "p.json", &mut doc);
+    assert_eq!(doc["projectId"], "p.json");
+    assert_eq!(doc["testSuites"], json!([]));
+}
+
+#[test]
+fn normalise_marker_suite_sets_case_collection_and_id() {
+    let mut doc = json!({ "name": "s" });
+    normalise_marker(Resource::Suites, "s.json", &mut doc);
+    assert_eq!(doc["suiteId"], "s.json");
+    assert_eq!(doc["testCases"], json!([]));
+}
+
+#[test]
+fn normalise_marker_run_sets_id_and_timestamp() {
+    let mut doc = json!({ "name": "r" });
+    normalise_marker(Resource::Runs, "r.json", &mut doc);
+    assert_eq!(doc["testRunId"], "r.json");
+    assert!(doc["timestamp"].is_string());
+    assert!(!doc["timestamp"].as_str().unwrap().is_empty());
+}
+
+#[test]
+fn normalise_marker_milestone_sets_id() {
+    let mut doc = json!({ "name": "m" });
+    normalise_marker(Resource::Milestones, "m.json", &mut doc);
+    assert_eq!(doc["milestoneId"], "m.json");
+}
+
+#[test]
+fn normalise_marker_configuration_sets_id() {
+    let mut doc = json!({ "name": "c" });
+    normalise_marker(Resource::Configurations, "c.json", &mut doc);
+    assert_eq!(doc["configId"], "c.json");
+}
+
+#[test]
+fn normalise_marker_case_is_identity() {
+    let mut doc = json!({ "testCaseId": "C-1", "title": "t" });
+    let original = doc.clone();
+    normalise_marker(Resource::Cases, "C-1", &mut doc);
+    assert_eq!(doc, original);
+}
+
+#[test]
+fn normalise_marker_does_not_overwrite_client_identity() {
+    let mut doc = json!({ "projectId": "client-id", "name": "p" });
+    normalise_marker(Resource::Projects, "p.json", &mut doc);
+    assert_eq!(doc["projectId"], "client-id");
+}
+
+// --- Composed::message -----------------------------------------------------
+
+#[test]
+fn composed_message_created() {
+    let composed = Composed::Created(Created {
+        id: "x.json".to_owned(),
+    });
+    assert_eq!(composed.message("Test suite"), "Test suite created");
+}
+
+#[test]
+fn composed_message_copied() {
+    let composed = Composed::Placed {
+        id: "x.json".to_owned(),
+        mode: Placement::Copy,
+    };
+    assert_eq!(composed.message("Test case"), "Test case copied");
+}
+
+#[test]
+fn composed_message_moved() {
+    let composed = Composed::Placed {
+        id: "x.json".to_owned(),
+        mode: Placement::Move,
+    };
+    assert_eq!(composed.message("Test suite"), "Test suite moved");
+}
+
+// --- Composed::id ----------------------------------------------------------
+
+#[test]
+fn composed_id_created() {
+    let composed = Composed::Created(Created {
+        id: "new.json".to_owned(),
+    });
+    assert_eq!(composed.id(), "new.json");
+}
+
+#[test]
+fn composed_id_placed() {
+    let composed = Composed::Placed {
+        id: "placed.json".to_owned(),
+        mode: Placement::Copy,
+    };
+    assert_eq!(composed.id(), "placed.json");
+}

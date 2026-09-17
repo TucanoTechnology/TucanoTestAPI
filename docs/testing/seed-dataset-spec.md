@@ -767,7 +767,7 @@ The freshness checks ([§1](#stale-matrix-check)) are implemented by
 `scripts/check-matrix.mjs` (#195), and the two halves of the decision above are
 deliberately split by cost. The static half is a dependency-free Node script
 over `openapi.json` and this document; CI runs it as its own job
-(`matrix-integrity` in [`.github/workflows/ci.yml`](../.github/workflows/ci.yml))
+(`contract` in [`.github/workflows/lint.yml`](../.github/workflows/lint.yml))
 that reads two files and starts nothing. The seeded half is the generator's
 validation step, and it runs on the one-command path `scripts/demo.sh`, which
 brings a stack up, seeds it, runs `scripts/smoke.sh`, then runs the validation
