@@ -1,7 +1,28 @@
 # Tucano Test API
 
-[![CI](https://github.com/TucanoTechnology/TucanoTestAPI/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/TucanoTechnology/TucanoTestAPI/actions/workflows/ci.yml)
-[![Security](https://github.com/TucanoTechnology/TucanoTestAPI/actions/workflows/security.yml/badge.svg?branch=main)](https://github.com/TucanoTechnology/TucanoTestAPI/actions/workflows/security.yml)
+**Code Quality**
+[![Workflows](https://github.com/TucanoTechnology/TucanoTestAPI/actions/workflows/lint.yml/badge.svg?branch=main&event=push&job=workflows)](https://github.com/TucanoTechnology/TucanoTestAPI/actions/workflows/lint.yml)
+[![Contract](https://github.com/TucanoTechnology/TucanoTestAPI/actions/workflows/lint.yml/badge.svg?branch=main&event=push&job=contract)](https://github.com/TucanoTechnology/TucanoTestAPI/actions/workflows/lint.yml)
+[![Format](https://github.com/TucanoTechnology/TucanoTestAPI/actions/workflows/lint.yml/badge.svg?branch=main&event=push&job=format)](https://github.com/TucanoTechnology/TucanoTestAPI/actions/workflows/lint.yml)
+[![Clippy](https://github.com/TucanoTechnology/TucanoTestAPI/actions/workflows/lint.yml/badge.svg?branch=main&event=push&job=clippy)](https://github.com/TucanoTechnology/TucanoTestAPI/actions/workflows/lint.yml)
+
+**Documentation**
+[![Docs](https://github.com/TucanoTechnology/TucanoTestAPI/actions/workflows/docs.yml/badge.svg?branch=main&event=push&job=validate)](https://github.com/TucanoTechnology/TucanoTestAPI/actions/workflows/docs.yml)
+[![Wiki](https://github.com/TucanoTechnology/TucanoTestAPI/actions/workflows/docs.yml/badge.svg?branch=main&event=push&job=publish)](https://github.com/TucanoTechnology/TucanoTestAPI/actions/workflows/docs.yml)
+
+**Build & Test**
+[![Rustdoc](https://github.com/TucanoTechnology/TucanoTestAPI/actions/workflows/build-test.yml/badge.svg?branch=main&event=push&job=rustdoc)](https://github.com/TucanoTechnology/TucanoTestAPI/actions/workflows/build-test.yml)
+[![Tests](https://github.com/TucanoTechnology/TucanoTestAPI/actions/workflows/build-test.yml/badge.svg?branch=main&event=push&job=test)](https://github.com/TucanoTechnology/TucanoTestAPI/actions/workflows/build-test.yml)
+[![Release](https://github.com/TucanoTechnology/TucanoTestAPI/actions/workflows/build-test.yml/badge.svg?branch=main&event=push&job=release)](https://github.com/TucanoTechnology/TucanoTestAPI/actions/workflows/build-test.yml)
+[![Dependencies](https://github.com/TucanoTechnology/TucanoTestAPI/actions/workflows/build-test.yml/badge.svg?branch=main&event=push&job=dependencies)](https://github.com/TucanoTechnology/TucanoTestAPI/actions/workflows/build-test.yml)
+
+**Security**
+[![Audit](https://github.com/TucanoTechnology/TucanoTestAPI/actions/workflows/security.yml/badge.svg?branch=main&event=push&job=audit)](https://github.com/TucanoTechnology/TucanoTestAPI/actions/workflows/security.yml)
+[![Secrets](https://github.com/TucanoTechnology/TucanoTestAPI/actions/workflows/security.yml/badge.svg?branch=main&event=push&job=secret-scan)](https://github.com/TucanoTechnology/TucanoTestAPI/actions/workflows/security.yml)
+[![Container](https://github.com/TucanoTechnology/TucanoTestAPI/actions/workflows/security.yml/badge.svg?branch=main&event=push&job=container-scan)](https://github.com/TucanoTechnology/TucanoTestAPI/actions/workflows/security.yml)
+[![SBOM](https://github.com/TucanoTechnology/TucanoTestAPI/actions/workflows/security.yml/badge.svg?branch=main&event=push&job=sbom)](https://github.com/TucanoTechnology/TucanoTestAPI/actions/workflows/security.yml)
+
+**Deployment**
 [![Release](https://github.com/TucanoTechnology/TucanoTestAPI/actions/workflows/release.yml/badge.svg?branch=main)](https://github.com/TucanoTechnology/TucanoTestAPI/actions/workflows/release.yml)
 
 The Tucano Test API is the file-based test case management service for TucanoTCM: a Rust service
