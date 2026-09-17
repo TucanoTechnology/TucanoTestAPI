@@ -80,11 +80,20 @@ issues.
 
 ## Running the application
 
-Build and run the Compose stack:
+The stack authenticates by default, so it needs a signing secret and a bootstrap account before it
+starts. Copy the committed template to `.env` and set both values; `docker compose` loads `.env`
+automatically from this directory, and `.env` is gitignored so the secret stays on the machine:
 
 ```sh
+cp .env.example .env
+# set TUCANO_JWT_SECRET (at least 32 bytes) and TUCANO_BOOTSTRAP_PASSWORD, then:
 docker compose up -d --build
 ```
+
+Generate a signing secret with, for example,
+`node -e 'process.stdout.write(require("node:crypto").randomBytes(32).toString("base64url"))'`.
+Compose refuses to start while either required value is unset, rather than falling back to an
+anonymous stack.
 
 `docker-compose.yml` defines two services: `api`, built from this repository's `Dockerfile`, and
 `gui`, built from a sibling `../Tucano-Test-GUI` checkout that must be present for the default
@@ -94,6 +103,15 @@ command. Start the API alone with `docker compose up -d --build api`.
 | --- | --- | --- | --- |
 | `api` | `3100` | `3000` | `tucano-test-api:local` |
 | `gui` | `8080` | `8080` | `tucano-test-gui:local` |
+
+The `api` service sets `TUCANO_AUTH_REQUIRED=true`, so every guarded route needs a bearer token from
+`POST /auth/login` — sign in with the bootstrap account from `.env`. That is the safe posture the
+shipped file is required to produce ([audit finding F-178-1](docs/security/audit-s3-container-and-deployment.md)).
+
+To run anonymously on a single-user machine, set `TUCANO_AUTH_REQUIRED=false` in `.env`. Do not do
+that on a machine anything else can reach; the API is published on every interface, so a deployment
+that needs to stay reachable should either keep authentication on or restrict the publish to
+loopback by changing the port mapping to `127.0.0.1:3100:3000`.
 
 Interactive Swagger UI is available at `http://localhost:3100/api-docs`; the raw OpenAPI document is
 at `http://localhost:3100/openapi.json`.
@@ -260,7 +278,12 @@ concept and API reference](docs/reference/storage-and-api.md).
 
 ## Authentication
 
-With `TUCANO_AUTH_REQUIRED` turned on, guarded routes require a bearer token authorized against
+The shipped `docker-compose.yml` turns authentication on (`TUCANO_AUTH_REQUIRED=true`) and takes the
+signing secret and the bootstrap account from `.env`. The service's own default remains `false`, so
+a deployment that supplies its own container definition and does not opt in still runs anonymously —
+the Compose file is the safe default, not the service.
+
+With authentication on, guarded routes require a bearer token authorized against
 **project-scoped RBAC**: a role (`viewer`, `editor`, `owner`) granted per project, plus a
 `systemAdmin` account that reaches everything. The full role model, environment variables, the
 optional configuration file, and the error contract are in the [storage concept and API

@@ -21,7 +21,9 @@ testing, and the pull-request process.
 # Start the API with a local data directory
 TUCANO_DATA_DIR=./data cargo run
 
-# Or use Docker Compose for a containerised stack
+# Or use Docker Compose for a containerised stack. The stack authenticates by
+# default and both required values come from .env, so create it first:
+cp .env.example .env   # set TUCANO_JWT_SECRET and TUCANO_BOOTSTRAP_PASSWORD
 docker compose up -d --build
 ```
 
