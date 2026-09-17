@@ -1146,6 +1146,7 @@ const ERROR_CODES: &[&str] = &[
     "not_found",
     "conflict",
     "storage_error",
+    "lock_timeout",
     "missing_token",
     "invalid_token",
     "token_expired",

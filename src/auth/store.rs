@@ -21,6 +21,7 @@ use std::collections::BTreeMap;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use crate::storage::{
     ensure_within, folder_name, folder_wire_id, set_private_permissions, unique_suffix,
@@ -89,18 +90,34 @@ struct UserFile {
     users: Vec<User>,
 }
 
+/// Default lock-acquisition timeout: five seconds.
+const DEFAULT_LOCK_TIMEOUT: Duration = Duration::from_millis(5000);
+
+/// Poll interval between `try_lock_exclusive` attempts.
+const LOCK_POLL_INTERVAL: Duration = Duration::from_millis(10);
+
 /// Accounts and project grants, stored below the data root.
 #[derive(Debug, Clone)]
 pub struct AuthStore {
     root: PathBuf,
+    lock_timeout: Duration,
 }
 
 impl AuthStore {
     /// Open the store below `root`, creating the directories it needs.
     pub fn new(root: impl Into<PathBuf>) -> io::Result<Self> {
-        let store = Self { root: root.into() };
+        let store = Self {
+            root: root.into(),
+            lock_timeout: DEFAULT_LOCK_TIMEOUT,
+        };
         fs::create_dir_all(store.grants_dir())?;
         Ok(store)
+    }
+
+    /// Override the advisory-lock acquisition timeout.
+    pub fn with_lock_timeout(mut self, timeout: Duration) -> Self {
+        self.lock_timeout = timeout;
+        self
     }
 
     fn auth_dir(&self) -> PathBuf {
@@ -128,10 +145,14 @@ impl AuthStore {
         Ok(path)
     }
 
-    /// Take the single writer lock for the data directory.
+    /// Take the single writer lock for the data directory, retrying with a
+    /// deadline so a slow writer cannot starve all others indefinitely.
     ///
     /// This is the lock file the document repository uses, so an authentication
     /// write and a document write never interleave.
+    ///
+    /// Returns `WouldBlock` when the deadline expires, which the domain layer
+    /// translates into a `LockTimeout` — a 503 with `Retry-After`.
     fn acquire_lock(&self) -> io::Result<File> {
         let lock = OpenOptions::new()
             .create(true)
@@ -139,8 +160,22 @@ impl AuthStore {
             .read(true)
             .write(true)
             .open(self.root.join(".tucano.lock"))?;
-        lock.lock_exclusive()?;
-        Ok(lock)
+        let deadline = Instant::now() + self.lock_timeout;
+        loop {
+            match lock.try_lock_exclusive() {
+                Ok(()) => return Ok(lock),
+                Err(_) if Instant::now() < deadline => {
+                    std::thread::sleep(LOCK_POLL_INTERVAL);
+                    continue;
+                }
+                Err(_) => {
+                    return Err(io::Error::new(
+                        io::ErrorKind::WouldBlock,
+                        "lock acquisition timed out",
+                    ));
+                }
+            }
+        }
     }
 
     fn read_users_unlocked(&self) -> io::Result<Vec<User>> {
