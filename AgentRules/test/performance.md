@@ -1,22 +1,16 @@
-# Performance Test Policies
+---
+load-when: writing or changing performance tests or benchmarks
+applies-to: every repository
+---
 
-## Test structure
+# Performance Tests
 
-Performance tests should be structured to measure a single performance characteristic at a time.
+Arrange the system state, dataset, and environment; act by running the workload under test;
+measure timing, throughput, memory, or resource usage; assert the result against the threshold.
 
-Recommended structure:
-- Arrange: define the system state, dataset, and environment
-- Act: run the workload or operation under test
-- Measure: record timing, throughput, memory, or resource usage
-- Assert: compare results to the expected threshold or baseline
-
-## Best practices
-
-- Measure one metric clearly whenever possible.
-- Use a stable environment to reduce noise.
-- Compare results against a known baseline.
-- Define acceptance thresholds before running the test.
-- Keep performance tests separate from fast unit test suites.
-- Document what the test is measuring and why it matters.
-- Avoid flaky tests caused by environment variance.
-- Use repeat runs when needed to smooth out noise.
+- Measure one characteristic at a time, clearly.
+- Set the acceptance threshold before running the test.
+- Compare against a known baseline, using repeat runs to smooth out noise.
+- Use a stable environment; a result that varies with the machine is not a result.
+- Keep performance tests out of the fast unit suite.
+- Record what the test measures and why it matters.

@@ -1,13 +1,18 @@
+---
+load-when: always — read before starting any task
+applies-to: every repository
+---
+
 # Principles
 
-These priorities apply whenever rules or requirements conflict and a judgement call is needed.
+These priorities decide judgement calls when rules, tickets, or requirements conflict, or when no
+rule covers the situation.
 
-- **Security is a priority over new features.** A feature is not done if it introduces an
-  unresolved security risk. Delay or descope a feature rather than ship a known vulnerability,
-  and raise a ticket for any security work deferred to a later change.
-- **Accessibility must be maintained.** Do not merge a change that regresses accessibility
-  conformance already achieved by a repository (for example, TucanoTestGUI's WCAG 2.1 AA gate).
-  Treat an accessibility regression the same as a failing test.
-- **Automate over manual.** Prefer a CI check, script, or workflow over a manual step or a
-  documented human process, wherever one can be built. If a manual step must remain, document why
-  automation is not yet possible and raise a ticket to close the gap.
+- **Security over new features.** A change is not done if it introduces an unresolved security
+  risk. Descope or delay a feature rather than ship a known vulnerability, and raise a ticket for
+  security work deferred to a later change.
+- **Accessibility must not regress.** Do not merge a change that breaks an accessibility
+  conformance gate a repository has already achieved. Treat an accessibility regression exactly as
+  a failing test.
+- **Automate over manual.** Prefer a CI check, script, or workflow to a manual step. Where one
+  must remain, document why automation is not yet possible and raise a ticket to close the gap.

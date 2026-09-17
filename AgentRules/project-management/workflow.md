@@ -1,39 +1,38 @@
+---
+load-when: creating, updating, or closing a ticket, or raising a pull request
+applies-to: every repository
+---
+
 # Workflow
 
-- Every change must have a ticket — if you're working on something and no ticket exists, create one first
-- Update tickets as you work — add comments documenting progress, decisions, and blockers
-- Mark tickets complete — when done, add a final comment summarizing what was accomplished and close the ticket
-- Link PRs to tickets — reference ticket numbers in PR descriptions and commit messages
+## Tickets
 
-## CI/CD Validation
+Every change has a ticket before implementation begins — if none exists, create one first. Use
+[`ticket-template.md`](ticket-template.md), and state the goal, scope, and expected outcome.
 
-**All CI/CD jobs must pass locally before committing and raising a PR.**
+- Keep the title concise; the description is the single source of truth for scope and intent.
+- Comment as you work: progress, decisions, blockers, deviations from the plan, open questions.
+  Do not wait until the end to communicate a change.
+- Keep labels, priority, and links to related tickets and pull requests current, and revise a
+  ticket that no longer reflects the task rather than leaving it stale.
+- Close only once the work is verified against the definition of done and merged: add a final
+  summary comment, reference the pull request and merged commits on the ticket, reference the
+  ticket number in the pull request description and commit messages, and move the item to Done on
+  the project board.
 
-Before pushing changes:
+## CI/CD validation
 
-1. Run all linting and formatting checks locally
-2. Run all unit and integration tests locally
-3. Build the production image/bundle locally (if applicable)
-4. Verify all checks pass before committing
+All CI/CD jobs must pass locally before committing and raising a pull request: run the
+repository's lint and formatting, test, and build commands first, and fix what they report. If a
+job fails after pushing, fix it before starting other work. The commands themselves live in that
+repository's `AGENTS.md`.
 
-This prevents wasted CI cycles and enables faster iteration. If CI fails after push, fix
-immediately before working on other tasks.
+## Pull request dependencies
 
-Repository-specific commands are documented in each project's `AGENTS.md` file.
+When one pull request needs another merged first:
 
-## PR Merge Dependencies
-
-When a PR depends on another PR being merged first:
-
-1. **Add dependency to PR title** — Use format: `[Depends on #XX]` or `[Blocked by #XX]`
-2. **Document in description** — Explain why the dependency exists
-3. **Rebase before merge** — Always rebase on main before final merge to resolve conflicts
-
-**Example:**
-- PR Title: `feat: tags UI component [Depends on #58]`
-- Description: "This PR implements the tags UI. Depends on API PR #58 (tags support) being merged first."
-
-**Dependency Order:**
-- API changes before GUI changes that use them
-- Foundation features before dependent features
-- Breaking changes before migrations
+- Record it in the title — `[Depends on #XX]` or `[Blocked by #XX]` — and explain why in the
+  description.
+- Merge in dependency order: API changes before the clients that use them, foundational features
+  before dependents, breaking changes before migrations.
+- Rebase on the target branch before the final merge.
