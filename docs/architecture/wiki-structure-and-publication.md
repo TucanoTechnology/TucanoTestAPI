@@ -131,7 +131,7 @@ from `docs/`; nothing is authored in the published surface.
   from a checkout, offline.
 
 - **GitHub Wiki mirror (the second destination):** a `wiki` job in
-  [`.github/workflows/ci.yml`](../../.github/workflows/ci.yml) runs on a push to `main` only, stages the
+  [`.github/workflows/docs.yml`](../../.github/workflows/docs.yml) runs on a push to `main` only, stages the
   pages with `node scripts/sync-github-wiki.mjs --out <dir>`, and pushes them to the repository's wiki
   repository. Two details follow from how GitHub models a wiki:
 
@@ -175,7 +175,7 @@ rejection, not a runtime surprise.
 - The **wiki index** is hand-written prose that links only pages that exist; CI keeps it exhaustive (see
   check 3).
 
-**What CI checks** (the `docs` job in [`.github/workflows/ci.yml`](../../.github/workflows/ci.yml)):
+**What CI checks** (the `validate` job in [`.github/workflows/docs.yml`](../../.github/workflows/docs.yml)):
 
 1. **Build must succeed** — `mdbook build docs` runs on every push and pull request; a broken link or a
    page missing from `SUMMARY.md` fails the job.
@@ -208,10 +208,10 @@ together, in one reviewed revision.
   fact, and it is versioned with the code that implements it.
 - Publication is a build step, so it adds no service, no database and no deployment concern.
 - The tooling this record called for is in place: `docs/book.toml`, `docs/SUMMARY.md`,
-  `scripts/generate-operations-reference.mjs`, `scripts/check-docs-links.mjs`, and the `docs` job in
-  `.github/workflows/ci.yml`. The GitHub Wiki mirror added later reuses that guarantee rather than
+  `scripts/generate-operations-reference.mjs`, `scripts/check-docs-links.mjs`, and the `validate` job in
+  `.github/workflows/docs.yml`. The GitHub Wiki mirror added later reuses that guarantee rather than
   weakening it: `scripts/sync-github-wiki.mjs` is a one-way publisher, and its mapping check rides in
-  the same `docs` job.
+  the same `validate` job.
 - The `wiki` job needs a `WIKI_TOKEN` secret to publish; without it the job is a no-op that says so.
   That is a deliberate trade — the wiki feature being enabled does not by itself grant the repository a
   credential that can write to another repository, and a missing credential should not fail a merge.
