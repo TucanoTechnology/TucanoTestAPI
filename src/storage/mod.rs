@@ -16,7 +16,24 @@ pub use layout::{
 };
 
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 use std::io;
+
+/// Compute a short content hash suitable for use as an HTTP ETag.
+///
+/// The hash is the first 32 hex characters (128 bits) of the SHA-256 digest of
+/// the raw stored bytes, which is stable across identical document content and
+/// changes when any byte differs.
+pub fn compute_etag(bytes: &[u8]) -> String {
+    let hash = Sha256::digest(bytes);
+    hash[..16]
+        .iter()
+        .fold(String::with_capacity(32), |mut acc, byte| {
+            use std::fmt::Write;
+            let _ = write!(acc, "{byte:02x}");
+            acc
+        })
+}
 
 /// What a readiness or diagnostics probe could learn about a store.
 ///
@@ -85,6 +102,14 @@ pub trait Repository: Send + Sync {
     /// Read a stored document.
     fn read_at(&self, resource: Resource, parent: Option<&Parent>, id: &str) -> io::Result<Value>;
 
+    /// Read the raw bytes of a stored document, before deserialization.
+    fn read_raw_at(
+        &self,
+        resource: Resource,
+        parent: Option<&Parent>,
+        id: &str,
+    ) -> io::Result<Vec<u8>>;
+
     /// Atomically persist a document.
     fn write_at(
         &self,
@@ -93,6 +118,23 @@ pub trait Repository: Send + Sync {
         id: &str,
         value: &Value,
     ) -> io::Result<()>;
+
+    /// Read, transform and write a document under one lock.
+    ///
+    /// Acquires the advisory lock, re-reads the document, passes it to `transform`
+    /// and writes the result back. An `expected_etag`, when present, is compared
+    /// to a SHA-256 digest of the raw bytes; a mismatch reports
+    /// [`io::ErrorKind::WouldBlock`] so the caller can signal a 412.
+    fn transform_at<F>(
+        &self,
+        resource: Resource,
+        parent: Option<&Parent>,
+        id: &str,
+        expected_etag: Option<&str>,
+        transform: F,
+    ) -> io::Result<()>
+    where
+        F: FnOnce(Value) -> io::Result<Value>;
 
     /// Remove a document, its folder, and everything it owns.
     fn delete_at(&self, resource: Resource, parent: Option<&Parent>, id: &str) -> io::Result<()>;
@@ -123,6 +165,18 @@ pub trait Repository: Send + Sync {
     /// The snapshot is the full document as it stood at `version`; a snapshot
     /// that already exists is never rewritten, so history stays append-only.
     fn save_revision(
+        &self,
+        parent: &Parent,
+        case: &str,
+        version: u64,
+        value: &Value,
+    ) -> io::Result<()>;
+
+    /// Write a revision snapshot without acquiring the advisory lock.
+    ///
+    /// For callers that already hold the lock (such as a [`transform_at`]
+    /// closure) to avoid deadlocking on a second lock acquisition.
+    fn save_revision_locked(
         &self,
         parent: &Parent,
         case: &str,

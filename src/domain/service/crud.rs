@@ -120,17 +120,49 @@ impl<R: Repository> TestService<R> {
     /// the fields it leaves out keep their stored values and a partial body can
     /// never store a document the API cannot read back.
     pub fn update(&self, resource: Resource, id: &str, value: &Value) -> Result<(), DomainError> {
+        self.update_with_etag(resource, id, value, None)
+    }
+
+    /// Validates a partial body, checks an optional `If-Match` ETag, and merges
+    /// the body into the stored document under one lock.
+    ///
+    /// When `expected_etag` is present, the stored document's content hash is
+    /// compared to it under the advisory lock. A mismatch returns
+    /// [`DomainError::PreconditionFailed`] carrying the current ETag so the
+    /// client can re-read and retry. An absent ETag preserves the legacy
+    /// last-writer-wins behaviour.
+    pub fn update_with_etag(
+        &self,
+        resource: Resource,
+        id: &str,
+        value: &Value,
+        expected_etag: Option<String>,
+    ) -> Result<(), DomainError> {
         validation::validate_payload(resource, value)?;
         let parent = self.owner_for_write(resource, id, "Resource not found")?;
-        let stored = self
-            .repository
-            .read_at(resource, parent.as_ref(), id)
-            .map_err(error::read_error)?;
-        let mut merged = merged_document(&stored, value)?;
-        if resource == Resource::Cases {
-            self.revise_case(parent.as_ref(), id, &stored, &mut merged)?;
-        }
-        self.write_marker(resource, parent.as_ref(), id, &merged)
+        let value = value.clone();
+        let etag_ref = expected_etag.as_deref().filter(|s| !s.is_empty());
+        self.repository
+            .transform_at(resource, parent.as_ref(), id, etag_ref, |stored| {
+                let mut merged = merged_document(&stored, &value)
+                    .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e.to_string()))?;
+                if resource == Resource::Cases {
+                    self.revise_case(parent.as_ref(), id, &stored, &mut merged)
+                        .map_err(|e| io::Error::other(e.to_string()))?;
+                }
+                let mut document = merged;
+                super::normalise_marker(resource, id, &mut document);
+                Ok(document)
+            })
+            .map_err(|e| {
+                if e.kind() == io::ErrorKind::WouldBlock {
+                    DomainError::PreconditionFailed {
+                        current_etag: e.to_string(),
+                    }
+                } else {
+                    error::document_error(e, "Resource not found")
+                }
+            })
     }
 
     /// Removes a document, its folder, and everything it owns.
