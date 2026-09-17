@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use tucano_test::{api, auth, config, repository};
 
 #[tokio::main]
@@ -29,10 +31,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let data_dir = data_dir();
     let port = port();
-    let repository = repository::FileRepository::new(data_dir.clone())?;
+    let lock_timeout = lock_timeout();
+    let repository =
+        repository::FileRepository::new(data_dir.clone())?.with_lock_timeout(lock_timeout);
 
     let auth_config = auth::AuthConfig::from_env_and_file(file.as_ref())?;
-    let store = auth::AuthStore::new(&data_dir)?;
+    let store = auth::AuthStore::new(&data_dir)?.with_lock_timeout(lock_timeout);
     auth::ensure_bootstrap_user(&store, &auth_config, now_seconds())?;
     let authentication = api::auth::AuthState::new(store, auth_config);
 
@@ -58,6 +62,24 @@ fn data_dir() -> std::path::PathBuf {
 /// could be read.
 fn port() -> String {
     std::env::var("PORT").unwrap_or_else(|_| "3000".to_owned())
+}
+
+/// How long the advisory lock may be waited on before a write is refused with
+/// a 503. Environment-only like [`data_dir`] and [`port`]: the orchestrator
+/// owns it, and it must be known before anything touches the data directory.
+///
+/// Defaults to 5 000 ms when `TUCANO_LOCK_TIMEOUT_MS` is unset or empty; a
+/// non-numeric value is a startup error.
+fn lock_timeout() -> Duration {
+    match std::env::var("TUCANO_LOCK_TIMEOUT_MS") {
+        Ok(raw) => {
+            let millis: u64 = raw
+                .parse()
+                .unwrap_or_else(|_| panic!("TUCANO_LOCK_TIMEOUT_MS is not a valid u64: {raw:?}"));
+            Duration::from_millis(millis)
+        }
+        Err(_) => Duration::from_millis(5000),
+    }
 }
 
 /// `seed-auth` — creates the demo account and grants of `docs/testing/seed-dataset-spec.md` §5.
