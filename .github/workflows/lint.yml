@@ -42,13 +42,25 @@ jobs:
       image: rust:1.98.0-bookworm
       # Shares the cached crates.io downloads with the other container jobs;
       # see the note in the workflows job above and issue #123.
+      options: --dns 8.8.8.8 --dns 1.1.1.1
       volumes:
         - tucanotestapi-cargo-registry:/usr/local/cargo/registry
         - tucanotestapi-cargo-git:/usr/local/cargo/git
+        - tucanotestapi-rustup:/usr/local/rustup
     steps:
       - uses: actions/checkout@v5
       - name: Install required components
-        run: rustup component add rustfmt
+        run: |
+          for attempt in 1 2 3 4 5; do
+            if rustup component add rustfmt; then
+              exit 0
+            fi
+            delay=$((attempt * 15))
+            echo "::warning::rustup component add failed (attempt $attempt/5), retrying in ${delay}s"
+            sleep "$delay"
+          done
+          echo "::error::rustup component add failed after 5 attempts"
+          exit 1
       - name: Check formatting
         run: cargo fmt --all -- --check
 
@@ -59,12 +71,24 @@ jobs:
       image: rust:1.98.0-bookworm
       # Shares the cached crates.io downloads with the other container jobs;
       # see the note in the workflows job above and issue #123.
+      options: --dns 8.8.8.8 --dns 1.1.1.1
       volumes:
         - tucanotestapi-cargo-registry:/usr/local/cargo/registry
         - tucanotestapi-cargo-git:/usr/local/cargo/git
+        - tucanotestapi-rustup:/usr/local/rustup
     steps:
       - uses: actions/checkout@v5
       - name: Install required components
-        run: rustup component add clippy
+        run: |
+          for attempt in 1 2 3 4 5; do
+            if rustup component add clippy; then
+              exit 0
+            fi
+            delay=$((attempt * 15))
+            echo "::warning::rustup component add failed (attempt $attempt/5), retrying in ${delay}s"
+            sleep "$delay"
+          done
+          echo "::error::rustup component add failed after 5 attempts"
+          exit 1
       - name: Run clippy
         run: cargo clippy --all-targets --all-features -- -D warnings
