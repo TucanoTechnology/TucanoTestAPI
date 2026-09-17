@@ -91,6 +91,26 @@ impl<R: Repository> TestService<R> {
         Self { repository }
     }
 
+    /// The storage backend this service reads from and writes to.
+    pub fn repository(&self) -> &R {
+        &self.repository
+    }
+
+    /// Compute the ETag for the stored document addressed by `resource` and `id`.
+    ///
+    /// Returns `None` when the resource cannot be resolved (missing, ambiguous)
+    /// or the raw bytes cannot be read, which the handler treats as "no ETag"
+    /// rather than as an error — the GET still succeeds, just without the
+    /// header.
+    pub fn etag(&self, resource: Resource, id: &str) -> Option<String> {
+        let parent = self.owner_for_write(resource, id, "").ok()?;
+        let raw = self
+            .repository
+            .read_raw_at(resource, parent.as_ref(), id)
+            .ok()?;
+        Some(crate::storage::compute_etag(&raw))
+    }
+
     // --- operations ----------------------------------------------------
 
     /// Reports what a readiness or diagnostics probe can learn about the store.
@@ -207,8 +227,11 @@ impl<R: Repository> TestService<R> {
             return Err(DomainError::Internal("Stored JSON is invalid".to_owned()));
         };
         if changed {
+            // The caller (transform_at) already holds the advisory lock, so
+            // the revision snapshot is written through the unlocked variant to
+            // avoid deadlocking on a second lock_exclusive() call.
             self.repository
-                .save_revision(parent, id, current, stored)
+                .save_revision_locked(parent, id, current, stored)
                 .map_err(DomainError::from)?;
             object.insert("version".to_owned(), Value::from(current + 1));
             object.insert(

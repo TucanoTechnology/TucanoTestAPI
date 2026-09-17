@@ -48,9 +48,17 @@ macro_rules! crud_handlers {
             State(state): State<AppState<R>>,
             principal: Principal,
             Path(id): Path<String>,
-        ) -> Result<Json<Value>, DomainError> {
+        ) -> Result<(HeaderMap, Json<Value>), DomainError> {
             access::guard_get(&state, &principal, $resource, &id)?;
-            Ok(Json(state.get($resource, &id)?))
+            let document = state.get($resource, &id)?;
+            let mut headers = HeaderMap::new();
+            if let Some(hash) = state.etag($resource, &id) {
+                let etag = format!("\"{hash}\"");
+                if let Ok(value) = HeaderValue::from_str(&etag) {
+                    headers.insert(ETAG, value);
+                }
+            }
+            Ok((headers, Json(document)))
         }
 
         pub(crate) async fn $create<R: Repository>(
@@ -70,10 +78,16 @@ macro_rules! crud_handlers {
             State(state): State<AppState<R>>,
             principal: Principal,
             Path(id): Path<String>,
+            if_match: IfMatchHeader,
             Json(body): Json<Value>,
         ) -> Result<Json<Value>, DomainError> {
             access::guard_update(&state, &principal, $resource, &id, &body)?;
-            state.update($resource, &id, &body)?;
+            let expected_etag = if if_match.0.is_empty() {
+                None
+            } else {
+                Some(if_match.0)
+            };
+            state.update_with_etag($resource, &id, &body, expected_etag)?;
             Ok(Json(json!({ "message": "Resource updated" })))
         }
 
@@ -139,10 +153,11 @@ pub(crate) use duplicate_handler;
 /// Everything the generated handlers name, plus the pieces the hand-written
 /// handlers reach for most often (`Role`, `access`), in one import.
 pub mod prelude {
+    pub(crate) use axum::http::{HeaderMap, HeaderValue};
     pub(crate) use axum::{
         Json,
         extract::{Path, Query, State},
-        http::StatusCode,
+        http::{StatusCode, header::ETAG},
     };
     pub(crate) use serde_json::{Value, json};
 
@@ -152,4 +167,29 @@ pub mod prelude {
         domain::{DomainError, ListQuery},
         storage::Repository,
     };
+
+    /// Extracts the `If-Match` header value, stripping surrounding quotes.
+    ///
+    /// A client sends `If-Match: "abc123"` (with quotes, per RFC 7232); the
+    /// ETag the server computed is stored without them, so the quotes are
+    /// stripped here before comparison. An absent header yields an empty
+    /// string, which the handler maps to `None` (last-writer-wins).
+    pub(crate) struct IfMatchHeader(pub String);
+
+    impl<S: Send + Sync> axum::extract::FromRequestParts<S> for IfMatchHeader {
+        type Rejection = std::convert::Infallible;
+
+        async fn from_request_parts(
+            parts: &mut axum::http::request::Parts,
+            _state: &S,
+        ) -> Result<Self, Self::Rejection> {
+            let value = parts
+                .headers
+                .get(axum::http::header::IF_MATCH)
+                .and_then(|v| v.to_str().ok())
+                .map(|s| s.trim_matches('"').to_owned())
+                .unwrap_or_default();
+            Ok(IfMatchHeader(value))
+        }
+    }
 }
