@@ -19,6 +19,7 @@
 
 # Reference
 
+- [Storage concept and API reference](reference/storage-and-api.md)
 - [Generated operation reference](generated/operations-reference.md)
 - [Roadmap](roadmap.md)
 - [V1 gap analysis](roadmap-v1-gap-analysis.md)

@@ -155,7 +155,7 @@ step of its own — deleting a project cascades to the configurations it holds, 
 listed project go with it rather than being addressed by a bare id whose project would be ambiguous —
 leaves accounts and grants alone, and falls back to a guessed base URL. Use it only when you want the
 whole volume emptied and do not care what else was in it. The three scripts are compared in the
-[repository README](../../README.md#test-data-cleanup).
+[storage concept and API reference](../reference/storage-and-api.md#test-data-cleanup).
 
 ## 4. The auth exception
 
