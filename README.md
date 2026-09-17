@@ -262,6 +262,7 @@ names.
 | `TUCANO_DATA_DIR` | `./data` | The only state: where projects, cases, runs and the `auth/` store live. Environment-only. |
 | `PORT` | `3000` | The port the API binds. Environment-only. |
 | `TUCANO_CONFIG_FILE` | — | Path to the optional configuration file described below. Environment-only; unset means no file. |
+| `TUCANO_CONFIG_KEY_FILE` | — | Path to the key ring file for decrypting AEAD-encrypted secrets in the configuration file. Environment-only; unset means no encryption keys. |
 | `TUCANO_AUTH_REQUIRED` | `false` | Require and enforce a bearer token on every guarded route. When off, every guard returns and the API is anonymous. |
 | `TUCANO_JWT_SECRET` | — | The HS256 signing secret. Required when auth is on; at least 32 bytes. |
 | `TUCANO_JWT_SECRET_FILE` | — | A file to read the secret from. Set this **or** `TUCANO_JWT_SECRET`, never both. |
@@ -321,10 +322,11 @@ TUCANO_CONFIG_FILE=/etc/tucano-test/config.json \
 - **Startup errors name the setting and never the value.** No error line, log record, or response
   contains a secret's value, the configuration file's raw path, or its contents.
 
-`TUCANO_DATA_DIR`, `PORT` and `TUCANO_CONFIG_FILE` itself stay environment-only: all three must be
-readable *before* the file can be located, and the orchestrator owns all three. Encrypted
-configuration files are decided but deferred, and are tracked in
-[docs/security/configuration-decision.md](docs/security/configuration-decision.md).
+`TUCANO_DATA_DIR`, `PORT`, `TUCANO_CONFIG_FILE` and `TUCANO_CONFIG_KEY_FILE` stay
+environment-only: all four must be readable *before* the file can be located or its secrets
+decrypted, and the orchestrator owns all four. See
+[docs/security/configuration-decision.md](docs/security/configuration-decision.md) for the
+encrypted-secrets model and key rotation.
 
 The run scope of a caller is the set of projects a run's `projects` array names, so a caller that may
 write a run could narrow its own later scope by editing that array. Tracked as a known weakness in
