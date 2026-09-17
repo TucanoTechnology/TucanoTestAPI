@@ -1,21 +1,15 @@
-# Unit Test Policies
+---
+load-when: writing or changing unit tests
+applies-to: every repository
+---
 
-## Test structure
+# Unit Tests
 
-Unit tests should verify one unit of behavior at a time.
+Arrange the state and inputs, act on the code under test, assert the observable outcome. Each
+test verifies one thing and fails for one reason.
 
-Recommended structure:
-- Arrange: prepare inputs and mocks
-- Act: execute the function or module behavior
-- Assert: verify the expected result
-
-## Best practices
-
-- Keep tests small and focused.
-- Mock only what is outside the unit boundary.
+- Verify one unit of behaviour at a time.
+- Mock only what is outside the unit boundary, and assert behaviour rather than implementation.
 - Cover success, failure, and edge cases.
-- Prefer behavior verification over implementation verification.
-- Keep setup minimal and readable.
-- Avoid over-mocking where it harms confidence.
-- Use tests as executable documentation for expected behavior.
-- Keep unit tests fast so they can run frequently in CI.
+- Keep setup minimal and readable, and tests fast enough to run on every change.
+- Treat the tests as executable documentation of expected behaviour.
