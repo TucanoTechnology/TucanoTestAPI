@@ -8,6 +8,7 @@ use axum::http::{HeaderMap, Request, StatusCode, header};
 use http_body_util::BodyExt;
 use serde_json::{Value, json};
 use std::path::Path;
+use std::time::Duration;
 use tempfile::TempDir;
 use tower::ServiceExt;
 use tucano_test::{api, repository::FileRepository};
@@ -28,6 +29,27 @@ pub fn app_at(path: &Path) -> Router {
     // Authentication is off by default, which is the behaviour these suites were
     // written against: the resource routes ask no caller for a token. The suites
     // that exercise authentication build their own router.
+    let config = tucano_test::auth::AuthConfig {
+        required: false,
+        jwt_secret: None,
+        access_ttl: tucano_test::auth::DEFAULT_ACCESS_TTL,
+        refresh_ttl: tucano_test::auth::DEFAULT_REFRESH_TTL,
+        bootstrap_username: None,
+        bootstrap_password: None,
+    };
+    api::router(repository, api::auth::AuthState::new(store, config))
+}
+
+/// Like [`app_at`], but with a custom advisory-lock timeout for both the
+/// repository and the auth store, so tests can force a fast 503 instead of
+/// waiting the default five seconds.
+pub fn app_at_with_lock_timeout(path: &Path, timeout: Duration) -> Router {
+    let repository = FileRepository::new(path)
+        .expect("repository")
+        .with_lock_timeout(timeout);
+    let store = tucano_test::auth::AuthStore::new(path)
+        .expect("auth store")
+        .with_lock_timeout(timeout);
     let config = tucano_test::auth::AuthConfig {
         required: false,
         jwt_secret: None,

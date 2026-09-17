@@ -10,7 +10,7 @@ use axum::{
     Json,
     http::{
         StatusCode,
-        header::{ETAG, HeaderValue, WWW_AUTHENTICATE},
+        header::{ETAG, HeaderValue, RETRY_AFTER, WWW_AUTHENTICATE},
     },
     response::{IntoResponse, Response},
 };
@@ -100,6 +100,17 @@ impl IntoResponse for DomainError {
                 "storage_error",
                 "Storage operation failed",
             ),
+            DomainError::LockTimeout => {
+                let mut response = envelope(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "lock_timeout",
+                    "The server is busy processing another write. Please retry.",
+                );
+                response
+                    .headers_mut()
+                    .insert(RETRY_AFTER, HeaderValue::from_static("1"));
+                response
+            }
             DomainError::Unauthenticated { code, message } => {
                 let mut response = envelope(StatusCode::UNAUTHORIZED, code, &message);
                 response
