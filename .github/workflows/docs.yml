@@ -20,11 +20,25 @@ jobs:
       # the registry cache this would re-download every crate from
       # static.crates.io, and a refused DNS lookup there fails the job
       # (see issue #123).
+      options: --dns 8.8.8.8 --dns 1.1.1.1
       volumes:
         - tucanotestapi-cargo-registry:/usr/local/cargo/registry
         - tucanotestapi-cargo-git:/usr/local/cargo/git
+        - tucanotestapi-rustup:/usr/local/rustup
     steps:
       - uses: actions/checkout@v5
+      - name: Sync Rust toolchain
+        run: |
+          for attempt in 1 2 3 4 5; do
+            if rustup show; then
+              exit 0
+            fi
+            delay=$((attempt * 15))
+            echo "::warning::rustup sync failed (attempt $attempt/5), retrying in ${delay}s"
+            sleep "$delay"
+          done
+          echo "::error::rustup sync failed after 5 attempts"
+          exit 1
       # The rust image ships no Node, so the two file-reading checks need one
       # installed before they can run. This is deliberately an apt install
       # rather than actions/setup-node: a container job runs as the image's own
