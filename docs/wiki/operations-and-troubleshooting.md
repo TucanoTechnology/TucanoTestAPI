@@ -165,12 +165,15 @@ Then confirm the service is serving *and* can write before declaring the restore
 
 ```sh
 curl -s http://localhost:3100/ready
-scripts/smoke.sh http://localhost:3100
+SMOKE_USERNAME=admin SMOKE_PASSWORD='<the TUCANO_BOOTSTRAP_PASSWORD from .env>' \
+  scripts/smoke.sh http://localhost:3100
 ```
 
 `scripts/smoke.sh` creates a scratch project and case, reads both back, deletes both and confirms
 each deletion. It needs `curl` and `python3`, and it always tries to remove what it created, so a
-failing run does not leave scratch data behind.
+failing run does not leave scratch data behind. Since the shipped stack authenticates, it signs in
+with `SMOKE_USERNAME`/`SMOKE_PASSWORD` (or accepts a ready-made `SMOKE_TOKEN`) and presents the
+token on every request.
 
 Two cautions: `rm -rf ./data` in the restore step is deliberate and destructive — it is why the
 service is stopped first, and why the archive name carries a timestamp. And after restoring an older
@@ -234,6 +237,26 @@ Every rejection the application raises has the same envelope, so the `code` is w
 ```json
 {"error":{"code":"…","message":"…","requestId":"…"}}
 ```
+
+### Compose refuses to start: a required variable is missing a value
+
+Symptom: `docker compose up -d` prints a `error while interpolating services.api.environment.…`
+line naming `TUCANO_JWT_SECRET` or `TUCANO_BOOTSTRAP_PASSWORD`, and no container is created — this
+happens before the service is reached.
+
+Cause: the shipped `docker-compose.yml` turns authentication on and declares both values required,
+and the `.env` file Compose loads does not set them. The fix is not to weaken the file: create `.env`
+from the committed template and set them.
+
+```sh
+cp .env.example .env
+# set TUCANO_JWT_SECRET (at least 32 bytes) and TUCANO_BOOTSTRAP_PASSWORD
+docker compose up -d --build
+```
+
+`docker compose config --quiet` validates the result without printing the secrets. Deliberately
+unauthenticated runs set `TUCANO_AUTH_REQUIRED=false` in `.env` — only on a machine nothing else can
+reach, see the [installation page](getting-started.md#authentication-is-on-by-default).
 
 ### The container exits immediately and the log says the data directory is unusable
 

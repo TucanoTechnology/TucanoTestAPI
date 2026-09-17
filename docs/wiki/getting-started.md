@@ -39,6 +39,22 @@ takes care of it for a deployment. The prerequisites table in the
 
 ## Start it
 
+The stack authenticates by default, so it needs a signing secret and a bootstrap account before it
+will start. Copy the committed template and set both values:
+
+```sh
+cp .env.example .env
+# edit .env: set TUCANO_JWT_SECRET (at least 32 bytes) and TUCANO_BOOTSTRAP_PASSWORD
+```
+
+`docker compose` loads `.env` automatically from this directory, and the file is gitignored, so the
+secret never reaches a commit. Generate one with
+`node -e 'process.stdout.write(require("node:crypto").randomBytes(32).toString("base64url"))'`. A
+missing `TUCANO_JWT_SECRET` or `TUCANO_BOOTSTRAP_PASSWORD` stops Compose with an error that names
+the variable, rather than starting an anonymous stack.
+
+Then build and start:
+
 ```sh
 docker compose up -d --build
 ```
@@ -91,24 +107,21 @@ anything and nothing else to lose.
 
 Test data is never committed: `.gitignore` excludes `/data/*`.
 
-## Turn authentication on (optional)
+## Authentication is on by default
 
-**Authentication is off by default.** With it off, every route is anonymous, which is the right
-choice for a laptop. Turn it on before the instance is reachable by anything you do not trust.
+The shipped `docker-compose.yml` sets `TUCANO_AUTH_REQUIRED=true`, so the container you just started
+already guards every route except the public ones. The `.env` values are what it uses:
+`TUCANO_JWT_SECRET` signs the tokens and `TUCANO_BOOTSTRAP_USERNAME`/`TUCANO_BOOTSTRAP_PASSWORD`
+create the first `systemAdmin` account — but only when the data directory holds no accounts at all,
+so it is a one-time step and harmless to leave in place (change the password afterwards, or remove
+the two variables).
 
-Add to the `api` service in `docker-compose.yml`:
-
-```yaml
-    environment:
-      TUCANO_AUTH_REQUIRED: "true"
-      TUCANO_JWT_SECRET: "a-development-secret-of-at-least-32-bytes"
-      TUCANO_BOOTSTRAP_USERNAME: admin
-      TUCANO_BOOTSTRAP_PASSWORD: change-me-please
-```
-
-Then `docker compose up -d`. The bootstrap pair creates the first `systemAdmin` account — but only
-when the data directory holds no accounts at all, so it is a one-time step and harmless to leave in
-place (change the password afterwards, or remove the two variables).
+The service's own default is `false`, so a deployment that supplies its own container definition and
+does not set the variable runs anonymously. **That is only safe on a machine nothing else can
+reach.** The API is published on every interface (`3100:3000`), so if you want an unauthenticated
+stack that is still reachable from elsewhere, restrict the publish to loopback instead — change the
+mapping to `127.0.0.1:3100:3000`. To turn authentication off in this stack, set
+`TUCANO_AUTH_REQUIRED=false` in `.env`.
 
 With authentication on, a guarded route without a token answers `401` with a challenge:
 
@@ -128,7 +141,7 @@ Log in and keep the access token:
 ```sh
 TOKEN=$(curl -s -X POST http://localhost:3100/auth/login \
   -H 'Content-Type: application/json' \
-  -d '{"username":"admin","password":"change-me-please"}' \
+  -d '{"username":"admin","password":"<the TUCANO_BOOTSTRAP_PASSWORD from .env>"}' \
   | python3 -c 'import sys, json; print(json.load(sys.stdin)["accessToken"])')
 ```
 
@@ -163,7 +176,7 @@ variables on this page keep working unchanged whether or not a file is used.
 
 ## Create your first project
 
-The walkthrough below assumes authentication is **off**. With it on, append
+The walkthrough below runs against the authenticated stack, so log in first (above) and append
 `-H "Authorization: Bearer $TOKEN"` to each call.
 
 ### 1. Create a project
@@ -287,10 +300,13 @@ curl -s -X DELETE "http://localhost:3100/projects/My%20First%20Project.json"
 
 Or let `scripts/smoke.sh` do a whole scratch round trip for you — create a project and a case, read
 both back, delete both and confirm each deletion. It needs `curl` and `python3`, and defaults to a
-different port than Compose publishes, so pass the base URL:
+different port than Compose publishes, so pass the base URL. The stack authenticates, so hand it the
+bootstrap credentials from `.env`; it signs in through `POST /auth/login` and presents the token on
+every request:
 
 ```sh
-scripts/smoke.sh http://localhost:3100
+SMOKE_USERNAME=admin SMOKE_PASSWORD='<the TUCANO_BOOTSTRAP_PASSWORD from .env>' \
+  scripts/smoke.sh http://localhost:3100
 ```
 
 ## Where to go next

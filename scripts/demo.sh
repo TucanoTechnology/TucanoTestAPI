@@ -15,12 +15,12 @@
 # -------------------------------------------------------
 # Seeding needs an auth-enforcing deployment: scripts/seed.mjs signs in as the
 # bootstrap account, and scripts/validate-seed.mjs proves an unprivileged
-# session is refused a guarded write. The committed docker-compose.yml is
-# deliberately the plain, unauthenticated shape a reader starts with, so this
-# script writes a demo copy of it into a temporary directory with the auth
-# environment and the demo profile injected. The committed file is never
-# modified, no second Compose file joins the repository, and `docker compose up
-# -d --build` still means exactly what README.md says it means.
+# session is refused a guarded write. The committed docker-compose.yml already
+# enforces auth, but the demo needs its own port, Compose project name and admin
+# password, so this script writes a demo copy of it into a temporary directory
+# with those injected. The committed file is never modified, no second Compose
+# file joins the repository, and the demo stack stays separate from the one
+# `docker compose up -d --build` starts.
 #
 # The stack is a separate Compose project (tucano-test-demo by default) on its
 # own host port, so it never touches the long-running `tucano-test` stack or its
@@ -98,11 +98,13 @@ compose() {
 
 # --- the generated stack -----------------------------------------------------
 
-# The API service block below is the committed one, plus the auth environment
-# and the demo profile, with the port and the data volume made configurable.
-# It is generated from a here-document rather than by editing the committed YAML
-# so the two cannot silently diverge in the parts that matter: the image, the
-# build context, the read-only root and the tmpfs are copied verbatim.
+# The API service block below mirrors the committed one, with the auth
+# environment spelled out as literal values instead of the `.env` interpolation
+# the committed file uses, plus the demo profile and a configurable port and
+# data volume. It is generated from a here-document rather than by editing the
+# committed YAML so the two cannot silently diverge in the parts that matter:
+# the image, the build context, the read-only root and the tmpfs are copied
+# verbatim.
 write_compose_file() {
   cat >"$COMPOSE_FILE" <<YAML
 services:
