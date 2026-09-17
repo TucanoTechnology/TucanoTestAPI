@@ -18,12 +18,17 @@ pub enum DomainError {
     InvalidRequest { code: &'static str, message: String },
     /// The request conflicts with existing state.
     Conflict(String),
+    /// The `If-Match` ETag does not match the stored document; another writer
+    /// changed it between the client's read and its update.
+    PreconditionFailed { current_etag: String },
     /// The uploaded attachment is larger than [`crate::domain::MAX_ATTACHMENT_BYTES`].
     PayloadTooLarge,
     /// An unexpected internal failure carrying a specific message.
     Internal(String),
     /// A storage failure whose details must not reach the client.
     Storage,
+    /// The advisory lock could not be acquired within the configured timeout.
+    LockTimeout,
     /// The request carried no usable credential; `code` names what was wrong.
     Unauthenticated { code: &'static str, message: String },
     /// The credential is valid, but the caller may not perform this request.
@@ -121,9 +126,13 @@ impl Display for DomainError {
             Self::NotFound(message) => write!(formatter, "not found: {message}"),
             Self::InvalidRequest { code, message } => write!(formatter, "{code}: {message}"),
             Self::Conflict(message) => write!(formatter, "conflict: {message}"),
+            Self::PreconditionFailed { current_etag } => {
+                write!(formatter, "precondition failed: ETag is now {current_etag}")
+            }
             Self::PayloadTooLarge => write!(formatter, "payload too large"),
             Self::Internal(message) => write!(formatter, "internal error: {message}"),
             Self::Storage => write!(formatter, "storage operation failed"),
+            Self::LockTimeout => write!(formatter, "lock acquisition timed out"),
             Self::Unauthenticated { code, message } => write!(formatter, "{code}: {message}"),
             Self::Forbidden(message) => write!(formatter, "forbidden: {message}"),
         }
@@ -139,11 +148,16 @@ impl From<io::Error> for DomainError {
     /// child of the same parent, by a folder holding a different kind of child,
     /// or by the parent's own marker file — so it becomes a conflict rather
     /// than an opaque storage failure.
+    ///
+    /// `WouldBlock` is the lock-timeout signal: `acquire_lock` returns it when
+    /// the advisory lock cannot be obtained within the configured deadline, so
+    /// it becomes a `LockTimeout` rather than a generic storage failure.
     fn from(error: io::Error) -> Self {
         match error.kind() {
             io::ErrorKind::NotFound => Self::NotFound("Resource not found".to_owned()),
             io::ErrorKind::InvalidInput => Self::invalid_request("Invalid request"),
             io::ErrorKind::AlreadyExists => Self::Conflict("Resource already exists".to_owned()),
+            io::ErrorKind::WouldBlock => Self::LockTimeout,
             _ => Self::Storage,
         }
     }

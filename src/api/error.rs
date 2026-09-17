@@ -10,7 +10,7 @@ use axum::{
     Json,
     http::{
         StatusCode,
-        header::{HeaderValue, WWW_AUTHENTICATE},
+        header::{ETAG, HeaderValue, RETRY_AFTER, WWW_AUTHENTICATE},
     },
     response::{IntoResponse, Response},
 };
@@ -75,6 +75,18 @@ impl IntoResponse for DomainError {
                 envelope(StatusCode::BAD_REQUEST, code, &message)
             }
             DomainError::Conflict(message) => envelope(StatusCode::CONFLICT, "conflict", &message),
+            DomainError::PreconditionFailed { current_etag } => {
+                let mut response = envelope(
+                    StatusCode::PRECONDITION_FAILED,
+                    "conflict",
+                    "The document was modified by another request. Re-read and retry.",
+                );
+                let etag_value = format!("\"{current_etag}\"");
+                if let Ok(value) = HeaderValue::from_str(&etag_value) {
+                    response.headers_mut().insert(ETAG, value);
+                }
+                response
+            }
             DomainError::PayloadTooLarge => envelope(
                 StatusCode::PAYLOAD_TOO_LARGE,
                 "payload_too_large",
@@ -88,6 +100,17 @@ impl IntoResponse for DomainError {
                 "storage_error",
                 "Storage operation failed",
             ),
+            DomainError::LockTimeout => {
+                let mut response = envelope(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "lock_timeout",
+                    "The server is busy processing another write. Please retry.",
+                );
+                response
+                    .headers_mut()
+                    .insert(RETRY_AFTER, HeaderValue::from_static("1"));
+                response
+            }
             DomainError::Unauthenticated { code, message } => {
                 let mut response = envelope(StatusCode::UNAUTHORIZED, code, &message);
                 response
@@ -224,6 +247,9 @@ mod tests {
             DomainError::forbidden("not yours"),
             DomainError::NotFound("missing".into()),
             DomainError::Conflict("taken".into()),
+            DomainError::PreconditionFailed {
+                current_etag: "abc".into(),
+            },
             DomainError::Storage,
         ] {
             assert!(

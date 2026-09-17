@@ -3,7 +3,7 @@ use serde_json::{Map, Value};
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
-use std::time::UNIX_EPOCH;
+use std::time::{Duration, Instant, UNIX_EPOCH};
 
 use super::layout::{
     Parent, Placement, RESERVED_PROJECT_CHILDREN, attachment_path, case_dir, case_marker,
@@ -21,12 +21,19 @@ mod crud;
 mod probe;
 mod revisions;
 
+/// Default lock-acquisition timeout: five seconds.
+const DEFAULT_LOCK_TIMEOUT: Duration = Duration::from_millis(5000);
+
+/// Poll interval between `try_lock_exclusive` attempts.
+const LOCK_POLL_INTERVAL: Duration = Duration::from_millis(10);
+
 /// Filesystem-backed [`Repository`]: a folder tree for projects, suites, and
 /// cases, and one JSON document per run, milestone and configuration inside the
 /// project folder that owns it.
 #[derive(Clone)]
 pub struct FileRepository {
     root: PathBuf,
+    lock_timeout: Duration,
 }
 
 impl FileRepository {
@@ -38,9 +45,23 @@ impl FileRepository {
             }
         }
         refuse_legacy_layout(&root)?;
-        Ok(Self { root })
+        Ok(Self {
+            root,
+            lock_timeout: DEFAULT_LOCK_TIMEOUT,
+        })
     }
 
+    /// Override the advisory-lock acquisition timeout.
+    pub fn with_lock_timeout(mut self, timeout: Duration) -> Self {
+        self.lock_timeout = timeout;
+        self
+    }
+
+    /// Take the single writer lock for the data directory, retrying with a
+    /// deadline so a slow writer cannot starve all others indefinitely.
+    ///
+    /// Returns `WouldBlock` when the deadline expires, which the domain layer
+    /// translates into a `LockTimeout` — a 503 with `Retry-After`.
     fn acquire_lock(&self) -> io::Result<File> {
         let lock = OpenOptions::new()
             .create(true)
@@ -48,8 +69,22 @@ impl FileRepository {
             .read(true)
             .write(true)
             .open(self.root.join(".tucano.lock"))?;
-        lock.lock_exclusive()?;
-        Ok(lock)
+        let deadline = Instant::now() + self.lock_timeout;
+        loop {
+            match lock.try_lock_exclusive() {
+                Ok(()) => return Ok(lock),
+                Err(_) if Instant::now() < deadline => {
+                    std::thread::sleep(LOCK_POLL_INTERVAL);
+                    continue;
+                }
+                Err(_) => {
+                    return Err(io::Error::new(
+                        io::ErrorKind::WouldBlock,
+                        "lock acquisition timed out",
+                    ));
+                }
+            }
+        }
     }
 
     /// Path of the document that stores `resource` addressed by `id`.
@@ -396,6 +431,27 @@ impl Repository for FileRepository {
     fn read_at(&self, resource: Resource, parent: Option<&Parent>, id: &str) -> io::Result<Value> {
         FileRepository::read_at(self, resource, parent, id)
     }
+    fn read_raw_at(
+        &self,
+        resource: Resource,
+        parent: Option<&Parent>,
+        id: &str,
+    ) -> io::Result<Vec<u8>> {
+        FileRepository::read_raw_at(self, resource, parent, id)
+    }
+    fn transform_at<F>(
+        &self,
+        resource: Resource,
+        parent: Option<&Parent>,
+        id: &str,
+        expected_etag: Option<&str>,
+        transform: F,
+    ) -> io::Result<()>
+    where
+        F: FnOnce(Value) -> io::Result<Value>,
+    {
+        FileRepository::transform_at(self, resource, parent, id, expected_etag, transform)
+    }
     fn write_at(
         &self,
         resource: Resource,
@@ -436,6 +492,15 @@ impl Repository for FileRepository {
         value: &Value,
     ) -> io::Result<()> {
         FileRepository::save_revision(self, parent, case, version, value)
+    }
+    fn save_revision_locked(
+        &self,
+        parent: &Parent,
+        case: &str,
+        version: u64,
+        value: &Value,
+    ) -> io::Result<()> {
+        FileRepository::save_revision_locked(self, parent, case, version, value)
     }
     fn list_revisions(&self, parent: &Parent, case: &str) -> io::Result<Vec<u64>> {
         FileRepository::list_revisions(self, parent, case)

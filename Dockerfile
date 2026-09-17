@@ -5,6 +5,7 @@ ARG BUILD_NUMBER=local
 WORKDIR /build
 COPY Cargo.toml Cargo.lock ./
 COPY src ./src
+COPY benches ./benches
 COPY openapi.json swagger.html ./
 RUN cargo build --release
 

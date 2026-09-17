@@ -214,3 +214,73 @@ mod data_integrity_tests {
         );
     }
 }
+
+#[cfg(test)]
+mod lock_timeout_tests {
+    use super::*;
+    use axum::http::StatusCode;
+    use fs2::FileExt;
+    use serde_json::json;
+    use std::fs::OpenOptions;
+    use std::sync::{Arc, Barrier};
+    use std::thread;
+    use std::time::Duration;
+
+    #[tokio::test]
+    async fn a_write_under_lock_contention_answers_503_with_retry_after() {
+        let directory = TempDir::new().expect("temp dir");
+        // A short timeout so the test does not wait the default five seconds.
+        let timeout = Duration::from_millis(200);
+        let app = common::app_at_with_lock_timeout(directory.path(), timeout);
+
+        // Hold the advisory lock from a background thread so the API's
+        // acquire_lock sees a contention it cannot resolve within the deadline.
+        let lock_path = directory.path().join(".tucano.lock");
+        let barrier = Arc::new(Barrier::new(2));
+        let barrier_bg = Arc::clone(&barrier);
+
+        let handle = thread::spawn(move || {
+            let lock = OpenOptions::new()
+                .create(true)
+                .truncate(false)
+                .read(true)
+                .write(true)
+                .open(&lock_path)
+                .expect("open lock file");
+            lock.lock_exclusive().expect("lock");
+            // Signal the main thread that the lock is held.
+            barrier_bg.wait();
+            // Keep the lock held long enough for the API's deadline to expire.
+            thread::sleep(Duration::from_millis(1000));
+            drop(lock);
+        });
+
+        // Wait for the background thread to hold the lock before sending the
+        // request, so the contention window is deterministic.
+        barrier.wait();
+
+        let (status, headers, body) = common::send_full(
+            &app,
+            common::json_request("POST", "/projects", &json!({"name": "blocked"})),
+        )
+        .await;
+
+        assert_eq!(
+            status,
+            StatusCode::SERVICE_UNAVAILABLE,
+            "a lock timeout must answer 503"
+        );
+        let value: serde_json::Value =
+            serde_json::from_slice(&body).unwrap_or(serde_json::Value::Null);
+        common::assert_error_envelope(&value, "lock_timeout");
+        assert_eq!(
+            headers
+                .get(axum::http::header::RETRY_AFTER)
+                .and_then(|v| v.to_str().ok()),
+            Some("1"),
+            "a 503 from lock contention must carry Retry-After: 1"
+        );
+
+        handle.join().expect("background thread");
+    }
+}
