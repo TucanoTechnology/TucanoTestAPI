@@ -66,8 +66,8 @@ in `Cargo.toml`.
 The 14 call sites, in full, so the class is closed rather than sampled:
 
 ```
-.github/workflows/ci.yml:17           actions/checkout@v5
-.github/workflows/ci.yml:34           actions/checkout@v5
+.github/workflows/lint.yml:15         actions/checkout@v5
+.github/workflows/lint.yml:30         actions/checkout@v5
 .github/workflows/security.yml:34     actions/checkout@v5
 .github/workflows/security.yml:43     actions/checkout@v5
 .github/workflows/security.yml:52     actions/checkout@v5
@@ -86,10 +86,12 @@ The 14 call sites, in full, so the class is closed rather than sampled:
 
 | Workflow | `permissions` | Trigger |
 | --- | --- | --- |
-| `ci.yml` | `contents: read` | `pull_request`, `push` to `main`/`feature/**` |
+| `lint.yml` | `contents: read` | `pull_request`, `push` to `main`/`feature/**` |
+| `docs.yml` | `contents: read` | same |
+| `build-test.yml` | `contents: read` | same |
 | `security.yml` | `contents: read`, `actions: write` | same, plus weekly `cron: "17 3 * * 1"` |
 | `release.yml` | `contents: read`, `packages: write` | `push` to `main` and `v*.*.*` tags |
-| `auto-merge.yml` | `contents: write`, `pull-requests: write`, `checks: read` | `workflow_run` on CI/Security completion |
+| `auto-merge.yml` | `contents: write`, `pull-requests: write`, `checks: read` | `workflow_run` on Lint/Docs/Build and Test/Security completion |
 
 `release.yml` publishes to `ghcr.io/${{ github.repository }}` (`ghcr.io/tucanotechnology/tucanotestapi`)
 with `docker/build-push-action@v6`, `push: true`, `tags` from `docker/metadata-action@v5`
@@ -400,7 +402,7 @@ Controls the audit tested and could not break. Each entry names the test that pr
   exactly the failure mode [audit-scope.md](audit-scope.md) § "Controls that already exist" calls a
   finding for this job ("a document that is published without listing the crate's components").
 - **No workflow grants a write scope broader than its job needs, and none requests an OIDC token.**
-  `ci.yml` and `security.yml` hold `contents: read` (`security.yml` adds only `actions: write`, for
+  `lint.yml`, `docs.yml`, `build-test.yml` and `security.yml` hold `contents: read` (`security.yml` adds only `actions: write`, for
   the artifact upload); `release.yml` adds only `packages: write`, for the GHCR push; no workflow
   declares `id-token: write` or any other elevated scope. `auto-merge.yml`'s broader
   `contents: write` / `pull-requests: write` is examined on its own in F-179-3, and its trigger is

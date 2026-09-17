@@ -1,0 +1,88 @@
+name: Build and Test
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - feature/**
+
+permissions:
+  contents: read
+
+jobs:
+  rustdoc:
+    name: Check rustdoc
+    runs-on: [self-hosted, Linux, X64]
+    container:
+      image: rust:1.98.0-bookworm
+      # The container filesystem is thrown away between runs, so without a cache
+      # this job re-downloads every crate from static.crates.io each time, and a
+      # refused DNS lookup there fails the job (see issue #123). Mounting only
+      # the registry and git subdirectories caches the downloads while leaving
+      # the image's own cargo and rustc binaries in place.
+      volumes:
+        - tucanotestapi-cargo-registry:/usr/local/cargo/registry
+        - tucanotestapi-cargo-git:/usr/local/cargo/git
+    steps:
+      - uses: actions/checkout@v5
+      - name: Check rustdoc
+        # Intra-doc links and doc-comment warnings are caught before they reach
+        # a published crate: a broken link or a missing page is a build failure
+        # rather than a silent omission.
+        env:
+          RUSTDOCFLAGS: "-D warnings"
+        run: cargo doc --no-deps --document-private-items
+
+  test:
+    name: Run tests
+    runs-on: [self-hosted, Linux, X64]
+    container:
+      image: rust:1.98.0-bookworm
+      # Shares the cached crates.io downloads with the other container jobs;
+      # see the note in the rustdoc job above and issue #123.
+      volumes:
+        - tucanotestapi-cargo-registry:/usr/local/cargo/registry
+        - tucanotestapi-cargo-git:/usr/local/cargo/git
+    steps:
+      - uses: actions/checkout@v5
+      - name: Run unit and integration tests
+        run: cargo test --all-targets --all-features
+
+  release:
+    name: Build release
+    runs-on: [self-hosted, Linux, X64]
+    container:
+      image: rust:1.98.0-bookworm
+      # Shares the cached crates.io downloads with the other container jobs;
+      # see the note in the rustdoc job above and issue #123.
+      volumes:
+        - tucanotestapi-cargo-registry:/usr/local/cargo/registry
+        - tucanotestapi-cargo-git:/usr/local/cargo/git
+    steps:
+      - uses: actions/checkout@v5
+      - name: Build release
+        run: cargo build --release
+
+  dependencies:
+    name: Check for unused dependencies
+    runs-on: [self-hosted, Linux, X64]
+    container:
+      image: rust:1.98.0-bookworm
+      # Shares the cached crates.io downloads with the other container jobs;
+      # see the note in the rustdoc job above and issue #123.
+      volumes:
+        - tucanotestapi-cargo-registry:/usr/local/cargo/registry
+        - tucanotestapi-cargo-git:/usr/local/cargo/git
+    env:
+      RUSTUP_TOOLCHAIN: "1.98.0"
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install cargo-machete
+        run: cargo install cargo-machete --locked
+      - name: Check for unused dependencies
+        # cargo-machete scans the source for imports and flags any dependency
+        # listed in Cargo.toml but never referenced. A false positive is
+        # acknowledged with `--with-metadata`, which reads the `[package.metadata]`
+        # section to exempt intentional entries.
+        run: cargo machete --with-metadata

@@ -338,7 +338,7 @@ overwritten — if you need a different build, you need a different run, not a r
 
 A registry or `static.crates.io` lookup was refused. This has bitten this project's CI before and is
 almost always transient. Re-run the job; if it recurs, the workflow's cargo registry and git caches
-are the mitigation already in place (`checks` in `.github/workflows/ci.yml` mounts them so a cold
+are the mitigation already in place (the cargo registry volumes in `.github/workflows/build-test.yml` and `.github/workflows/lint.yml` mount them so a cold
 container does not re-download every crate).
 
 ### A page in this wiki contradicts the running service
