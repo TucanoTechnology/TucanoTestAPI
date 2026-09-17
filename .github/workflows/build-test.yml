@@ -16,16 +16,30 @@ jobs:
     runs-on: [self-hosted, Linux, X64]
     container:
       image: rust:1.98.0-bookworm
-      # The container filesystem is thrown away between runs, so without a cache
-      # this job re-downloads every crate from static.crates.io each time, and a
-      # refused DNS lookup there fails the job (see issue #123). Mounting only
-      # the registry and git subdirectories caches the downloads while leaving
-      # the image's own cargo and rustc binaries in place.
+      # Public resolvers bypass the runner's occasionally-flaky DNS, which has
+      # been observed failing lookups for both static.rust-lang.org and
+      # static.crates.io. The cargo volumes cache crate downloads (issue #123);
+      # the rustup volume caches the toolchain and its rustfmt/clippy components
+      # so that only the first run (or a toolchain bump) needs the network.
+      options: --dns 8.8.8.8 --dns 1.1.1.1
       volumes:
         - tucanotestapi-cargo-registry:/usr/local/cargo/registry
         - tucanotestapi-cargo-git:/usr/local/cargo/git
+        - tucanotestapi-rustup:/usr/local/rustup
     steps:
       - uses: actions/checkout@v5
+      - name: Sync Rust toolchain
+        run: |
+          for attempt in 1 2 3 4 5; do
+            if rustup show; then
+              exit 0
+            fi
+            delay=$((attempt * 15))
+            echo "::warning::rustup sync failed (attempt $attempt/5), retrying in ${delay}s"
+            sleep "$delay"
+          done
+          echo "::error::rustup sync failed after 5 attempts"
+          exit 1
       - name: Check rustdoc
         # Intra-doc links and doc-comment warnings are caught before they reach
         # a published crate: a broken link or a missing page is a build failure
@@ -41,11 +55,25 @@ jobs:
       image: rust:1.98.0-bookworm
       # Shares the cached crates.io downloads with the other container jobs;
       # see the note in the rustdoc job above and issue #123.
+      options: --dns 8.8.8.8 --dns 1.1.1.1
       volumes:
         - tucanotestapi-cargo-registry:/usr/local/cargo/registry
         - tucanotestapi-cargo-git:/usr/local/cargo/git
+        - tucanotestapi-rustup:/usr/local/rustup
     steps:
       - uses: actions/checkout@v5
+      - name: Sync Rust toolchain
+        run: |
+          for attempt in 1 2 3 4 5; do
+            if rustup show; then
+              exit 0
+            fi
+            delay=$((attempt * 15))
+            echo "::warning::rustup sync failed (attempt $attempt/5), retrying in ${delay}s"
+            sleep "$delay"
+          done
+          echo "::error::rustup sync failed after 5 attempts"
+          exit 1
       - name: Run unit and integration tests
         run: cargo test --all-targets --all-features
 
@@ -56,11 +84,25 @@ jobs:
       image: rust:1.98.0-bookworm
       # Shares the cached crates.io downloads with the other container jobs;
       # see the note in the rustdoc job above and issue #123.
+      options: --dns 8.8.8.8 --dns 1.1.1.1
       volumes:
         - tucanotestapi-cargo-registry:/usr/local/cargo/registry
         - tucanotestapi-cargo-git:/usr/local/cargo/git
+        - tucanotestapi-rustup:/usr/local/rustup
     steps:
       - uses: actions/checkout@v5
+      - name: Sync Rust toolchain
+        run: |
+          for attempt in 1 2 3 4 5; do
+            if rustup show; then
+              exit 0
+            fi
+            delay=$((attempt * 15))
+            echo "::warning::rustup sync failed (attempt $attempt/5), retrying in ${delay}s"
+            sleep "$delay"
+          done
+          echo "::error::rustup sync failed after 5 attempts"
+          exit 1
       - name: Build release
         run: cargo build --release
 
@@ -71,9 +113,11 @@ jobs:
       image: rust:1.98.0-bookworm
       # Shares the cached crates.io downloads with the other container jobs;
       # see the note in the rustdoc job above and issue #123.
+      options: --dns 8.8.8.8 --dns 1.1.1.1
       volumes:
         - tucanotestapi-cargo-registry:/usr/local/cargo/registry
         - tucanotestapi-cargo-git:/usr/local/cargo/git
+        - tucanotestapi-rustup:/usr/local/rustup
     env:
       RUSTUP_TOOLCHAIN: "1.98.0"
     steps:
