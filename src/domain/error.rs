@@ -18,6 +18,9 @@ pub enum DomainError {
     InvalidRequest { code: &'static str, message: String },
     /// The request conflicts with existing state.
     Conflict(String),
+    /// The `If-Match` ETag does not match the stored document; another writer
+    /// changed it between the client's read and its update.
+    PreconditionFailed { current_etag: String },
     /// The uploaded attachment is larger than [`crate::domain::MAX_ATTACHMENT_BYTES`].
     PayloadTooLarge,
     /// An unexpected internal failure carrying a specific message.
@@ -121,6 +124,9 @@ impl Display for DomainError {
             Self::NotFound(message) => write!(formatter, "not found: {message}"),
             Self::InvalidRequest { code, message } => write!(formatter, "{code}: {message}"),
             Self::Conflict(message) => write!(formatter, "conflict: {message}"),
+            Self::PreconditionFailed { current_etag } => {
+                write!(formatter, "precondition failed: ETag is now {current_etag}")
+            }
             Self::PayloadTooLarge => write!(formatter, "payload too large"),
             Self::Internal(message) => write!(formatter, "internal error: {message}"),
             Self::Storage => write!(formatter, "storage operation failed"),

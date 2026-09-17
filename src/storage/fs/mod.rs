@@ -396,6 +396,27 @@ impl Repository for FileRepository {
     fn read_at(&self, resource: Resource, parent: Option<&Parent>, id: &str) -> io::Result<Value> {
         FileRepository::read_at(self, resource, parent, id)
     }
+    fn read_raw_at(
+        &self,
+        resource: Resource,
+        parent: Option<&Parent>,
+        id: &str,
+    ) -> io::Result<Vec<u8>> {
+        FileRepository::read_raw_at(self, resource, parent, id)
+    }
+    fn transform_at<F>(
+        &self,
+        resource: Resource,
+        parent: Option<&Parent>,
+        id: &str,
+        expected_etag: Option<&str>,
+        transform: F,
+    ) -> io::Result<()>
+    where
+        F: FnOnce(Value) -> io::Result<Value>,
+    {
+        FileRepository::transform_at(self, resource, parent, id, expected_etag, transform)
+    }
     fn write_at(
         &self,
         resource: Resource,
@@ -436,6 +457,15 @@ impl Repository for FileRepository {
         value: &Value,
     ) -> io::Result<()> {
         FileRepository::save_revision(self, parent, case, version, value)
+    }
+    fn save_revision_locked(
+        &self,
+        parent: &Parent,
+        case: &str,
+        version: u64,
+        value: &Value,
+    ) -> io::Result<()> {
+        FileRepository::save_revision_locked(self, parent, case, version, value)
     }
     fn list_revisions(&self, parent: &Parent, case: &str) -> io::Result<Vec<u64>> {
         FileRepository::list_revisions(self, parent, case)

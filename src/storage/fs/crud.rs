@@ -160,6 +160,66 @@ impl FileRepository {
         self.read_json(&self.document(resource, parent, id)?)
     }
 
+    pub(super) fn read_raw_at(
+        &self,
+        resource: Resource,
+        parent: Option<&Parent>,
+        id: &str,
+    ) -> io::Result<Vec<u8>> {
+        std::fs::read(self.document(resource, parent, id)?)
+    }
+
+    pub(super) fn transform_at<F>(
+        &self,
+        resource: Resource,
+        parent: Option<&Parent>,
+        id: &str,
+        expected_etag: Option<&str>,
+        transform: F,
+    ) -> io::Result<()>
+    where
+        F: FnOnce(Value) -> io::Result<Value>,
+    {
+        let lock = self.acquire_lock()?;
+        let result = (|| {
+            let path = self.document(resource, parent, id)?;
+            if !path.is_file() {
+                return Err(io::Error::new(
+                    io::ErrorKind::NotFound,
+                    "Resource not found",
+                ));
+            }
+            let raw = std::fs::read(&path)?;
+
+            if let Some(expected) = expected_etag {
+                let current = crate::storage::compute_etag(&raw);
+                if current != expected {
+                    return Err(io::Error::new(io::ErrorKind::WouldBlock, current));
+                }
+            }
+
+            let stored: Value = serde_json::from_slice(&raw)
+                .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+            let new_value = transform(stored)?;
+
+            if matches!(resource, Resource::Suites | Resource::Cases)
+                && let Some(parent) = parent
+            {
+                let folder = self.folder(resource, Some(parent), id)?;
+                if folder.file_name().and_then(|name| name.to_str()) == Some(parent.marker_name()) {
+                    return Err(io::Error::new(
+                        io::ErrorKind::AlreadyExists,
+                        "child name shadows the parent marker",
+                    ));
+                }
+                self.ensure_kind_available(resource, Some(parent), id)?;
+            }
+            self.write_json(&path, &new_value)
+        })();
+        lock.unlock()?;
+        result
+    }
+
     pub(super) fn write_at(
         &self,
         resource: Resource,
