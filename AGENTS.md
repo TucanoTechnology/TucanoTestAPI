@@ -209,6 +209,9 @@ matching `docs/` category and link it from the README documentation table.
   SHA is the audit identity.
 - Never reuse or overwrite a release tag or build number. Pull requests may build artifacts for
   validation but do not publish releases.
+- The September 2026 rewrite of every commit is the single recorded exception: it replaced every
+  SHA and moved `v1.0.0` and `v1.0.1`. See
+  [`docs/deployment/release-tag-rewrite-2026-09.md`](docs/deployment/release-tag-rewrite-2026-09.md).
 - Release artifacts must be built from protected branches or protected release tags and must retain
   the JSON volume-mount model.
 

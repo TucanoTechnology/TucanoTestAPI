@@ -201,7 +201,10 @@ backend, and the terms of the mirror permission are in
 ## Rolling back a release
 
 Rollback means redeploying a previously recorded **immutable** tag — never moving a tag, never
-rebuilding from a branch. Record what is serving before you change anything:
+rebuilding from a branch. (The September 2026 rewrite of every commit moved the two release tags
+once — see the [rewrite record](../deployment/release-tag-rewrite-2026-09.md) — but the
+`build-<run number>` tags this procedure deploys are unaffected.) Record what is serving before you
+change anything:
 
 ```sh
 IMAGE="ghcr.io/tucanotechnology/tucanotestapi"
@@ -332,7 +335,10 @@ If the workflow ran but the image is missing, read its log: the publish step log
 `secrets.GITHUB_TOKEN` and requires `packages: write`
 ([`.github/workflows/release.yml`](../../.github/workflows/release.yml)), so a missing tag means that
 step failed rather than that the tag was withheld. Tags are immutable and are never reused or
-overwritten — if you need a different build, you need a different run, not a re-push.
+overwritten — if you need a different build, you need a different run, not a re-push. The September
+2026 rewrite of every commit is the one time a tag moved; see the
+[rewrite record](../deployment/release-tag-rewrite-2026-09.md) before treating a `v1.0.0` or
+`v1.0.1` revision label as the commit the image was built from.
 
 ### CI fails with a DNS or crates.io error
 
