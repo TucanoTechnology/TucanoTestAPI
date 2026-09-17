@@ -240,7 +240,10 @@ Application releases use Semantic Versioning. Update the Cargo package version a
 protected `vMAJOR.MINOR.PATCH` tag for a release; release tags are immutable and must never be
 reused. Every push to `main` also publishes an immutable GHCR image tagged `build-<GitHub run
 number>`. Tagged releases publish both the SemVer tag and their build number, while the commit SHA
-remains the audit identity. Pull requests build and test without publishing release artifacts.
+remains the audit identity. Pull requests build and test without publishing release artifacts. The
+one exception in this repository's history — the September 2026 rewrite of every commit, which moved
+both release tags — is recorded in
+[docs/deployment/release-tag-rewrite-2026-09.md](docs/deployment/release-tag-rewrite-2026-09.md).
 
 ## Storage concept
 
@@ -294,6 +297,7 @@ reference](docs/reference/storage-and-api.md). The error contract reconciliation
 | [docs/deployment/config.example.json](docs/deployment/config.example.json) | The configuration-file template, kept valid against the loader's schema by a unit test |
 | [docs/deployment/configuration-reference.md](docs/deployment/configuration-reference.md) | Every setting: environment variable, file key, default, sensitivity, precedence rules, validation rules, and the encrypted-secret envelope format (#190) |
 | [docs/deployment/canary-validation-and-rollback.md](docs/deployment/canary-validation-and-rollback.md) | Canary validation, the scratch-CRUD smoke check, and safe rollback |
+| [docs/deployment/release-tag-rewrite-2026-09.md](docs/deployment/release-tag-rewrite-2026-09.md) | The September 2026 history rewrite: which refs moved, what it means for the published images, and how to recover the pre-rewrite objects (#275) |
 | [docs/security/threat-model.md](docs/security/threat-model.md) | Trust boundaries, abuse cases, and security invariants |
 | [docs/security/authentication-decision.md](docs/security/authentication-decision.md) | The authentication decision and its implemented tracking ticket (#130) |
 | [docs/security/configuration-decision.md](docs/security/configuration-decision.md) | The configuration and secrets decision (#187): environment variables versus a unified file, precedence, and key management |

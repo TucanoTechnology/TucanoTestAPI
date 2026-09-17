@@ -14,7 +14,9 @@ It is an operations document: it adds no route, no field and no stored-document 
   `ghcr.io/tucanotechnology/tucanotestapi` for every push to `main` and every `v*.*.*` tag, tagged
   with the immutable build tag `build-<run number>` and, for SemVer releases, `vMAJOR.MINOR.PATCH`
   (see *Release numbering* in `AGENTS.md`). Validation uses an existing immutable tag — a tag is
-  never moved or reused.
+  never moved or reused. The one exception to date is the September 2026 rewrite of every commit,
+  which moved both release tags; the `build-<run number>` tags this runbook deploys are unaffected
+  (see the [rewrite record](release-tag-rewrite-2026-09.md)).
 - **A shared, writable data volume.** Every replica mounts the same persistent POSIX volume at
   `TUCANO_DATA_DIR` (the container default is `/data`); `docker-compose.yml` maps `./data:/data` on
   port `3100:3000`. A local Docker volume serves a single node; multi-node deployments must supply

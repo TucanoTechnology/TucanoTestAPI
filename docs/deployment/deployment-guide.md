@@ -33,7 +33,9 @@ push to `main` and every `v*.*.*` tag, with two immutable tags:
 The build number also fills the `BUILD_NUMBER` build argument, which the Dockerfile records as the
 `org.opencontainers.image.version` label. Release tags and build numbers are never reused or
 overwritten (see *Release numbering policy* in [`AGENTS.md`](../../AGENTS.md)); the commit SHA is the
-audit identity. Pull requests build and test but publish no release artifact.
+audit identity. Pull requests build and test but publish no release artifact. The single exception to
+date is the September 2026 rewrite of every commit, which moved both release tags — see the
+[release tag history rewrite record](release-tag-rewrite-2026-09.md).
 
 ## The JSON volume mount is the only state
 
@@ -311,7 +313,10 @@ Rollback means re-deploying the previously recorded **immutable** image tag — 
 never rebuilding from a branch. The validated promotion-and-rollback procedure, including the canary
 replica and the scratch-CRUD smoke check that gates promotion, is
 [`docs/deployment/canary-validation-and-rollback.md`](canary-validation-and-rollback.md); this
-section records the tag and compatibility rules that procedure depends on.
+section records the tag and compatibility rules that procedure depends on. The September 2026
+history rewrite moved the two release tags once, as recorded in the
+[rewrite record](release-tag-rewrite-2026-09.md); the `build-<run number>` tags this section deploys
+are unaffected.
 
 Record the tag that is serving before any change:
 

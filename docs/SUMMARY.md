@@ -45,6 +45,7 @@
 - [Deployment guide](deployment/deployment-guide.md)
 - [Configuration reference](deployment/configuration-reference.md)
 - [Canary validation and rollback](deployment/canary-validation-and-rollback.md)
+- [Release tag history rewrite, September 2026](deployment/release-tag-rewrite-2026-09.md)
 
 # Security
 
