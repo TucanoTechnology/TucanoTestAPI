@@ -15,23 +15,18 @@ they will arrive here as an automated pull request.**
 
 | Area | Rules |
 | --- | --- |
-| Branching | [`AgentRules/coding/branch-strategy.md`](AgentRules/coding/branch-strategy.md) |
-| Git usage | [`AgentRules/coding/git-usage-policy.md`](AgentRules/coding/git-usage-policy.md) |
+| Branching, git usage | [`AgentRules/coding/branching-and-git.md`](AgentRules/coding/branching-and-git.md) |
 | Dependencies | [`AgentRules/coding/dependencies.md`](AgentRules/coding/dependencies.md) |
-| API design | [`AgentRules/coding/api-design.md`](AgentRules/coding/api-design.md) |
-| JSON and schema validation | [`AgentRules/coding/json-and-schema-validation.md`](AgentRules/coding/json-and-schema-validation.md) |
-| Code review | [`AgentRules/coding/code-review-best-practices.md`](AgentRules/coding/code-review-best-practices.md) |
-| Secret protection | [`AgentRules/security/secret-protection.md`](AgentRules/security/secret-protection.md) |
-| Security and commits | [`AgentRules/security/security-and-commit-rules.md`](AgentRules/security/security-and-commit-rules.md) |
-| Ticket management | [`AgentRules/project-management/ticket-management-policy.md`](AgentRules/project-management/ticket-management-policy.md) |
-| Ticket updates | [`AgentRules/project-management/ticket-update-policy.md`](AgentRules/project-management/ticket-update-policy.md) |
+| API design, JSON and schema validation | [`AgentRules/coding/api-and-data-contracts.md`](AgentRules/coding/api-and-data-contracts.md) |
+| Code review | [`AgentRules/coding/code-review.md`](AgentRules/coding/code-review.md) |
+| Secret protection, security and commits | [`AgentRules/security/security.md`](AgentRules/security/security.md) |
+| Ticket management, ticket updates | [`AgentRules/project-management/workflow.md`](AgentRules/project-management/workflow.md) |
 | Ticket template | [`AgentRules/project-management/ticket-template.md`](AgentRules/project-management/ticket-template.md) |
-| Workflow | [`AgentRules/project-management/workflow.md`](AgentRules/project-management/workflow.md) |
 | Unit tests | [`AgentRules/test/unit.md`](AgentRules/test/unit.md) |
 | Contract tests | [`AgentRules/test/contract.md`](AgentRules/test/contract.md) |
 | Performance tests | [`AgentRules/test/performance.md`](AgentRules/test/performance.md) |
-| Playwright tests | [`AgentRules/test/playwright.md`](AgentRules/test/playwright.md) |
-| Conflicts and exceptions | [`AgentRules/generic/questions.md`](AgentRules/generic/questions.md) |
+| Browser and end-to-end tests | [`AgentRules/test/ui.md`](AgentRules/test/ui.md) |
+| Principles, conflicts and exceptions | [`AgentRules/generic/principles.md`](AgentRules/generic/principles.md) |
 
 Related repository: [TucanoTestGUI](https://github.com/TucanoTechnology/TucanoTestGUI).
 
