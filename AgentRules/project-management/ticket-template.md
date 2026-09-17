@@ -1,9 +1,13 @@
+---
+load-when: writing a new ticket
+applies-to: every repository
+---
+
 # Ticket Template
 
 When creating a new ticket, include:
 
-**Description:**
-What needs to be done and why.
+**Description:** what needs to be done and why.
 
 **Definition of Done:**
 - [ ] Criterion 1
