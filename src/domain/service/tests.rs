@@ -1,0 +1,1298 @@
+use super::*;
+use crate::storage::FileRepository;
+use serde_json::json;
+use tempfile::TempDir;
+
+fn service() -> (TestService<FileRepository>, TempDir) {
+    let directory = TempDir::new().expect("temporary directory");
+    let repository = FileRepository::new(directory.path()).expect("repository");
+    (TestService::new(repository), directory)
+}
+
+fn list(service: &TestService<FileRepository>, resource: Resource) -> Vec<String> {
+    service
+        .list(resource, &ListQuery::default())
+        .expect("list should succeed")
+}
+
+/// Creates `checkout` and returns the parent that owns its children.
+fn project(service: &TestService<FileRepository>) -> Parent {
+    service
+        .create(
+            Resource::Projects,
+            &json!({ "projectId": "P-1", "name": "checkout" }),
+        )
+        .expect("project");
+    Parent::Project("checkout.json".to_owned())
+}
+
+/// The parent of suite `smoke` inside project `checkout`.
+fn smoke() -> Parent {
+    Parent::Suite {
+        project: "checkout.json".to_owned(),
+        suite: "smoke.json".to_owned(),
+    }
+}
+
+/// Creates suite `smoke` inside `project` and returns its parent.
+fn add_suite(service: &TestService<FileRepository>, project: &Parent) -> Parent {
+    service
+        .create_in(
+            Resource::Suites,
+            project,
+            &json!({ "suiteId": "S-1", "name": "smoke" }),
+        )
+        .expect("suite");
+    smoke()
+}
+
+fn case(service: &TestService<FileRepository>, parent: &Parent, id: &str) {
+    service
+        .create_in(
+            Resource::Cases,
+            parent,
+            &json!({ "testCaseId": id, "title": "T", "expectedResult": "E" }),
+        )
+        .expect("case");
+}
+
+#[test]
+fn documents_round_trip_through_the_service() {
+    let (service, _directory) = service();
+
+    let created = service
+        .create(Resource::Projects, &json!({ "name": "checkout" }))
+        .expect("create");
+    assert_eq!(created.id, "checkout.json");
+    assert_eq!(list(&service, Resource::Projects), vec!["checkout.json"]);
+
+    let stored = service
+        .get(Resource::Projects, "checkout.json")
+        .expect("get");
+    assert_eq!(stored["name"], "checkout");
+
+    service
+        .update(
+            Resource::Projects,
+            "checkout.json",
+            &json!({ "name": "updated" }),
+        )
+        .expect("update");
+    assert_eq!(
+        service
+            .get(Resource::Projects, "checkout.json")
+            .expect("get")["name"],
+        "updated"
+    );
+
+    service
+        .delete(Resource::Projects, "checkout.json")
+        .expect("delete");
+    assert!(service.get(Resource::Projects, "checkout.json").is_err());
+    assert!(list(&service, Resource::Projects).is_empty());
+}
+
+#[test]
+fn creating_a_duplicate_is_a_conflict() {
+    let (service, _directory) = service();
+    service
+        .create(Resource::Projects, &json!({ "name": "checkout" }))
+        .expect("create");
+
+    let error = service
+        .create(Resource::Projects, &json!({ "name": "checkout" }))
+        .expect_err("duplicate");
+    assert!(matches!(error, DomainError::Conflict(_)));
+}
+
+#[test]
+fn an_unknown_field_is_rejected_before_anything_is_persisted() {
+    let (service, _directory) = service();
+
+    let error = service
+        .create(Resource::Projects, &json!({ "name": "alpha", "sneaky": 1 }))
+        .expect_err("unknown field");
+    assert!(matches!(
+        error,
+        DomainError::InvalidRequest {
+            code: "invalid_request",
+            ..
+        }
+    ));
+    assert!(
+        list(&service, Resource::Projects).is_empty(),
+        "a rejected payload must not be stored"
+    );
+}
+
+#[test]
+fn updating_a_missing_document_is_not_found() {
+    let (service, _directory) = service();
+    let error = service
+        .update(
+            Resource::Projects,
+            "missing.json",
+            &json!({ "name": "missing" }),
+        )
+        .expect_err("missing");
+    assert!(matches!(error, DomainError::NotFound(_)));
+}
+
+#[test]
+fn listing_filters_by_substring_and_by_tag() {
+    let (service, _directory) = service();
+    service
+        .create(Resource::Projects, &json!({ "name": "alpha" }))
+        .expect("alpha");
+    service
+        .create(
+            Resource::Projects,
+            &json!({ "name": "beta", "tags": ["Smoke"] }),
+        )
+        .expect("beta");
+
+    let filtered = service
+        .list(
+            Resource::Projects,
+            &ListQuery {
+                configuration: None,
+                filter: Some("ALPH".to_owned()),
+                tags: None,
+            },
+        )
+        .expect("filter");
+    assert_eq!(filtered, vec!["alpha.json"]);
+
+    let tagged = service
+        .list(
+            Resource::Projects,
+            &ListQuery {
+                configuration: None,
+                filter: None,
+                tags: Some(" smoke ".to_owned()),
+            },
+        )
+        .expect("tags");
+    assert_eq!(tagged, vec!["beta.json"]);
+
+    let untagged = service
+        .list(
+            Resource::Projects,
+            &ListQuery {
+                configuration: None,
+                filter: None,
+                tags: Some("does-not-exist".to_owned()),
+            },
+        )
+        .expect("tags");
+    assert!(untagged.is_empty());
+}
+
+#[test]
+fn runs_are_listed_by_the_configuration_they_link() {
+    let (service, _directory) = service();
+    let home = project(&service);
+    for (id, name) in [("R-1", "nightly"), ("R-2", "weekly"), ("R-3", "release")] {
+        service
+            .create_in(
+                Resource::Runs,
+                &home,
+                &json!({ "testRunId": id, "name": name, "timestamp": "1", "tags": ["ci"] }),
+            )
+            .expect("run");
+    }
+    for name in ["chrome-linux", "firefox-windows"] {
+        service
+            .create_in(Resource::Configurations, &home, &json!({ "name": name }))
+            .expect("configuration");
+    }
+    for (run, configuration) in [
+        ("nightly.json", "chrome-linux.json"),
+        ("weekly.json", "firefox-windows.json"),
+    ] {
+        service
+            .link_configuration_to_run(run, &json!({ "configId": configuration }))
+            .expect("link");
+    }
+
+    let query = |configuration: &str| ListQuery {
+        configuration: Some(configuration.to_owned()),
+        ..ListQuery::default()
+    };
+
+    assert_eq!(
+        service
+            .list(Resource::Runs, &query("chrome-linux.json"))
+            .unwrap(),
+        vec!["nightly.json"]
+    );
+    assert_eq!(
+        service
+            .list(Resource::Runs, &query("firefox-windows.json"))
+            .unwrap(),
+        vec!["weekly.json"]
+    );
+
+    // A configuration no run links yields an empty listing rather than an
+    // error.
+    assert_eq!(
+        service
+            .list(Resource::Runs, &query("firefox-linux.json"))
+            .unwrap(),
+        Vec::<String>::new()
+    );
+
+    // The configuration filter composes with the substring and tag filters.
+    let composed = ListQuery {
+        filter: Some("NIGHT".to_owned()),
+        tags: Some(" ci ".to_owned()),
+        configuration: Some("chrome-linux.json".to_owned()),
+    };
+    assert_eq!(
+        service.list(Resource::Runs, &composed).unwrap(),
+        vec!["nightly.json"]
+    );
+
+    // A run that links a different configuration drops out of the composed
+    // listing even though it carries the same tag.
+    let tag_only = ListQuery {
+        tags: Some("ci".to_owned()),
+        configuration: Some("chrome-linux.json".to_owned()),
+        ..ListQuery::default()
+    };
+    assert_eq!(
+        service.list(Resource::Runs, &tag_only).unwrap(),
+        vec!["nightly.json"]
+    );
+
+    // The filter says nothing about other collections, which keeps their
+    // listings intact rather than emptying them.
+    assert_eq!(
+        service
+            .list(Resource::Configurations, &query("chrome-linux.json"))
+            .unwrap(),
+        vec!["chrome-linux.json", "firefox-windows.json"]
+    );
+}
+
+#[test]
+fn reading_a_project_assembles_its_children() {
+    let (service, _directory) = service();
+    let project = project(&service);
+    let suite = add_suite(&service, &project);
+    case(&service, &suite, "TC-suite");
+    case(&service, &project, "TC-direct");
+
+    let document = service
+        .get(Resource::Projects, "checkout.json")
+        .expect("project");
+    assert_eq!(document["testSuites"].as_array().map(Vec::len), Some(1));
+    assert_eq!(document["testSuites"][0]["name"], "smoke");
+    assert_eq!(
+        document["testSuites"][0]["testCases"][0]["testCaseId"],
+        "TC-suite"
+    );
+    assert_eq!(document["testCases"].as_array().map(Vec::len), Some(1));
+    assert_eq!(document["testCases"][0]["testCaseId"], "TC-direct");
+
+    let suite_document = service.get(Resource::Suites, "smoke.json").expect("suite");
+    assert_eq!(suite_document["testCases"][0]["testCaseId"], "TC-suite");
+}
+
+#[test]
+fn a_project_without_direct_cases_omits_the_test_cases_field() {
+    let (service, _directory) = service();
+    project(&service);
+    let document = service
+        .get(Resource::Projects, "checkout.json")
+        .expect("project");
+    assert!(document.get("testCases").is_none());
+    assert_eq!(document["testSuites"].as_array().map(Vec::len), Some(0));
+}
+
+#[test]
+fn markers_store_empty_child_arrays() {
+    let (service, _directory) = service();
+    let project = project(&service);
+    service
+        .create_in(
+            Resource::Suites,
+            &project,
+            &json!({
+                "suiteId": "S-1",
+                "name": "smoke",
+                "testCases": [{
+                    "testCaseId": "TC-ignored",
+                    "title": "ignored",
+                    "expectedResult": "ignored"
+                }]
+            }),
+        )
+        .expect("suite");
+
+    let suite = Parent::Suite {
+        project: "checkout.json".to_owned(),
+        suite: "smoke.json".to_owned(),
+    };
+    case(&service, &suite, "TC-real");
+
+    let marker = service
+        .repository
+        .read_at(Resource::Suites, Some(&project), "smoke.json")
+        .expect("marker");
+    assert_eq!(
+        marker["testCases"].as_array().map(Vec::len),
+        Some(0),
+        "the marker must not duplicate membership"
+    );
+
+    // A nested case in the payload is not materialised as a child either.
+    assert_eq!(
+        list(&service, Resource::Cases),
+        vec!["TC-real".to_owned()],
+        "only folders are children"
+    );
+
+    let project_marker = service
+        .repository
+        .read_at(Resource::Projects, None, "checkout.json")
+        .expect("project marker");
+    assert_eq!(
+        project_marker["testSuites"].as_array().map(Vec::len),
+        Some(0)
+    );
+}
+
+#[test]
+fn an_identifier_in_several_parents_is_a_conflict() {
+    let (service, _directory) = service();
+    let project = project(&service);
+    let suite = add_suite(&service, &project);
+    case(&service, &project, "TC-1");
+    case(&service, &suite, "TC-1");
+
+    let error = service
+        .get(Resource::Cases, "TC-1")
+        .expect_err("ambiguous identifier");
+    assert!(matches!(error, DomainError::Conflict(ref message) if message.contains("2 parents")));
+    assert_eq!(
+        list(&service, Resource::Cases),
+        vec!["TC-1".to_owned()],
+        "lists de-duplicate rather than fail"
+    );
+    assert!(service.delete(Resource::Cases, "TC-1").is_err());
+}
+
+#[test]
+fn cases_join_suites_by_copy_and_leave_the_source_alone() {
+    let (service, _directory) = service();
+    let project = project(&service);
+    add_suite(&service, &project);
+    case(&service, &project, "TC-001");
+
+    service
+        .add_case_to_suite("smoke.json", &json!({ "testCaseId": "TC-001" }))
+        .expect("copied into the suite");
+    let suite_document = service.get(Resource::Suites, "smoke.json").expect("suite");
+    assert_eq!(
+        suite_document["testCases"].as_array().map(Vec::len),
+        Some(1)
+    );
+
+    let duplicate = service
+        .add_case_to_suite("smoke.json", &json!({ "testCaseId": "TC-001" }))
+        .expect_err("the suite already owns the case");
+    assert!(matches!(duplicate, DomainError::Conflict(_)));
+
+    let missing = service
+        .add_case_to_suite("smoke.json", &json!({}))
+        .expect_err("missing field");
+    assert!(matches!(missing, DomainError::InvalidRequest { .. }));
+
+    // The identifier now names two folders, so the global route refuses it.
+    assert!(matches!(
+        service
+            .require_test_case("TC-001")
+            .expect_err("two occurrences"),
+        DomainError::Conflict(_)
+    ));
+
+    service
+        .remove_case_from_suite("smoke.json", "TC-001")
+        .expect("remove");
+    let suite_document = service.get(Resource::Suites, "smoke.json").expect("suite");
+    assert_eq!(
+        suite_document["testCases"].as_array().map(Vec::len),
+        Some(0)
+    );
+
+    let project_document = service
+        .get(Resource::Projects, "checkout.json")
+        .expect("project");
+    assert_eq!(
+        project_document["testCases"].as_array().map(Vec::len),
+        Some(1),
+        "the copied case left the project's own case untouched"
+    );
+}
+
+#[test]
+fn moving_a_case_leaves_it_with_one_home() {
+    let (service, _directory) = service();
+    let project = project(&service);
+    let suite = add_suite(&service, &project);
+    case(&service, &project, "TC-001");
+
+    let composed = service
+        .compose(
+            Resource::Cases,
+            &suite,
+            &json!({ "testCaseId": "TC-001", "mode": "move" }),
+        )
+        .expect("move");
+    assert_eq!(
+        composed,
+        Composed::Placed {
+            id: "TC-001".to_owned(),
+            mode: Placement::Move
+        }
+    );
+
+    let document = service
+        .get(Resource::Projects, "checkout.json")
+        .expect("project");
+    assert!(document.get("testCases").is_none(), "the old home lost it");
+    let suite_document = service.get(Resource::Suites, "smoke.json").expect("suite");
+    assert_eq!(
+        suite_document["testCases"].as_array().map(Vec::len),
+        Some(1)
+    );
+    assert_eq!(list(&service, Resource::Cases), vec!["TC-001".to_owned()]);
+}
+
+#[test]
+fn a_suite_can_be_placed_into_another_project() {
+    let (service, _directory) = service();
+    let project = project(&service);
+    add_suite(&service, &project);
+    service
+        .create(Resource::Projects, &json!({ "name": "other" }))
+        .expect("other project");
+    let other = Parent::Project("other.json".to_owned());
+
+    service
+        .compose(
+            Resource::Suites,
+            &other,
+            &json!({ "suiteId": "smoke.json" }),
+        )
+        .expect("copy");
+
+    assert_eq!(
+        service
+            .list_children(&other, Resource::Suites)
+            .expect("children"),
+        vec!["smoke.json".to_owned()]
+    );
+    assert_eq!(
+        service
+            .list_children(&project, Resource::Suites)
+            .expect("children"),
+        vec!["smoke.json".to_owned()],
+        "a copy leaves the source in place"
+    );
+}
+
+#[test]
+fn composition_grammar_rejects_mixed_and_unknown_modes() {
+    let (service, _directory) = service();
+    let project = project(&service);
+
+    let mixed = service
+        .compose(
+            Resource::Suites,
+            &project,
+            &json!({ "name": "smoke", "mode": "copy" }),
+        )
+        .expect_err("mixed");
+    assert!(matches!(mixed, DomainError::InvalidRequest { .. }));
+
+    let unknown = service
+        .compose(
+            Resource::Suites,
+            &project,
+            &json!({ "suiteId": "smoke.json", "mode": "sideways" }),
+        )
+        .expect_err("unknown mode");
+    assert!(matches!(unknown, DomainError::InvalidRequest { .. }));
+
+    let unnamed = service
+        .compose(Resource::Suites, &project, &json!({}))
+        .expect_err("nothing to create or place");
+    assert!(matches!(unnamed, DomainError::InvalidRequest { .. }));
+}
+
+#[test]
+fn creating_in_a_missing_parent_is_not_found() {
+    let (service, _directory) = service();
+    let missing = Parent::Project("ghost.json".to_owned());
+    let error = service
+        .create_in(
+            Resource::Suites,
+            &missing,
+            &json!({ "suiteId": "S-1", "name": "smoke" }),
+        )
+        .expect_err("no project");
+    assert!(matches!(error, DomainError::NotFound(ref m) if m == "Project not found"));
+    assert!(list(&service, Resource::Suites).is_empty());
+}
+
+#[test]
+fn deleting_a_project_cascades_through_the_tree() {
+    let (service, _directory) = service();
+    let project = project(&service);
+    let suite = add_suite(&service, &project);
+    case(&service, &suite, "TC-suite");
+    case(&service, &project, "TC-direct");
+
+    service
+        .delete(Resource::Projects, "checkout.json")
+        .expect("cascade");
+
+    assert!(list(&service, Resource::Projects).is_empty());
+    assert!(list(&service, Resource::Suites).is_empty());
+    assert!(list(&service, Resource::Cases).is_empty());
+}
+
+#[test]
+fn duplicating_a_project_stores_a_copy_under_a_new_identifier() {
+    let (service, _directory) = service();
+    service
+        .create(
+            Resource::Projects,
+            &json!({ "projectId": "P-1", "name": "checkout" }),
+        )
+        .expect("create");
+
+    let new_id = service
+        .duplicate(
+            &duplicate::PROJECT,
+            "checkout.json",
+            &json!({ "newId": "P-2.json" }),
+        )
+        .expect("duplicate");
+    assert_eq!(new_id, "P-2.json");
+
+    let copy = service.get(Resource::Projects, "P-2.json").expect("copy");
+    assert_eq!(copy["projectId"], "P-2.json");
+    assert_eq!(copy["name"], "checkout");
+    assert!(
+        service.get(Resource::Projects, "checkout.json").is_ok(),
+        "the source must remain"
+    );
+}
+
+#[test]
+fn a_duplicated_suite_stays_in_its_project() {
+    let (service, _directory) = service();
+    let project = project(&service);
+    service
+        .create_in(
+            Resource::Suites,
+            &project,
+            &json!({ "suiteId": "S-1", "name": "smoke" }),
+        )
+        .expect("suite");
+
+    let new_id = service
+        .duplicate(
+            &duplicate::SUITE,
+            "smoke.json",
+            &json!({ "newId": "S-2.json" }),
+        )
+        .expect("duplicate");
+    assert_eq!(new_id, "S-2.json");
+    assert_eq!(
+        service
+            .list_children(&project, Resource::Suites)
+            .expect("children"),
+        vec!["S-2.json".to_owned(), "smoke.json".to_owned()]
+    );
+}
+
+#[test]
+fn duplicating_onto_an_existing_identifier_is_a_conflict() {
+    let (service, _directory) = service();
+    service
+        .create(Resource::Projects, &json!({ "name": "checkout" }))
+        .expect("source");
+    service
+        .create(Resource::Projects, &json!({ "name": "occupied" }))
+        .expect("target");
+
+    let error = service
+        .duplicate(
+            &duplicate::PROJECT,
+            "checkout.json",
+            &json!({ "newId": "occupied.json" }),
+        )
+        .expect_err("duplicate onto an occupied id");
+    assert!(matches!(error, DomainError::Conflict(_)));
+
+    let target = service
+        .get(Resource::Projects, "occupied.json")
+        .expect("target intact");
+    assert_eq!(target["name"], "occupied");
+}
+
+#[test]
+fn duplicating_a_missing_document_reports_the_named_entity() {
+    let (service, _directory) = service();
+    let error = service
+        .duplicate(&duplicate::RUN, "missing.json", &json!({}))
+        .expect_err("missing");
+    assert!(matches!(error, DomainError::NotFound(message) if message == "Test run not found"));
+}
+
+#[test]
+fn run_results_are_recorded_and_replaced() {
+    let (service, _directory) = service();
+    let home = project(&service);
+    service
+        .create_in(
+            Resource::Runs,
+            &home,
+            &json!({ "testRunId": "R-1", "name": "nightly", "timestamp": "1" }),
+        )
+        .expect("run");
+
+    service
+        .record_run_result(
+            "nightly.json",
+            &json!({ "testCaseId": "TC-1", "status": "Passed" }),
+        )
+        .expect("record");
+    service
+        .record_run_result(
+            "nightly.json",
+            &json!({ "testCaseId": "TC-1", "status": "Failed", "notes": "flaky" }),
+        )
+        .expect("replace");
+
+    let run = service.get(Resource::Runs, "nightly.json").expect("run");
+    let results = run["results"].as_array().expect("results");
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0]["status"], "Failed");
+    assert_eq!(results[0]["notes"], "flaky");
+
+    let invalid = service
+        .record_run_result(
+            "nightly.json",
+            &json!({ "testCaseId": "TC-1", "status": "Nope" }),
+        )
+        .expect_err("bad status");
+    assert!(matches!(
+        invalid,
+        DomainError::InvalidRequest {
+            code: "invalid_status",
+            ..
+        }
+    ));
+}
+
+#[test]
+fn a_run_embeds_a_snapshot_of_the_case_it_selected() {
+    let (service, _directory) = service();
+    let project = project(&service);
+    case(&service, &project, "TC-1");
+    service
+        .create_in(
+            Resource::Runs,
+            &project,
+            &json!({ "testRunId": "R-1", "name": "nightly", "timestamp": "1" }),
+        )
+        .expect("run");
+
+    service
+        .add_case_to_run("nightly.json", &json!({ "testCaseId": "TC-1" }))
+        .expect("add");
+
+    // Editing the source afterwards must not rewrite the recorded run.
+    service
+        .update(
+            Resource::Cases,
+            "TC-1",
+            &json!({
+                "testCaseId": "TC-1",
+                "title": "changed",
+                "expectedResult": "changed"
+            }),
+        )
+        .expect("update");
+
+    let run = service.get(Resource::Runs, "nightly.json").expect("run");
+    assert_eq!(run["testCases"][0]["title"], "T");
+}
+
+#[test]
+fn milestone_progress_reads_the_referenced_runs() {
+    let (service, _directory) = service();
+    let home = project(&service);
+    service
+        .create_in(
+            Resource::Runs,
+            &home,
+            &json!({
+                "testRunId": "R-1",
+                "name": "nightly",
+                "timestamp": "1",
+                "results": [
+                    { "testCaseId": "TC-1", "status": "Passed", "timestamp": "1" },
+                    { "testCaseId": "TC-2", "status": "Failed", "timestamp": "1" },
+                    { "testCaseId": "TC-3", "status": "Blocked", "timestamp": "1" }
+                ]
+            }),
+        )
+        .expect("run");
+    service
+        .create_in(
+            Resource::Milestones,
+            &home,
+            &json!({ "milestoneId": "M-1", "name": "v1.0", "testRunIds": ["nightly.json"] }),
+        )
+        .expect("milestone");
+
+    let progress = service.milestone_progress("M-1.json").expect("progress");
+    assert_eq!(progress.milestone_id, "M-1");
+    assert_eq!(progress.total_cases, 3);
+    assert_eq!(progress.passed, 1);
+    assert_eq!(progress.pass_percentage, 33.33333333333333);
+}
+
+#[test]
+fn progress_for_a_missing_milestone_is_not_found() {
+    let (service, _directory) = service();
+    let error = service
+        .milestone_progress("missing.json")
+        .expect_err("missing");
+    assert!(matches!(error, DomainError::NotFound(message) if message == "Milestone not found"));
+}
+
+#[test]
+fn attachments_are_recorded_in_the_case_and_round_trip() {
+    let (service, _directory) = service();
+    let project = project(&service);
+    case(&service, &project, "TC-1");
+
+    let parent = service.require_test_case("TC-1").expect("parent");
+    let stored = service
+        .store_attachment(&parent, "TC-1", "notes.txt", b"evidence")
+        .expect("store");
+    assert_eq!(stored.original_name, "notes.txt");
+    assert_eq!(stored.size, 8);
+    assert!(stored.filename.ends_with("-notes.txt"));
+
+    assert_eq!(
+        service
+            .read_attachment(&parent, "TC-1", &stored.filename)
+            .expect("read"),
+        b"evidence"
+    );
+
+    let document = service.get(Resource::Cases, "TC-1").expect("case");
+    assert_eq!(
+        document["attachments"][0]["filename"],
+        json!(stored.filename)
+    );
+    assert_eq!(document["attachments"][0]["originalName"], "notes.txt");
+    assert_eq!(document["attachments"][0]["mimeType"], "text/plain");
+
+    service
+        .delete_attachment(&parent, "TC-1", &stored.filename)
+        .expect("delete");
+    assert!(
+        service
+            .read_attachment(&parent, "TC-1", &stored.filename)
+            .is_err()
+    );
+    let document = service.get(Resource::Cases, "TC-1").expect("case");
+    assert!(document.get("attachments").is_none());
+}
+
+#[test]
+fn requiring_a_missing_test_case_is_not_found() {
+    let (service, _directory) = service();
+    assert!(matches!(
+        service.require_test_case("TC-1").expect_err("missing"),
+        DomainError::NotFound(_)
+    ));
+}
+
+// --- project homes -------------------------------------------------
+
+/// Creates a project named `name` beside `checkout` and returns its parent.
+fn another_project(service: &TestService<FileRepository>, name: &str) -> Parent {
+    service
+        .create(Resource::Projects, &json!({ "name": name }))
+        .expect("project");
+    Parent::Project(format!("{name}.json"))
+}
+
+/// Stores a run called `name` in `home`, recording one passed result.
+fn run_in(service: &TestService<FileRepository>, home: &Parent, name: &str) {
+    service
+        .create_in(
+            Resource::Runs,
+            home,
+            &json!({
+                "name": name,
+                "timestamp": "1",
+                "results": [{ "testCaseId": "TC-1", "status": "Passed", "timestamp": "1" }]
+            }),
+        )
+        .expect("run");
+}
+
+#[test]
+fn a_home_preferred_identifier_resolves_the_occurrence_it_names() {
+    let (service, _directory) = service();
+    let checkout = project(&service);
+    let billing = another_project(&service, "billing");
+    run_in(&service, &checkout, "nightly");
+    run_in(&service, &billing, "nightly");
+
+    // A bare identifier resolves globally, so two occurrences are refused.
+    let error = service
+        .resolve(Resource::Runs, "nightly.json", None, "Test run not found")
+        .expect_err("two homes");
+    assert_eq!(
+        error.to_string(),
+        ambiguous(Resource::Runs, &[checkout.clone(), billing.clone()]).to_string(),
+        "the global rule must not pick one of the two"
+    );
+
+    // Either home says which occurrence is meant.
+    assert_eq!(
+        service
+            .resolve(
+                Resource::Runs,
+                "nightly.json",
+                Some(&billing),
+                "Test run not found"
+            )
+            .expect("billing's run"),
+        billing
+    );
+    assert_eq!(
+        service
+            .resolve(
+                Resource::Runs,
+                "nightly.json",
+                Some(&checkout),
+                "Test run not found"
+            )
+            .expect("checkout's run"),
+        checkout
+    );
+
+    // A home that does not hold the identifier falls back to the global
+    // rule, so a unique identifier still resolves from an unrelated home.
+    run_in(&service, &checkout, "weekly");
+    assert_eq!(
+        service
+            .resolve(
+                Resource::Runs,
+                "weekly.json",
+                Some(&billing),
+                "Test run not found"
+            )
+            .expect("one home only"),
+        checkout
+    );
+}
+
+#[test]
+fn an_ambiguous_identifier_names_both_homes() {
+    let (service, _directory) = service();
+    let checkout = project(&service);
+    let billing = another_project(&service, "billing");
+    run_in(&service, &checkout, "nightly");
+    run_in(&service, &billing, "nightly");
+
+    let error = service
+        .get(Resource::Runs, "nightly.json")
+        .expect_err("ambiguous");
+    match error {
+        DomainError::Conflict(message) => {
+            assert!(message.contains("2 parents"), "{message}");
+            assert!(message.contains("billing.json"), "{message}");
+            assert!(message.contains("checkout.json"), "{message}");
+            assert!(
+                message.contains("POST /projects/{id}/test_runs"),
+                "the conflict must name the parent-scoped route: {message}"
+            );
+        }
+        other => panic!("expected a conflict, got {other:?}"),
+    }
+
+    // A write is refused too, rather than landing in an arbitrary home.
+    assert!(matches!(
+        service
+            .record_run_result(
+                "nightly.json",
+                &json!({ "testCaseId": "TC-9", "status": "Passed" })
+            )
+            .expect_err("ambiguous"),
+        DomainError::Conflict(_)
+    ));
+}
+
+#[test]
+fn the_conflict_names_the_parent_scoped_routes_of_its_own_resource() {
+    let homes = [
+        Parent::Project("billing.json".to_owned()),
+        Parent::Project("checkout.json".to_owned()),
+    ];
+    for (resource, endpoint) in [
+        (
+            Resource::Runs,
+            "POST /projects/{id}/test_runs, or the matching /{run_id} delete",
+        ),
+        (
+            Resource::Milestones,
+            "POST /projects/{id}/milestones, or the matching /{milestone_id} delete",
+        ),
+        (
+            Resource::Configurations,
+            "POST /projects/{id}/configurations, or the matching /{config_id} delete",
+        ),
+        (
+            Resource::Suites,
+            "POST /projects/{id}/test_suites, or the matching /{suite_id} delete",
+        ),
+        (
+            Resource::Cases,
+            "POST /projects/{id}/test_cases, POST /test_suites/{id}/test_cases, or the matching /{case_id} delete",
+        ),
+    ] {
+        let message = ambiguous(resource, &homes).to_string();
+        assert!(message.contains(endpoint), "{resource:?}: {message}");
+        assert!(
+            message.contains("2 parents (billing.json, checkout.json)"),
+            "{resource:?}: {message}"
+        );
+    }
+}
+
+#[test]
+fn the_retired_flat_creates_name_their_replacement() {
+    let (service, _directory) = service();
+    project(&service);
+
+    for (resource, body, message) in [
+        (
+            Resource::Runs,
+            json!({ "name": "nightly", "timestamp": "1" }),
+            "Test runs are created inside a project: POST /projects/{id}/test_runs",
+        ),
+        (
+            Resource::Milestones,
+            json!({ "name": "v1.0" }),
+            "Milestones are created inside a project: POST /projects/{id}/milestones",
+        ),
+        (
+            Resource::Configurations,
+            json!({ "name": "chrome" }),
+            "Configurations are created inside a project: POST /projects/{id}/configurations",
+        ),
+    ] {
+        let error = service.create(resource, &body).expect_err("retired route");
+        match error {
+            DomainError::InvalidRequest { code, message: got } => {
+                assert_eq!(code, "invalid_request", "{resource:?}");
+                assert_eq!(got, message, "{resource:?}");
+            }
+            other => panic!("{resource:?} produced {other:?}"),
+        }
+        assert!(
+            list(&service, resource).is_empty(),
+            "{resource:?}: a retired route must store nothing"
+        );
+    }
+}
+
+#[test]
+fn an_identifier_no_project_holds_is_not_found() {
+    let (service, _directory) = service();
+    project(&service);
+
+    for resource in [
+        Resource::Runs,
+        Resource::Milestones,
+        Resource::Configurations,
+    ] {
+        let error = service
+            .resolve(
+                resource,
+                "missing.json",
+                None,
+                entity_missing_message(resource),
+            )
+            .expect_err("nothing holds it");
+        assert!(
+            matches!(&error, DomainError::NotFound(message)
+                    if message == entity_missing_message(resource)),
+            "{resource:?} produced {error:?}"
+        );
+    }
+
+    assert!(matches!(
+        service
+            .milestone_progress("missing.json")
+            .expect_err("missing"),
+        DomainError::NotFound(message) if message == "Milestone not found"
+    ));
+}
+
+#[test]
+fn duplicating_a_run_stores_the_copy_in_its_own_home() {
+    let (service, _directory) = service();
+    let checkout = project(&service);
+    let billing = another_project(&service, "billing");
+    run_in(&service, &billing, "nightly");
+
+    let new_id = service
+        .duplicate(&duplicate::RUN, "nightly.json", &json!({}))
+        .expect("duplicate");
+
+    let copies = service
+        .list_children(&billing, Resource::Runs)
+        .expect("billing's runs");
+    assert_eq!(copies.len(), 2, "{copies:?}");
+    assert!(copies.contains(&new_id), "{copies:?}");
+    assert!(
+        service
+            .list_children(&checkout, Resource::Runs)
+            .expect("checkout's runs")
+            .is_empty(),
+        "a duplicate must not move or copy into another project"
+    );
+}
+
+#[test]
+fn the_summary_report_counts_two_runs_sharing_an_identifier() {
+    let (service, _directory) = service();
+    let checkout = project(&service);
+    let billing = another_project(&service, "billing");
+    run_in(&service, &checkout, "nightly");
+    run_in(&service, &billing, "nightly");
+
+    // A global listing de-duplicates to one `nightly.json`; the report
+    // walks projects instead, so both runs contribute their result.
+    assert_eq!(
+        list(&service, Resource::Runs),
+        vec!["nightly.json".to_owned()],
+        "the listing still de-duplicates"
+    );
+
+    let report = service
+        .summary_report(&reports::SummaryFilters::default(), None)
+        .expect("report");
+    assert_eq!(report.total, 2, "one result per project's run");
+    assert_eq!(report.passed, 2);
+}
+
+#[test]
+fn milestone_progress_prefers_its_own_home_for_a_shared_identifier() {
+    let (service, _directory) = service();
+    let checkout = project(&service);
+    let billing = another_project(&service, "billing");
+    // The milestone's home holds no run of this identifier, and two other
+    // projects do, so the reference cannot be resolved.
+    run_in(&service, &checkout, "nightly");
+    run_in(&service, &billing, "nightly");
+    let platform = another_project(&service, "platform");
+    service
+        .create_in(
+            Resource::Milestones,
+            &platform,
+            &json!({ "name": "v1.0", "testRunIds": ["nightly.json"] }),
+        )
+        .expect("milestone");
+
+    let error = service
+        .milestone_progress("v1.0.json")
+        .expect_err("two runs answer to the reference");
+    assert!(
+        matches!(&error, DomainError::Conflict(_)),
+        "an arbitrary pick would report a wrong number, got {error:?}"
+    );
+}
+
+#[test]
+fn milestone_progress_resolves_a_shared_identifier_from_its_home() {
+    let (service, _directory) = service();
+    let checkout = project(&service);
+    let billing = another_project(&service, "billing");
+    run_in(&service, &checkout, "nightly");
+    run_in(&service, &billing, "nightly");
+    // The milestone lives in `billing`, so its reference means that run
+    // even though `checkout` holds the same identifier.
+    service
+        .create_in(
+            Resource::Milestones,
+            &billing,
+            &json!({ "name": "v1.0", "testRunIds": ["nightly.json"] }),
+        )
+        .expect("milestone");
+
+    let progress = service.milestone_progress("v1.0.json").expect("progress");
+    assert_eq!(progress.total_cases, 1);
+    assert_eq!(progress.passed, 1);
+}
+
+#[test]
+fn milestone_progress_skips_a_reference_no_project_holds() {
+    let (service, _directory) = service();
+    let checkout = project(&service);
+    run_in(&service, &checkout, "nightly");
+    service
+        .create_in(
+            Resource::Milestones,
+            &checkout,
+            &json!({
+                "name": "v1.0",
+                "testRunIds": ["nightly.json", "deleted.json"]
+            }),
+        )
+        .expect("milestone");
+
+    let progress = service.milestone_progress("v1.0.json").expect("progress");
+    assert_eq!(
+        progress.total_cases, 1,
+        "progress recomputes over the runs that still exist"
+    );
+}
+
+#[test]
+fn a_run_links_the_configuration_its_own_home_holds() {
+    let (service, _directory) = service();
+    let checkout = project(&service);
+    let billing = another_project(&service, "billing");
+    for home in [&checkout, &billing] {
+        service
+            .create_in(Resource::Configurations, home, &json!({ "name": "chrome" }))
+            .expect("configuration");
+    }
+    run_in(&service, &billing, "nightly");
+
+    // The identifier is ambiguous globally, but the run's home decides it.
+    assert!(matches!(
+        service
+            .document(Resource::Configurations, "chrome.json")
+            .expect_err("two homes"),
+        DomainError::Conflict(_)
+    ));
+    service
+        .link_configuration_to_run("nightly.json", &json!({ "configId": "chrome.json" }))
+        .expect("the run's own configuration");
+
+    let run = service.get(Resource::Runs, "nightly.json").expect("run");
+    assert_eq!(run["configurations"][0]["configId"], "chrome.json");
+
+    service
+        .unlink_configuration_from_run("nightly.json", "chrome.json")
+        .expect("unlink");
+    let run = service.get(Resource::Runs, "nightly.json").expect("run");
+    assert!(run["configurations"].as_array().is_none_or(Vec::is_empty));
+}
+
+#[test]
+fn a_write_goes_back_to_the_home_the_read_resolved() {
+    let (service, _directory) = service();
+    let checkout = project(&service);
+    let billing = another_project(&service, "billing");
+    run_in(&service, &billing, "nightly");
+
+    service
+        .record_run_result(
+            "nightly.json",
+            &json!({ "testCaseId": "TC-9", "status": "Failed" }),
+        )
+        .expect("record");
+
+    assert_eq!(
+        service
+            .list_children(&billing, Resource::Runs)
+            .expect("billing's runs"),
+        vec!["nightly.json".to_owned()],
+        "the write must not create a second occurrence elsewhere"
+    );
+    assert!(
+        service
+            .list_children(&checkout, Resource::Runs)
+            .expect("checkout's runs")
+            .is_empty()
+    );
+
+    let run = service.get(Resource::Runs, "nightly.json").expect("run");
+    assert_eq!(run["results"].as_array().map(Vec::len), Some(2));
+}
+
+#[test]
+fn a_parent_addressed_read_never_answers_a_conflict() {
+    let (service, _directory) = service();
+    let checkout = project(&service);
+    let billing = another_project(&service, "billing");
+    for (home, marker) in [(&checkout, "in-checkout"), (&billing, "in-billing")] {
+        service
+            .create_in(
+                Resource::Runs,
+                home,
+                &json!({
+                    "name": "nightly",
+                    "testRunId": marker,
+                    "timestamp": "1"
+                }),
+            )
+            .expect("run");
+    }
+
+    // The global read cannot choose, but a named home can.
+    assert!(matches!(
+        service
+            .document(Resource::Runs, "nightly.json")
+            .expect_err("two homes"),
+        DomainError::Conflict(_)
+    ));
+    for (home, marker) in [(&checkout, "in-checkout"), (&billing, "in-billing")] {
+        let document = service
+            .document_in(Resource::Runs, home, "nightly.json", "Test run not found")
+            .expect("the named home's occurrence");
+        assert_eq!(document["testRunId"], marker, "{home:?}");
+    }
+
+    // A home that does not hold the identifier reports the caller's own
+    // missing message, and never a conflict.
+    let platform = another_project(&service, "platform");
+    let error = service
+        .document_in(
+            Resource::Runs,
+            &platform,
+            "nightly.json",
+            "Test run not found",
+        )
+        .expect_err("this home does not hold it");
+    assert!(
+        matches!(&error, DomainError::NotFound(message) if message == "Test run not found"),
+        "{error:?}"
+    );
+
+    // So does an identifier nothing holds anywhere.
+    assert!(matches!(
+        service
+            .document_in(Resource::Runs, &billing, "ghost.json", "Test run not found")
+            .expect_err("absent"),
+        DomainError::NotFound(_)
+    ));
+}
