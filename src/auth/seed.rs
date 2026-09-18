@@ -21,6 +21,10 @@
 //! and only the named grants, refuses to touch a system administrator (the
 //! bootstrap account is the deployment's, not the seed's), and reports what it
 //! left in place rather than guessing.
+//!
+//! [`report_account`] is the read-only half of that: it answers what the store
+//! holds without writing anything, so a caller can tell an account that is
+//! genuinely gone from one that is only absent under the name it expected.
 
 use std::error::Error;
 use std::fmt::{self, Display, Formatter};
@@ -204,6 +208,32 @@ pub struct UnseededAccount {
 /// [`SeedError`]'s inverse: the same store failures, none of the hashing.
 pub type UnseedError = SeedError;
 
+/// What a read-only probe of one account and the grants it was asked about
+/// found, without changing anything.
+///
+/// [`unseed_account`] reports `absent` for a name the store does not hold, which
+/// is a settled teardown only when nothing the seed wrote survives. A caller
+/// that was pointed at a different name than the seed used needs to be able to
+/// ask "and the name the seed did write?" before it accepts that answer, and
+/// asking must not remove anything — so the probe is its own read-only call
+/// rather than a second `unseed-auth` run with `--keep-account`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AccountReport {
+    /// The stored spelling of the username when the account exists, otherwise
+    /// the name that was asked for.
+    pub username: String,
+    /// Whether an account by that name exists.
+    pub present: bool,
+    /// Whether the account found administers the server. `false` when absent,
+    /// because an account that is not there cannot administer anything.
+    pub system_admin: bool,
+    /// `(project_id, role)` grants among those asked about that the account
+    /// holds, in the order they were asked about.
+    pub grants_present: Vec<(String, String)>,
+    /// The asked-about projects the account holds no grant on.
+    pub grants_absent: Vec<String>,
+}
+
 /// The reason [`unseed_account`] records when the account it was asked about was
 /// never there.
 ///
@@ -294,6 +324,54 @@ pub fn unseed_account(
     }
 
     Ok(result)
+}
+
+/// Reads one account and the roles it holds on the named projects.
+///
+/// The read-only inverse of [`seed_account`]: nothing is written, so a caller
+/// can ask whether the account the seed wrote is still there without touching
+/// it. That is what a teardown needs before it accepts an `absent` removal as a
+/// clean sweep — a removal that reports nothing to do because it was pointed at
+/// a name the seed never wrote must not leave the seed's own account behind
+/// unnoticed.
+///
+/// # Errors
+///
+/// [`SeedError::Storage`] when the store cannot be read. Nothing is written, so
+/// a failed probe leaves the data exactly as it found it.
+pub fn report_account(
+    store: &AuthStore,
+    username: &str,
+    grants: &[String],
+) -> Result<AccountReport, UnseedError> {
+    let Some(account) = store.user_by_username(username)? else {
+        return Ok(AccountReport {
+            username: username.to_owned(),
+            present: false,
+            system_admin: false,
+            grants_present: Vec::new(),
+            grants_absent: grants.to_vec(),
+        });
+    };
+
+    let mut grants_present = Vec::new();
+    let mut grants_absent = Vec::new();
+    for project_id in grants {
+        match store.role_of(project_id, &account.id)? {
+            Some(role) => {
+                grants_present.push((project_id.clone(), role_name(role).to_owned()));
+            }
+            None => grants_absent.push(project_id.clone()),
+        }
+    }
+
+    Ok(AccountReport {
+        username: account.username.clone(),
+        present: true,
+        system_admin: account.system_admin,
+        grants_present,
+        grants_absent,
+    })
 }
 
 /// The wire spelling of a [`Role`], matching [`parse_role`]'s vocabulary.
@@ -649,5 +727,133 @@ mod tests {
         assert!(!second.account_removed);
         assert!(second.grants_removed.is_empty());
         assert!(second.account_kept.is_some());
+    }
+
+    #[test]
+    fn a_report_reads_the_grants_without_changing_anything() {
+        let (_directory, store) = store();
+        let seeded = seed_account(&store, &spec()).expect("seed");
+        let grants = vec![
+            "checkout.json".to_owned(),
+            "payments.json".to_owned(),
+            "missing.json".to_owned(),
+        ];
+
+        let report = report_account(&store, "viewer", &grants).expect("report");
+
+        assert_eq!(report.username, "viewer");
+        assert!(report.present);
+        assert!(!report.system_admin);
+        assert_eq!(
+            report.grants_present,
+            vec![
+                ("checkout.json".to_owned(), "owner".to_owned()),
+                ("payments.json".to_owned(), "owner".to_owned()),
+            ]
+        );
+        assert_eq!(report.grants_absent, vec!["missing.json".to_owned()]);
+        assert_eq!(
+            report_account(&store, "viewer", &grants).expect("report again"),
+            report,
+            "reading twice reports the same thing"
+        );
+        // Nothing was read into a change: the account and both grants survive.
+        assert!(store.user_by_username("viewer").expect("read").is_some());
+        assert_eq!(
+            store.role_of("checkout.json", &seeded.id).expect("role"),
+            Some(Role::Owner)
+        );
+        assert_eq!(
+            store.role_of("payments.json", &seeded.id).expect("role"),
+            Some(Role::Owner)
+        );
+    }
+
+    #[test]
+    fn a_report_finds_nothing_for_an_account_that_is_not_there() {
+        let (_directory, store) = store();
+        let grants = vec!["checkout.json".to_owned()];
+
+        let report = report_account(&store, "editor", &grants).expect("report");
+
+        assert_eq!(report.username, "editor");
+        assert!(!report.present);
+        assert!(!report.system_admin);
+        assert!(report.grants_present.is_empty());
+        assert_eq!(report.grants_absent, grants);
+    }
+
+    #[test]
+    fn a_report_marks_a_system_administrator_so_a_caller_does_not_call_it_residue() {
+        let (_directory, store) = store();
+        let mut spec = spec();
+        spec.system_admin = true;
+        seed_account(&store, &spec).expect("seed");
+
+        let report =
+            report_account(&store, "viewer", &["checkout.json".to_owned()]).expect("report");
+
+        assert!(report.present);
+        assert!(
+            report.system_admin,
+            "the bootstrap account is the deployment's, not the seed's: {report:?}"
+        );
+    }
+
+    #[test]
+    fn a_report_resolves_the_username_as_the_store_does() {
+        let (_directory, store) = store();
+        seed_account(&store, &spec()).expect("seed");
+
+        let report = report_account(&store, "VIEWER", &[]).expect("report");
+
+        assert!(report.present);
+        assert_eq!(
+            report.username, "viewer",
+            "the report echoes the stored spelling"
+        );
+    }
+
+    #[test]
+    fn a_report_sees_the_account_a_renamed_removal_left_behind() {
+        let (_directory, store) = store();
+        let mut editor = spec();
+        editor.username = "editor".to_owned();
+        editor.grants = vec![("checkout.json".to_owned(), "editor".to_owned())];
+        let seeded = seed_account(&store, &editor).expect("seed");
+
+        let removed = unseed_account(
+            &store,
+            &UnseedSpec {
+                username: "renamed-editor".to_owned(),
+                grants: vec!["checkout.json".to_owned()],
+                remove_account: true,
+            },
+        )
+        .expect("unseed the wrong name");
+
+        assert!(!removed.account_removed);
+        assert!(
+            is_missing_account_reason(removed.account_kept.as_deref().unwrap_or_default()),
+            "removing a name the seed never wrote reports nothing to do: {removed:?}"
+        );
+
+        let report = report_account(&store, "editor", &["checkout.json".to_owned()])
+            .expect("report the seed's own name");
+        assert!(
+            report.present && !report.system_admin,
+            "the probe has to find the account the removal skipped: {report:?}"
+        );
+        assert_eq!(
+            report.grants_present,
+            vec![("checkout.json".to_owned(), "editor".to_owned())]
+        );
+        assert!(
+            store
+                .user_by_username(&seeded.username)
+                .expect("read")
+                .is_some(),
+            "the mistaken removal removed nothing at all"
+        );
     }
 }

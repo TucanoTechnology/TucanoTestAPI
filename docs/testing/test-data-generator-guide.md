@@ -122,11 +122,11 @@ enforced**, because each signs in as the bootstrap account:
 | --- | --- | --- |
 | `TUCANO_BOOTSTRAP_USERNAME` / `TUCANO_BOOTSTRAP_PASSWORD` | both | The account each script signs in as. Required. |
 | `TUCANO_API_URL` | both | Base URL when no argument is given. The seed probes `http://localhost:3100`, `http://localhost:8080/api`, then `http://localhost:3000`; teardown probes the same list but **never guesses** — it fails when no candidate answers `/health`. |
-| `TUCANO_SEED_VIEWER_PASSWORD` | seed | Password for the seeded non-administrator `viewer` account, which holds `owner` on one project. |
-| `TUCANO_SEED_EDITOR_PASSWORD` | seed | Password for the seeded non-administrator `editor` account, which holds `editor` on the same project and is what lets a client exercise a role-gated write mid-ladder. |
+| `TUCANO_SEED_VIEWER_PASSWORD` | seed, validate | Password for the seeded non-administrator `viewer` account, which holds `owner` on one project. Both scripts default to `viewer-seed-password`, so the validator signs in as the account the seed wrote without further configuration. |
+| `TUCANO_SEED_EDITOR_PASSWORD` | seed, validate | The same, for the `editor` account, which holds `editor` on the same project and is what lets a client exercise a role-gated write mid-ladder. Defaults to `editor-seed-password`. |
 | `TUCANO_SEED_AUTH_CMD` | seed | Command line that seeds the `viewer` and `editor` accounts and their grants (see [§4](#4-the-auth-exception)). When unset, that step is skipped with a notice. |
-| `TUCANO_SEED_VIEWER_USERNAME` | teardown | The `viewer` account to remove. Defaults to `viewer`. |
-| `TUCANO_SEED_EDITOR_USERNAME` | teardown | The `editor` account to remove. Defaults to `editor`. |
+| `TUCANO_SEED_VIEWER_USERNAME` | teardown, validate | The non-administrator account to sign in as (validate) and to remove (teardown). Defaults to `viewer`, the only name the seed writes; a different name is checked against the seed's own account rather than trusted (see [§3.2](#32-removing-it-again)). |
+| `TUCANO_SEED_EDITOR_USERNAME` | teardown, validate | The same, for the `editor` account. |
 | `TUCANO_UNSEED_AUTH_CMD` | teardown | Command line that removes both accounts and their grants. When unset, that step is reported as not run and the run exits non-zero, because the accounts would otherwise survive. |
 
 `TUCANO_AUTH_REQUIRED`, `TUCANO_JWT_SECRET` (or `TUCANO_JWT_SECRET_FILE`) and the two bootstrap
@@ -162,6 +162,15 @@ It exits `0` when everything the seed created is gone or was never there, and `1
 not be resolved, naming each item it left in place and why. Re-running it over an already-clean volume
 is a success: a missing entity is a settled teardown, not a failure.
 
+A missing entity settles the run only when the teardown was pointed at the right entity. The auth step
+removes the account named by `TUCANO_SEED_VIEWER_USERNAME` / `TUCANO_SEED_EDITOR_USERNAME`, while the
+seed always writes `viewer` and `editor`; a name that is absent therefore says nothing about whether
+the account the seed wrote is still there. When the configured name is not the seed's, the teardown
+asks the server binary read-only (`unseed-auth --check`) what stands under the seed's own name, and an
+account still found there — unless it is a system administrator, which the seed never writes — is
+reported as kept and the run exits `1`. Everything else stays idempotent: a genuinely clean store,
+including a third run over an empty volume, still exits `0`.
+
 `scripts/clear-data.mjs` is the opposite tool and is deliberately *not* what this does: it empties the
 whole of every collection (milestones, runs, suites, cases, projects), removes no configuration by a
 step of its own — deleting a project cascades to the configurations it holds, so the ones inside a
@@ -192,6 +201,10 @@ TUCANO_DATA_DIR=/data ./tucano-test unseed-auth \
 
 TUCANO_DATA_DIR=/data ./tucano-test unseed-auth \
     --username editor --grant checkout.json
+
+# the read-only half: report where the account and the named grant stand, and write nothing
+TUCANO_DATA_DIR=/data ./tucano-test unseed-auth \
+    --username viewer --grant checkout.json --check
 ```
 
 The scripts invoke them through `TUCANO_SEED_AUTH_CMD` and `TUCANO_UNSEED_AUTH_CMD`, so each takes the
@@ -225,7 +238,12 @@ Three properties keep this exception honest:
   only the grants it is missing are added, because a re-run must not silently reset a password.
 - **`unseed-auth` is scoped like teardown**: it requires at least one `--grant`, removes only the
   grants it is told about rather than every grant the account happens to hold, refuses the bootstrap
-  account outright, and reports anything it cannot find as left in place instead of guessing.
+  account outright, and reports anything it cannot find as left in place instead of guessing. The same
+  subcommand's `--check` is its read-only half: it reports where the account and the named grants
+  stand and writes nothing, which is the only way to ask whether a name resolves to an account at all
+  — `POST /auth/login` answers `401` for a missing account and for a wrong password alike, and every
+  other route a caller could try either needs a session or has to know the account id it does not
+  have.
 - **`GET /auth/me` closes the loop.** After seeding, the script signs in as each seeded account and
   asserts the API reports no system-administrator flag and, on the granted project alone, exactly the
   role that account was given — `owner` for `viewer`, `editor` for `editor`, with no role recorded

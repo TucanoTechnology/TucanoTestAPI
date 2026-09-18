@@ -775,8 +775,9 @@ async function stepEditor() {
 
   // The project document itself needs `owner`, one rung above the grant, so the
   // same token that just created a suite is refused here. The body is empty on
-  // purpose: authorization runs before the body is read, so the refusal is the
-  // role and never a validation answer.
+  // purpose: extraction deserializes it before the handler runs, and `{}` is a
+  // well-formed JSON body, so the answer can only be the role check — the
+  // document shape is validated after authorization, not before it.
   await assertRefused(
     `an ${EDITOR_USERNAME} session is refused PUT /projects/${GRANTED_PROJECT} with 403 (needs owner)`,
     `/projects/${GRANTED_PROJECT}`,

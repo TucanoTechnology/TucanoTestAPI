@@ -42,8 +42,11 @@
  * Environment:
  *   TUCANO_BOOTSTRAP_USERNAME / TUCANO_BOOTSTRAP_PASSWORD  sign-in credentials
  *   TUCANO_API_URL                                          base URL, when no argument
- *   TUCANO_SEED_VIEWER_USERNAME                             account to remove (default `viewer`)
- *   TUCANO_SEED_EDITOR_USERNAME                             account to remove (default `editor`)
+ *   TUCANO_SEED_VIEWER_USERNAME                             which account to remove (default
+ *                                                          `viewer`); the seed always writes
+ *                                                          `viewer`, so a name that is not the
+ *                                                          seed's is checked against it
+ *   TUCANO_SEED_EDITOR_USERNAME                             the same, for `editor`
  *   TUCANO_UNSEED_AUTH_CMD                                  command line that removes the
  *                                                          account and its grants; when unset
  *                                                          that step is reported as not run
@@ -59,9 +62,12 @@ const PROJECTS_TO_REMOVE = ["checkout.json", "payments.json"];
  * The accounts the seed wrote, each with the one project it granted, so the one
  * grant teardown names per account.
  *
- * The names are read when the step runs, so the overrides the seed documents
- * (`TUCANO_SEED_VIEWER_USERNAME`, `TUCANO_SEED_EDITOR_USERNAME`) reach the
- * removal too, and a renamed account is still found.
+ * `scripts/seed.mjs` hardcodes the names it hands to `seed-auth` — `viewer` and
+ * `editor` — and reads no `*_USERNAME` variable, so the two below are read here
+ * (and by `scripts/validate-seed.mjs`) alone. They say which account this run
+ * should remove, for a volume whose accounts were created under other names by
+ * hand; they cannot rename what the seed wrote, and `step7Auth` refuses a name
+ * that is not the seed's while the seed's account and grant are still there.
  */
 const SEED_ACCOUNTS = [
   {
@@ -500,7 +506,10 @@ async function step6Projects() {
  * documented exception spec §5 records for the seed. The subcommand refuses a
  * system administrator and reports what it kept, so the scoping rule holds
  * there too. It ends with a summary line this step parses, so an account that
- * was already gone reads as clean rather than as a refusal.
+ * was already gone reads as clean rather than as a refusal — and a name that is
+ * not the one the seed wrote is checked against the seed's own account, so the
+ * run cannot report a clean sweep while the seeded account and its grant are
+ * still sitting on the volume.
  */
 async function step7Auth() {
   const cli = process.env.TUCANO_UNSEED_AUTH_CMD;
@@ -520,23 +529,18 @@ async function step7Auth() {
 }
 
 /**
- * Removes one seeded account and the grant it holds, and records what happened.
+ * Runs one `unseed-auth` command line and hands back its standard output.
  *
- * The subcommand ends with a summary line that says which of three things
- * happened, because the prose above it cannot be told apart mechanically:
- * `absent` means the account was already gone, so there is nothing to report
- * and nothing to keep; `removed` means this run deleted it; `kept` means the
- * account exists and the subcommand declined to touch it.
+ * `what` is what a failure is recorded against. A run that cannot start, or
+ * that exits non-zero, is something this teardown could not resolve: it is
+ * recorded as kept, and `null` says the caller must not read the output as an
+ * answer.
  */
-async function unseedAccount(cli, account) {
-  const username = accountUsername(account);
+async function runAuthCommand(what, cli, args) {
   const { spawnSync } = await import("node:child_process");
-  const args = ["--username", username];
-  // The seed grants each account exactly one project, so teardown names exactly
-  // one. `unseed-auth` requires at least one `--grant` to know what to remove.
-  args.push("--grant", account.grantProject);
   // `TUCANO_UNSEED_AUTH_CMD` is a command *line* (it may carry its own
-  // `VAR=value` prefix), so it goes to a shell. Everything the script adds is quoted.
+  // `VAR=value` prefix), so it goes to a shell. Everything the script adds is
+  // quoted: an account name is operator input and may contain anything.
   const quoted = args
     .map((arg) => `'${String(arg).replaceAll("'", `'\\''`)}'`)
     .join(" ");
@@ -545,29 +549,51 @@ async function unseedAccount(cli, account) {
     shell: true,
   });
   if (result.error) {
-    recordKept(
-      `auth account ${username}`,
-      `${cli} could not run: ${result.error.message}`,
-    );
-    return;
+    recordKept(what, `${cli} could not run: ${result.error.message}`);
+    return null;
   }
   if (result.status !== 0) {
     recordKept(
-      `auth account ${username}`,
+      what,
       `${cli} failed (exit ${result.status}):\n${result.stderr || result.stdout}`,
     );
-    return;
+    return null;
   }
   process.stdout.write(result.stdout);
+  return result.stdout;
+}
+
+/**
+ * Removes one seeded account and the grant it holds, and records what happened.
+ *
+ * The subcommand ends with a summary line that says which of three things
+ * happened, because the prose above it cannot be told apart mechanically:
+ * `absent` means the account was already gone, so there is nothing to report
+ * once [`reportAbsent`] has settled it; `removed` means this run deleted it;
+ * `kept` means the account exists and the subcommand declined to touch it.
+ */
+async function unseedAccount(cli, account) {
+  const username = accountUsername(account);
+  // The seed grants each account exactly one project, so teardown names exactly
+  // one. `unseed-auth` requires at least one `--grant` to know what to remove.
+  const stdout = await runAuthCommand(`auth account ${username}`, cli, [
+    "--username",
+    username,
+    "--grant",
+    account.grantProject,
+  ]);
+  if (stdout === null) {
+    return;
+  }
 
   const summary =
     /^unseed-auth: account=(\S+) grants_removed=(\d+) grants_kept=(\d+)$/m.exec(
-      result.stdout,
+      stdout,
     );
   if (summary === null) {
     recordKept(
       `auth account ${username}`,
-      `the subcommand answered without its summary line, so this teardown cannot tell what it did:\n${result.stdout}`,
+      `the subcommand answered without its summary line, so this teardown cannot tell what it did:\n${stdout}`,
     );
     return;
   }
@@ -575,7 +601,7 @@ async function unseedAccount(cli, account) {
   if (outcome === "removed") {
     recordRemoved(`auth account ${username} and ${grantsRemoved} grant(s)`);
   } else if (outcome === "absent") {
-    console.log(`  · auth account ${username} is not there`);
+    await reportAbsent(cli, account, username);
   } else {
     recordKept(
       `auth account ${username}`,
@@ -590,6 +616,72 @@ async function unseedAccount(cli, account) {
       "the subcommand left them in place; see its output above",
     );
   }
+}
+
+/**
+ * Settles the case where the account the operator named was not there.
+ *
+ * `unseed-auth` resolves accounts the way the store does, so `absent` for a
+ * name the seed does not write means the seed's own account may be sitting on
+ * the volume with its grant while this run reports nothing left to remove.
+ * When the configured name *is* the seed's, there is nothing to check and the
+ * account is settled. When it is not, the seed's name is probed read-only —
+ * `unseed-auth --check` writes nothing — and an account still found under it is
+ * kept, loudly, so a name that went astray cannot pass as a clean teardown.
+ *
+ * A name that is absent, or one that administers the server, is not residue:
+ * the seed never writes an administrator, so a server account that happens to
+ * carry the name is somebody else's and is left alone.
+ */
+async function reportAbsent(cli, account, username) {
+  console.log(`  · auth account ${username} is not there`);
+  const seedName = account.usernameDefault;
+  if (username.toLowerCase() === seedName.toLowerCase()) {
+    return;
+  }
+  const what = `auth account ${username} (${account.usernameEnv})`;
+  const stdout = await runAuthCommand(what, cli, [
+    "--username",
+    seedName,
+    "--grant",
+    account.grantProject,
+    "--check",
+  ]);
+  if (stdout === null) {
+    return;
+  }
+  const probe =
+    /^unseed-auth: check account=(\S+) system_admin=(\S+) grants_present=(\d+) grants_absent=(\d+)$/m.exec(
+      stdout,
+    );
+  if (probe === null) {
+    recordKept(
+      what,
+      `the read-only check answered without its summary line, so this teardown cannot tell whether the account the seed wrote is still there:\n${stdout}`,
+    );
+    return;
+  }
+  const [, presence, systemAdmin, grantsPresent] = probe;
+  if (presence !== "present") {
+    console.log(`  · auth account ${seedName} is not there either`);
+    return;
+  }
+  if (systemAdmin === "true") {
+    console.log(
+      `  · auth account ${seedName} administers the server, so it is not one the seed wrote`,
+    );
+    return;
+  }
+  const grant =
+    Number(grantsPresent) > 0
+      ? ` and still holds the grant on ${account.grantProject} that the seed wrote`
+      : "";
+  recordKept(
+    what,
+    `\`${username}\` is not there, but the seed's \`${seedName}\` is${grant}; this name does ` +
+      `not describe the account the seed created — unset ${account.usernameEnv} (or set it to ` +
+      `\`${seedName}\`) to remove the seed's own account, and run the teardown again`,
+  );
 }
 
 // --- entry point ------------------------------------------------------------
