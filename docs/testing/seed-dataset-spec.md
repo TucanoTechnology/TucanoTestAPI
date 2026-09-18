@@ -191,7 +191,7 @@ $TUCANO_DATA_DIR/
 ├── projects/
 │   ├── checkout/
 │   │   ├── project.json                      # {"projectId","name","tags":["checkout","regression"]}
-│   │   ├── smoke.checkout/              # a suite folder: three originals, two placed copies
+│   │   ├── smoke.checkout/                   # a suite folder: three originals, two placed copies
 │   │   │   ├── suite.json
 │   │   │   ├── TC-LOGIN-1/
 │   │   │   │   ├── test-case.json            # tags, ordered steps, version 2
@@ -232,9 +232,9 @@ $TUCANO_DATA_DIR/
 │   │   │       └── steps/
 │   │   │           └── 0/
 │   │   │               └── <stamp>-step-1.txt
-│   │   ├── regression.checkout/         # second suite in this project, a move waypoint
+│   │   ├── regression.checkout/              # second suite in this project, a move waypoint
 │   │   │   └── suite.json                    # left holding no case — the empty-suite shape
-│   │   ├── portable.checkout/           # moved into payments.json, then copied back
+│   │   ├── portable.checkout/                # moved into payments.json, then copied back
 │   │   │   └── suite.json                    # created empty: a suite placement carries its cases
 │   │   ├── smoke.checkout-copy-<suffix>/     # the duplicate suite, id from the response
 │   │   │   └── suite.json
@@ -260,7 +260,7 @@ $TUCANO_DATA_DIR/
 │   │       └── chrome-linux.json
 │   └── payments/
 │       ├── project.json
-│       ├── smoke.payments/              # a suite folder; the four-hop move ends in it
+│       ├── smoke.payments/                   # a suite folder; the four-hop move ends in it
 │       │   ├── suite.json
 │       │   ├── TC-MOVE-1/                    # the whole folder travelled, steps and attachments intact
 │       │   │   ├── test-case.json
@@ -278,7 +278,7 @@ $TUCANO_DATA_DIR/
 │       │       └── steps/
 │       │           └── 0/
 │       │               └── <stamp>-step-1.txt
-│       ├── portable.checkout/            # the copy placed back out of checkout.json
+│       ├── portable.checkout/                # the copy placed back out of checkout.json
 │       │   └── suite.json
 │       ├── TC-LOGIN-1/                       # a copy placed into this project; the source keeps
 │       │   ├── test-case.json                # its home in smoke.checkout.json
