@@ -486,6 +486,70 @@ async fn a_test_case_identifier_is_addressed_verbatim() {
 }
 
 #[tokio::test]
+async fn a_parent_scoped_attachment_route_reads_its_parent_from_the_path() {
+    let (_directory, app) = test_app();
+
+    // The bare routes above address a case by its identifier alone, which
+    // carries no suffix, so an unusable one is simply a case that does not
+    // exist. A parent-scoped route instead resolves the case from the parent in
+    // its path, and both names are read as identifiers of stored documents —
+    // the parent a `project.json` or `suite.json` folder, the case the folder
+    // that parent holds — so an unusable parent is `invalid_id`, the answer the
+    // parent-scoped descriptions in openapi.json record. `TC-1` is a legal case
+    // folder name, so the refusal can only come from the parent.
+    for (method, uri) in [
+        (
+            "GET",
+            "/projects/nope/test_cases/TC-1/attachments/missing.txt",
+        ),
+        (
+            "DELETE",
+            "/projects/nope/test_cases/TC-1/attachments/missing.txt",
+        ),
+        ("GET", "/projects/nope/test_cases/TC-1/steps/0/attachments"),
+        (
+            "DELETE",
+            "/projects/nope/test_cases/TC-1/steps/0/attachments/missing.txt",
+        ),
+        (
+            "GET",
+            "/test_suites/nope/test_cases/TC-1/attachments/missing.txt",
+        ),
+        (
+            "DELETE",
+            "/test_suites/nope/test_cases/TC-1/attachments/missing.txt",
+        ),
+        (
+            "GET",
+            "/test_suites/nope/test_cases/TC-1/steps/0/attachments",
+        ),
+        (
+            "DELETE",
+            "/test_suites/nope/test_cases/TC-1/steps/0/attachments/missing.txt",
+        ),
+    ] {
+        let (status, body) = send_json(&app, json_request(method, uri, &json!({}))).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{method} {uri}");
+        assert_error_envelope(&body, "invalid_id");
+    }
+
+    // An upload reaches the same refusal, but only once its multipart framing is
+    // usable to begin with: a request the extractor cannot start on is answered
+    // in plain text before the handler reads the path at all.
+    for uri in [
+        "/projects/nope/test_cases/TC-1/attachments",
+        "/projects/nope/test_cases/TC-1/steps/0/attachments",
+        "/test_suites/nope/test_cases/TC-1/attachments",
+        "/test_suites/nope/test_cases/TC-1/steps/0/attachments",
+    ] {
+        let request = common::multipart_request(uri, "note.txt", b"hello");
+        let (status, body) = send_json(&app, request).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "POST {uri}");
+        assert_error_envelope(&body, "invalid_id");
+    }
+}
+
+#[tokio::test]
 async fn duplicate_routes_report_an_unusable_identifier_as_their_own_description_says() {
     let (_directory, app) = test_app();
 
@@ -798,7 +862,7 @@ async fn openapi_declares_the_security_posture_of_every_operation() {
     ];
 
     let operations = documented_operations(&document);
-    assert_eq!(operations.len(), 73, "the documented surface changed");
+    assert_eq!(operations.len(), 85, "the documented surface changed");
 
     for (label, operation) in &operations {
         let responses = operation["responses"].as_object().expect("responses");
@@ -856,7 +920,7 @@ async fn openapi_declares_the_security_posture_of_every_operation() {
         .filter(|(_, operation)| operation["responses"].get("403").is_some())
         .count();
     assert_eq!(
-        refuses, 63,
+        refuses, 75,
         "the 403 surface changed; update this count with it"
     );
 }
@@ -1066,7 +1130,7 @@ async fn openapi_operations_carry_stable_ids_and_resource_tags() {
             "{label} carries an undeclared tag: {tag}"
         );
     }
-    assert_eq!(ids.len(), 73, "every documented operation is named");
+    assert_eq!(ids.len(), 85, "every documented operation is named");
 }
 
 #[tokio::test]

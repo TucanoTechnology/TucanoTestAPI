@@ -116,8 +116,10 @@ Three API semantics follow from this concept and apply to every composition requ
   within its project, and a case id is unique within its parent. A run, milestone and configuration
   id is unique within the project that holds it. Copy-on-include may therefore place the same id
   under several parents; a document-level route (`GET`/`PUT`/`DELETE /test_cases/{id}`,
-  attachments, duplicate) operates on the one occurrence when it is unique and answers
-  `409 Conflict`, naming the parent-scoped routes, when it is ambiguous. The global document routes
+  duplicate) operates on the one occurrence when it is unique and answers `409 Conflict`, naming
+  the parent-scoped routes, when it is ambiguous. The attachment routes resolve the same way on
+  their bare form, and each of them also has a parent-scoped mirror that names the holder, so an
+  attachment of an ambiguous case stays reachable. The global document routes
   for runs, milestones and configurations resolve the same way. Listing routes never fail on
   duplicates; they de-duplicate.
 
@@ -143,6 +145,11 @@ surface is:
 | Milestones | `GET /milestones`, parent-scoped creation, listing and deletion (`GET`/`POST /projects/{id}/milestones`, `DELETE /projects/{id}/milestones/{milestone_id}`), `GET`/`PUT`/`DELETE /milestones/{id}`, `POST /milestones/{id}/duplicate`, `GET /milestones/{id}/progress` |
 | Configurations | `GET /configurations`, parent-scoped creation, listing and deletion (`GET`/`POST /projects/{id}/configurations`, `DELETE /projects/{id}/configurations/{config_id}`), `GET`/`PUT`/`DELETE /configurations/{id}` |
 | Reports | `GET /reports/coverage`, `GET /reports/summary` |
+
+Each attachment family exists in three forms: bare (`/test_cases/{id}/…`), through the holding
+project (`/projects/{id}/test_cases/{case_id}/…`) and through the holding suite
+(`/test_suites/{id}/test_cases/{case_id}/…`). Only the case attachment has a download route, and it
+has one in all three forms; a step attachment is uploaded, listed and deleted, never downloaded.
 
 List endpoints share `?filter=`, `?tags=` (matched as an OR set), and — for runs, the only
 collection with configuration references — `?configuration=`. The retired flat creation routes
