@@ -827,6 +827,74 @@ async fn openapi_documents_the_error_contract_of_every_operation() {
     }
 }
 
+/// The three attachment downloads are the document's only binary answers, and
+/// each is typed as bytes and names the file for the client.
+///
+/// The route used to declare `application/octet-stream` while answering with a
+/// content type derived from the stored name, so a client that picks its decoder
+/// from the response type read a text attachment as a `string` and never handed
+/// the browser a blob (Issue #291). The invariant is derived from the document,
+/// not from a list: an operation that publishes a binary body publishes exactly
+/// that media type and the `Content-Disposition` header that names the file.
+#[tokio::test]
+async fn openapi_types_and_names_every_binary_download() {
+    let (_directory, app) = test_app();
+    let (status, document) = send_json(&app, get("/openapi.json")).await;
+    assert_eq!(status, StatusCode::OK);
+
+    let mut binary = Vec::new();
+    for (label, operation) in documented_operations(&document) {
+        let Some(answer) = operation["responses"].get("200") else {
+            continue;
+        };
+        let response = dereference(&document, answer);
+        let content = match response["content"].as_object() {
+            Some(content) => content,
+            None => continue,
+        };
+        if !content.contains_key("application/octet-stream") {
+            continue;
+        }
+        binary.push(label.clone());
+        assert_eq!(
+            content.len(),
+            1,
+            "{label} publishes more than the binary body"
+        );
+        assert_eq!(
+            content["application/octet-stream"]["schema"],
+            json!({"type": "string", "format": "binary"}),
+            "{label} binary schema"
+        );
+        let headers = response["headers"]
+            .as_object()
+            .unwrap_or_else(|| panic!("{label} names no file"));
+        let disposition = headers
+            .get("Content-Disposition")
+            .unwrap_or_else(|| panic!("{label} declares no Content-Disposition"));
+        let disposition = dereference(&document, disposition);
+        assert!(
+            disposition["description"].is_string(),
+            "{label} Content-Disposition has no description"
+        );
+        assert!(
+            disposition["schema"].is_object(),
+            "{label} Content-Disposition has no schema"
+        );
+    }
+
+    binary.sort();
+    assert_eq!(
+        binary,
+        [
+            "get /projects/{id}/test_cases/{case_id}/attachments/{filename}",
+            "get /test_cases/{id}/attachments/{filename}",
+            "get /test_suites/{id}/test_cases/{case_id}/attachments/{filename}",
+        ],
+        "the binary downloads are exactly these three"
+    );
+}
+
 /// The document states the posture the router enforces: every operation takes a
 /// bearer token except the five a caller reaches before it holds one, and every
 /// operation that checks a project role can answer 403.

@@ -2,8 +2,8 @@ mod common;
 
 use axum::{Router, http::StatusCode};
 use common::{
-    assert_error_envelope, content_type, create_test_case, delete, get, json_request,
-    multipart_request, multipart_without_file, send, send_full, send_json, test_app,
+    assert_error_envelope, content_disposition, content_type, create_test_case, delete, get,
+    json_request, multipart_request, multipart_without_file, send, send_full, send_json, test_app,
 };
 use serde_json::json;
 
@@ -79,15 +79,74 @@ async fn missing_attachments_return_not_found() {
 }
 
 #[tokio::test]
-async fn attachment_downloads_use_a_content_type_derived_from_the_extension() {
+async fn attachment_downloads_are_opaque_and_named_for_the_client() {
     let (_directory, app) = test_app();
     create_test_case(&app, "TC-001").await;
 
-    let (_, uploaded) = send_json(
+    // Whatever the file is, the body is opaque bytes: a client that picks its
+    // decoder from the response content type can never turn a text attachment
+    // into a string, and non-UTF-8 bytes survive a download unchanged. The
+    // stored media type stays in the document instead of reaching the wire.
+    for (name, contents, recorded) in [
+        ("report.pdf", b"%PDF-1.4".as_slice(), "application/pdf"),
+        ("notes.txt", b"evidence", "text/plain"),
+    ] {
+        let (status, uploaded) = send_json(
+            &app,
+            multipart_request("/test_cases/TC-001/attachments", name, contents),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED);
+        let filename = uploaded["filename"].as_str().expect("stored filename");
+
+        let (status, headers, body) = send_full(
+            &app,
+            get(&format!("/test_cases/TC-001/attachments/{filename}")),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            content_type(&headers),
+            Some("application/octet-stream"),
+            "{name} is served opaquely"
+        );
+        assert_eq!(
+            content_disposition(&headers),
+            Some(format!("attachment; filename=\"{name}\"").as_str()),
+            "{name} is named for the client"
+        );
+        assert_eq!(body, contents, "{name} round-trips its bytes");
+
+        let (status, document) = send_json(&app, get("/test_cases/TC-001")).await;
+        assert_eq!(status, StatusCode::OK);
+        let recorded_types: Vec<&str> = document["attachments"]
+            .as_array()
+            .expect("attachments")
+            .iter()
+            .map(|entry| entry["mimeType"].as_str().expect("mimeType"))
+            .collect();
+        assert!(
+            recorded_types.contains(&recorded),
+            "{name} records its media type: {document}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_non_ascii_file_name_is_named_for_the_client() {
+    let (_directory, app) = test_app();
+    create_test_case(&app, "TC-001").await;
+
+    let (status, uploaded) = send_json(
         &app,
-        multipart_request("/test_cases/TC-001/attachments", "report.pdf", b"%PDF-1.4"),
+        multipart_request(
+            "/test_cases/TC-001/attachments",
+            "rapport-généré.txt",
+            b"evidence",
+        ),
     )
     .await;
+    assert_eq!(status, StatusCode::CREATED, "{uploaded}");
     let filename = uploaded["filename"].as_str().expect("stored filename");
 
     let (status, headers, _) = send_full(
@@ -95,9 +154,75 @@ async fn attachment_downloads_use_a_content_type_derived_from_the_extension() {
         get(&format!("/test_cases/TC-001/attachments/{filename}")),
     )
     .await;
-
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(content_type(&headers), Some("application/pdf"));
+    // The ASCII-safe rendering and the exact name travel together, so a client
+    // that understands RFC 5987 saves the file under the name that was
+    // uploaded and one that does not still gets a usable name.
+    assert_eq!(
+        content_disposition(&headers),
+        Some(
+            "attachment; filename=\"rapport-g_n_r_.txt\"; \
+             filename*=UTF-8''rapport-g%C3%A9n%C3%A9r%C3%A9.txt"
+        )
+    );
+}
+
+#[tokio::test]
+async fn an_upload_records_when_the_file_arrived() {
+    let (_directory, app) = test_app();
+    create_test_case(&app, "TC-001").await;
+
+    let (status, uploaded) = send_json(
+        &app,
+        multipart_request("/test_cases/TC-001/attachments", "notes.txt", b"evidence"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let filename = uploaded["filename"].as_str().expect("stored filename");
+
+    let (status, document) = send_json(&app, get("/test_cases/TC-001")).await;
+    assert_eq!(status, StatusCode::OK);
+    let stored = &document["attachments"][0];
+    assert_eq!(stored["filename"], filename);
+    assert_eq!(stored["originalName"], "notes.txt");
+    assert_eq!(stored["mimeType"], "text/plain");
+    assert_eq!(stored["size"], 8);
+
+    let uploaded_at = stored["uploadedAt"]
+        .as_str()
+        .unwrap_or_else(|| panic!("`uploadedAt` is recorded: {document}"));
+    assert_eq!(
+        uploaded_at.len(),
+        20,
+        "`uploadedAt` is an ISO-8601 UTC timestamp: {uploaded_at}"
+    );
+    assert!(
+        uploaded_at.ends_with('Z') && &uploaded_at[10..11] == "T",
+        "`uploadedAt` is an ISO-8601 UTC timestamp: {uploaded_at}"
+    );
+}
+
+#[tokio::test]
+async fn a_step_attachment_records_no_upload_time() {
+    let (_directory, app) = test_app();
+    create_case_with_steps(&app).await;
+
+    let (status, _) = send_json(
+        &app,
+        multipart_request(
+            "/test_cases/TC-STEPS/steps/1/attachments",
+            "notes.txt",
+            b"evidence",
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    // `StepAttachment` does not declare `uploadedAt`, so the step entry stays
+    // as narrow as its schema.
+    let (status, listing) = send_json(&app, get("/test_cases/TC-STEPS/steps/1/attachments")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(listing[0].get("uploadedAt").is_none(), "listing: {listing}");
 }
 
 #[tokio::test]
@@ -510,13 +635,26 @@ async fn a_parent_scoped_attachment_route_reaches_the_occurrence_it_names() {
         "stored name: {suite_file}"
     );
 
-    // Each occurrence serves its own bytes and holds nothing of the other's.
-    let (status, contents) = send(&app, get(&format!("{project_uri}/{project_file}"))).await;
+    // Each occurrence serves its own bytes, opaquely and named for the client,
+    // and holds nothing of the other's.
+    let (status, headers, contents) =
+        send_full(&app, get(&format!("{project_uri}/{project_file}"))).await;
     assert_eq!(status, StatusCode::OK);
+    assert_eq!(content_type(&headers), Some("application/octet-stream"));
+    assert_eq!(
+        content_disposition(&headers),
+        Some("attachment; filename=\"notes.txt\"")
+    );
     assert_eq!(contents, b"project copy");
 
-    let (status, contents) = send(&app, get(&format!("{suite_uri}/{suite_file}"))).await;
+    let (status, headers, contents) =
+        send_full(&app, get(&format!("{suite_uri}/{suite_file}"))).await;
     assert_eq!(status, StatusCode::OK);
+    assert_eq!(content_type(&headers), Some("application/octet-stream"));
+    assert_eq!(
+        content_disposition(&headers),
+        Some("attachment; filename=\"notes.txt\"")
+    );
     assert_eq!(contents, b"suite copy");
 
     let (status, _) = send(&app, get(&format!("{project_uri}/{suite_file}"))).await;

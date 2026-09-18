@@ -121,7 +121,11 @@ fn format_iso8601(seconds: u64) -> String {
     format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}Z")
 }
 
-/// Content type recorded for, and served with, a stored attachment.
+/// Content type recorded for a stored attachment.
+///
+/// This is metadata about the file, kept in the case document's `mimeType`; it
+/// is not the type a download is answered with, which is always
+/// [`ATTACHMENT_MEDIA_TYPE`].
 pub fn mime_type(filename: &str) -> &'static str {
     match filename
         .rsplit('.')
@@ -138,6 +142,77 @@ pub fn mime_type(filename: &str) -> &'static str {
         "json" => "application/json",
         _ => "application/octet-stream",
     }
+}
+
+/// Media type every attachment download is answered with.
+///
+/// The stored media type is recorded in the case document (`mimeType`) rather
+/// than replayed on the wire: a download is opaque bytes, so a client that
+/// decodes by content type can never mis-read a text attachment as a string and
+/// non-UTF-8 bytes are never corrupted by a text decode.
+pub const ATTACHMENT_MEDIA_TYPE: &str = "application/octet-stream";
+
+/// The name the client supplied for a stored attachment.
+///
+/// A stored name is `<unique suffix>-<original name>`, so the original is what
+/// follows the first hyphen when everything before it is digits. A name that
+/// does not have that shape is reported as itself, which is what a caller that
+/// addresses an attachment by an already-known name needs.
+pub fn original_name(filename: &str) -> &str {
+    match filename.split_once('-') {
+        Some((suffix, rest))
+            if !suffix.is_empty() && suffix.bytes().all(|byte| byte.is_ascii_digit()) =>
+        {
+            rest
+        }
+        _ => filename,
+    }
+}
+
+/// Value of the `Content-Disposition` header for a download of `filename`.
+///
+/// The uploader's name travels in both the plain and the RFC 5987 forms a
+/// client may understand: `filename` carries an ASCII-safe rendering, and
+/// `filename*` the exact UTF-8 name percent-encoded, which is added only when
+/// the two differ. Every byte outside printable ASCII is replaced in the plain
+/// form, so quoting and control characters from an uploaded name can never
+/// escape into the header.
+pub fn content_disposition(filename: &str) -> String {
+    let name = original_name(filename);
+    let plain: String = name
+        .chars()
+        .map(|character| {
+            if character.is_ascii_graphic() && character != '"' && character != '\\' {
+                character
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    let encoded = percent_encode(name);
+    if plain == encoded {
+        format!("attachment; filename=\"{plain}\"")
+    } else {
+        format!("attachment; filename=\"{plain}\"; filename*=UTF-8''{encoded}")
+    }
+}
+
+/// Percent-encodes a name with the attribute character set RFC 5987 allows.
+fn percent_encode(name: &str) -> String {
+    let mut encoded = String::with_capacity(name.len());
+    for &byte in name.as_bytes() {
+        let allowed = byte.is_ascii_alphanumeric()
+            || matches!(
+                byte,
+                b'!' | b'#' | b'$' | b'&' | b'+' | b'-' | b'.' | b'^' | b'_' | b'`' | b'|' | b'~'
+            );
+        if allowed {
+            encoded.push(char::from(byte));
+        } else {
+            encoded.push_str(&format!("%{byte:02X}"));
+        }
+    }
+    encoded
 }
 
 #[cfg(test)]
@@ -167,5 +242,48 @@ mod tests {
         assert!(value.ends_with('Z'), "timestamp: {value}");
         assert_eq!(&value[4..5], "-");
         assert_eq!(&value[10..11], "T");
+    }
+
+    #[test]
+    fn original_name_undoes_the_stored_prefix() {
+        assert_eq!(original_name("1789740136589400280-notes.txt"), "notes.txt");
+        // The original may carry a numeric prefix of its own; only the stored
+        // one is stripped.
+        assert_eq!(
+            original_name("1789740136589400280-123-notes.txt"),
+            "123-notes.txt"
+        );
+        assert_eq!(original_name("notes.txt"), "notes.txt");
+        assert_eq!(original_name("1234.txt"), "1234.txt");
+    }
+
+    #[test]
+    fn content_disposition_names_the_original_file() {
+        assert_eq!(
+            content_disposition("1789740136589400280-report.pdf"),
+            "attachment; filename=\"report.pdf\""
+        );
+        // A non-ASCII name keeps an ASCII-safe rendering in `filename` and its
+        // exact bytes in the RFC 5987 `filename*` form.
+        assert_eq!(
+            content_disposition("1789740136589400280-rapport-généré.txt"),
+            "attachment; filename=\"rapport-g_n_r_.txt\"; \
+             filename*=UTF-8''rapport-g%C3%A9n%C3%A9r%C3%A9.txt"
+        );
+    }
+
+    #[test]
+    fn content_disposition_cannot_escape_the_header() {
+        let disposition = content_disposition("17-ev\"il\r\nX-Evil: 1.txt");
+        assert_eq!(
+            disposition,
+            "attachment; filename=\"ev_il__X-Evil:_1.txt\"; \
+             filename*=UTF-8''ev%22il%0D%0AX-Evil%3A%201.txt"
+        );
+        assert_eq!(
+            disposition,
+            disposition.trim(),
+            "the value carries no line break: {disposition:?}"
+        );
     }
 }
