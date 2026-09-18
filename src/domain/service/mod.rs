@@ -20,8 +20,7 @@ use serde_json::{Value, json};
 
 use crate::models::{
     CaseHistoryEntry, CoverageReport, DefectLink, ImportCounts, ImportSummary, Milestone,
-    MilestoneProgress, SummaryReport, TestCase, TestCaseResult, TestConfiguration, TestRun,
-    TestSuite,
+    MilestoneProgress, SummaryReport, TestCase, TestConfiguration, TestRun, TestSuite,
 };
 use crate::storage::{Parent, Placement, Repository, Resource, StorageProbe, unique_suffix};
 

@@ -531,7 +531,7 @@ async function step7Results() {
   await call('POST', results, {
     body: { testCaseId: 'TC-LOGIN-1', status: 'Passed', notes: 'signed in', durationMs: 1200 },
   });
-  // Recorded Blocked first, then replaced: one stored result per case.
+  // Recorded Blocked first, then re-recorded: one stored result per case, merged.
   await call('POST', results, {
     body: { testCaseId: 'TC-LOGIN-2', status: 'Blocked' },
   });

@@ -149,16 +149,114 @@ pub fn detach_configuration_from_run(
     Ok(())
 }
 
-/// Records a result for a case, replacing any earlier result for that case.
-pub fn upsert_result(run: &mut TestRun, result: TestCaseResult) {
+/// What a recording request says about one optional field of a result.
+///
+/// A request describes a result in the same shape every time, so a field it
+/// leaves out says nothing about that field: an omitted `notes` keeps whatever
+/// the stored result already carried, while an explicit JSON `null` clears it.
+/// `Keep` and `Clear` are therefore different answers even though both store no
+/// value in the end.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Patch<T> {
+    Keep,
+    Clear,
+    Set(T),
+}
+
+impl<T> Patch<T> {
+    /// The value to store for a result that does not exist yet.
+    ///
+    /// A patch that says `Keep` has nothing to keep when there is no result, so
+    /// a brand new result stores nothing for that field.
+    fn into_stored(self) -> Option<T> {
+        match self {
+            Patch::Set(value) => Some(value),
+            Patch::Keep | Patch::Clear => None,
+        }
+    }
+}
+
+/// The result a run should hold for one case after a recording request.
+///
+/// A run's stored result carries more than a request can describe: defect links
+/// and attachments are added by their own routes once the result exists, and no
+/// recording request can speak for them. The update therefore names only the
+/// fields the request decides, so re-recording keeps what it cannot see.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResultUpdate {
+    pub test_case_id: String,
+    pub status: String,
+    pub timestamp: String,
+    pub notes: Patch<String>,
+    pub duration_ms: Patch<u64>,
+}
+
+/// Records a result for a case, updating any earlier result for that case.
+///
+/// The status and timestamp the request carries are the run's current word on
+/// the case and always replace what was stored; `notes` and `durationMs` follow
+/// the patch the request built, so an omitted field survives a re-record and an
+/// explicit `null` clears it. A result's defect links and attachments are left
+/// exactly as they were: the request cannot describe either, and dropping them
+/// would lose the failures already linked to the case.
+pub fn upsert_result(run: &mut TestRun, update: ResultUpdate) {
     let results = run.results.get_or_insert_with(Vec::new);
     match results
         .iter_mut()
-        .find(|existing| existing.test_case_id == result.test_case_id)
+        .find(|existing| existing.test_case_id == update.test_case_id)
     {
-        Some(existing) => *existing = result,
-        None => results.push(result),
+        Some(existing) => {
+            existing.status = update.status;
+            existing.timestamp = update.timestamp;
+            apply_patch(&mut existing.notes, update.notes);
+            apply_patch(&mut existing.duration_ms, update.duration_ms);
+        }
+        None => results.push(TestCaseResult {
+            test_case_id: update.test_case_id,
+            status: update.status,
+            timestamp: update.timestamp,
+            notes: update.notes.into_stored(),
+            duration_ms: update.duration_ms.into_stored(),
+            attachments: None,
+            defect_links: None,
+        }),
     }
+}
+
+fn apply_patch<T>(stored: &mut Option<T>, patch: Patch<T>) {
+    match patch {
+        Patch::Keep => {}
+        Patch::Clear => *stored = None,
+        Patch::Set(value) => *stored = Some(value),
+    }
+}
+
+/// Whether a run holds `case_id`, so it may record a result for it.
+///
+/// A run holds a case when it declares it — under `testCases`, or through one of
+/// the suites it embeds — or when it already records a result for it. The second
+/// clause is what keeps a run readable: a document written before the run
+/// declared a population, and a run an imported report filled with cases it
+/// never listed, both stay editable rather than becoming write-once.
+pub fn holds_case(run: &TestRun, case_id: &str) -> bool {
+    let declared = run
+        .test_cases
+        .as_ref()
+        .is_some_and(|cases| cases.iter().any(|case| case.test_case_id == case_id));
+    let through_a_suite = run.test_suites.as_ref().is_some_and(|suites| {
+        suites.iter().any(|suite| {
+            suite
+                .test_cases
+                .iter()
+                .any(|case| case.test_case_id == case_id)
+        })
+    });
+    let already_recorded = run
+        .results
+        .as_ref()
+        .is_some_and(|results| results.iter().any(|result| result.test_case_id == case_id));
+
+    declared || through_a_suite || already_recorded
 }
 
 /// Adds a defect link to the result a run records for `case_id`, refusing a
@@ -227,6 +325,7 @@ fn result_mut<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::models::Attachment;
     use serde_json::json;
 
     fn case(id: &str) -> TestCase {
@@ -284,15 +383,13 @@ mod tests {
         }
     }
 
-    fn result(case_id: &str, status: &str) -> TestCaseResult {
-        TestCaseResult {
+    fn update(case_id: &str, status: &str) -> ResultUpdate {
+        ResultUpdate {
             test_case_id: case_id.to_owned(),
             status: status.to_owned(),
             timestamp: "1".to_owned(),
-            notes: None,
-            duration_ms: None,
-            attachments: None,
-            defect_links: None,
+            notes: Patch::Keep,
+            duration_ms: Patch::Keep,
         }
     }
 
@@ -383,17 +480,150 @@ mod tests {
     }
 
     #[test]
-    fn a_second_result_for_a_case_replaces_the_first() {
+    fn a_second_result_for_a_case_merges_into_the_first() {
         let mut target = run();
-        upsert_result(&mut target, result("TC-1", "Untested"));
-        upsert_result(&mut target, result("TC-2", "Passed"));
-        upsert_result(&mut target, result("TC-1", "Failed"));
+        upsert_result(&mut target, update("TC-1", "Untested"));
+        upsert_result(&mut target, update("TC-2", "Passed"));
+        let mut second = update("TC-1", "Failed");
+        second.timestamp = "2".to_owned();
+        upsert_result(&mut target, second);
 
         let results = target.results.expect("results");
         assert_eq!(results.len(), 2);
         assert_eq!(results[0].test_case_id, "TC-1");
         assert_eq!(results[0].status, "Failed");
+        assert_eq!(results[0].timestamp, "2");
         assert_eq!(results[1].test_case_id, "TC-2");
+    }
+
+    #[test]
+    fn a_re_recorded_result_keeps_the_fields_the_request_leaves_out() {
+        let mut target = run();
+        let mut first = update("TC-1", "Failed");
+        first.notes = Patch::Set("flaky on CI".to_owned());
+        first.duration_ms = Patch::Set(1200);
+        upsert_result(&mut target, first);
+
+        upsert_result(&mut target, update("TC-1", "Passed"));
+
+        let result = &target.results.as_ref().expect("results")[0];
+        assert_eq!(result.status, "Passed");
+        assert_eq!(result.notes.as_deref(), Some("flaky on CI"));
+        assert_eq!(result.duration_ms, Some(1200));
+    }
+
+    #[test]
+    fn an_explicit_null_clears_a_stored_field() {
+        let mut target = run();
+        let mut first = update("TC-1", "Failed");
+        first.notes = Patch::Set("flaky on CI".to_owned());
+        first.duration_ms = Patch::Set(1200);
+        upsert_result(&mut target, first);
+
+        let mut clearing = update("TC-1", "Passed");
+        clearing.notes = Patch::Clear;
+        clearing.duration_ms = Patch::Clear;
+        upsert_result(&mut target, clearing);
+
+        let result = &target.results.as_ref().expect("results")[0];
+        assert_eq!(result.notes, None);
+        assert_eq!(result.duration_ms, None);
+    }
+
+    #[test]
+    fn a_new_result_stores_what_the_request_describes() {
+        let mut target = run();
+        let mut described = update("TC-1", "Failed");
+        described.notes = Patch::Set("boom".to_owned());
+        described.duration_ms = Patch::Set(7);
+        upsert_result(&mut target, described);
+
+        let result = &target.results.as_ref().expect("results")[0];
+        assert_eq!(result.test_case_id, "TC-1");
+        assert_eq!(result.status, "Failed");
+        assert_eq!(result.notes.as_deref(), Some("boom"));
+        assert_eq!(result.duration_ms, Some(7));
+        assert_eq!(result.attachments, None);
+        assert_eq!(result.defect_links, None);
+    }
+
+    #[test]
+    fn a_new_result_stores_nothing_for_a_field_the_request_leaves_out() {
+        let mut target = run();
+        let mut described = update("TC-1", "Failed");
+        described.notes = Patch::Clear;
+        upsert_result(&mut target, described);
+
+        let result = &target.results.as_ref().expect("results")[0];
+        assert_eq!(result.notes, None);
+        assert_eq!(result.duration_ms, None);
+    }
+
+    #[test]
+    fn re_recording_keeps_the_defect_links_and_attachments_it_cannot_describe() {
+        let mut target = run();
+        upsert_result(&mut target, update("TC-1", "Failed"));
+        attach_defect_to_result(&mut target, "TC-1", link("L-1", "BUG-42")).expect("link");
+        target.results.as_mut().expect("results")[0].attachments = Some(vec![Attachment {
+            filename: "failure.log".to_owned(),
+            original_name: "failure.log".to_owned(),
+            mime_type: "text/plain".to_owned(),
+            size: 12.0,
+            uploaded_at: None,
+        }]);
+
+        upsert_result(&mut target, update("TC-1", "Passed"));
+
+        let result = &target.results.as_ref().expect("results")[0];
+        assert_eq!(result.status, "Passed");
+        assert_eq!(
+            result
+                .defect_links
+                .as_ref()
+                .expect("links")
+                .iter()
+                .map(|link| link.defect_id.as_str())
+                .collect::<Vec<_>>(),
+            ["BUG-42"]
+        );
+        assert_eq!(
+            result
+                .attachments
+                .as_ref()
+                .expect("attachments")
+                .iter()
+                .map(|attachment| attachment.filename.as_str())
+                .collect::<Vec<_>>(),
+            ["failure.log"]
+        );
+    }
+
+    #[test]
+    fn a_run_holds_a_case_it_declares_directly() {
+        let mut target = run();
+        assert!(!holds_case(&target, "TC-1"));
+
+        target.test_cases = Some(vec![case("TC-1")]);
+        assert!(holds_case(&target, "TC-1"));
+        assert!(!holds_case(&target, "TC-2"));
+    }
+
+    #[test]
+    fn a_run_holds_a_case_one_of_its_suites_declares() {
+        let mut target = run();
+        target.test_suites = Some(vec![suite("S-1", vec![case("TC-1")])]);
+
+        assert!(holds_case(&target, "TC-1"));
+        assert!(!holds_case(&target, "TC-2"));
+    }
+
+    #[test]
+    fn a_run_holds_a_case_it_already_records_a_result_for() {
+        let mut target = run();
+        upsert_result(&mut target, update("TC-1", "Passed"));
+
+        assert!(holds_case(&target, "TC-1"));
+        assert!(!holds_case(&target, "TC-2"));
     }
 
     #[test]
@@ -475,7 +705,7 @@ mod tests {
     #[test]
     fn a_defect_joins_a_result_exactly_once() {
         let mut target = run();
-        upsert_result(&mut target, result("TC-1", "Failed"));
+        upsert_result(&mut target, update("TC-1", "Failed"));
         attach_defect_to_result(&mut target, "TC-1", link("L-1", "BUG-42")).expect("link");
 
         let links = target.results.as_ref().expect("results")[0]
@@ -505,7 +735,7 @@ mod tests {
         assert!(matches!(error, DomainError::NotFound(_)));
 
         let mut other = run();
-        upsert_result(&mut other, result("TC-2", "Passed"));
+        upsert_result(&mut other, update("TC-2", "Passed"));
         let error = attach_defect_to_result(&mut other, "TC-1", link("L-1", "BUG-42"))
             .expect_err("the case must be the one the run recorded");
         assert!(matches!(error, DomainError::NotFound(_)));
@@ -518,7 +748,7 @@ mod tests {
             .expect_err("a run with no results has nothing to unlink");
         assert!(matches!(error, DomainError::NotFound(_)));
 
-        upsert_result(&mut target, result("TC-1", "Failed"));
+        upsert_result(&mut target, update("TC-1", "Failed"));
         attach_defect_to_result(&mut target, "TC-1", link("L-1", "BUG-42")).expect("link");
         let error = detach_defect_from_result(&mut target, "TC-1", "L-2")
             .expect_err("the link must be the one the result carries");
@@ -535,7 +765,7 @@ mod tests {
     #[test]
     fn unlinking_one_defect_leaves_the_others_in_place() {
         let mut target = run();
-        upsert_result(&mut target, result("TC-1", "Failed"));
+        upsert_result(&mut target, update("TC-1", "Failed"));
         attach_defect_to_result(&mut target, "TC-1", link("L-1", "BUG-42")).expect("first");
         attach_defect_to_result(&mut target, "TC-1", link("L-2", "BUG-43")).expect("second");
 

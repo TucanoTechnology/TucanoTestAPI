@@ -76,42 +76,35 @@ impl<R: Repository> TestService<R> {
         self.save(Resource::Runs, run_id, Some(&home), &run)
     }
 
-    /// Records, or replaces, the result of a case within a run.
+    /// Records, or updates, the result of a case within a run.
+    ///
+    /// A run only records results for the cases it holds — the ones it declares,
+    /// or ones it already records a result for — so a result for a case the run
+    /// never picked up is a `404` rather than a stray entry in the run.
     pub fn record_run_result(&self, run_id: &str, body: &Value) -> Result<(), DomainError> {
-        let test_case_id = required_string(body, "testCaseId")
-            .ok_or_else(|| DomainError::invalid_request("Required field testCaseId is missing"))?;
-        let status = required_string(body, "status")
-            .ok_or_else(|| DomainError::invalid_request("Required field status is missing"))?;
-        if !VALID_STATUSES.contains(&status.as_str()) {
-            return Err(DomainError::invalid_status());
-        }
+        let update = result_update(body)?;
 
         let home = self.run_home(run_id)?;
         let mut run =
             self.load::<TestRun>(Resource::Runs, run_id, Some(&home), "Test run not found")?;
-        // The result may name a case the store does not hold — the API has
-        // always accepted that — so the case is looked up best-effort: its
-        // version is pinned when it can be read and the run falls back to
-        // version 1 when it cannot.
+        if !composition::holds_case(&run, &update.test_case_id) {
+            return Err(DomainError::NotFound(
+                "Test case not in test run".to_owned(),
+            ));
+        }
+        // A run may hold a case whose document has since been removed, so the
+        // case is looked up best-effort: its version is pinned when it can be
+        // read and the run falls back to version 1 when it cannot.
         let held = self
-            .load_entity::<TestCase>(Resource::Cases, &test_case_id)
+            .load_entity::<TestCase>(Resource::Cases, &update.test_case_id)
             .ok();
         composition::capture_case_version(
             &mut run,
             held.as_ref()
-                .map_or(&test_case_id, |case| &case.test_case_id),
+                .map_or(&update.test_case_id, |case| &case.test_case_id),
             held.as_ref().and_then(|case| case.version),
         );
-        let result = TestCaseResult {
-            test_case_id,
-            status,
-            timestamp: required_string(body, "timestamp").unwrap_or_else(current_timestamp_string),
-            notes: required_string(body, "notes"),
-            duration_ms: body.get("durationMs").and_then(Value::as_u64),
-            attachments: None,
-            defect_links: None,
-        };
-        composition::upsert_result(&mut run, result);
+        composition::upsert_result(&mut run, update);
         self.save(Resource::Runs, run_id, Some(&home), &run)
     }
 
@@ -171,7 +164,9 @@ impl<R: Repository> TestService<R> {
     ///
     /// Both importers share this: they differ only in how they read a body and
     /// in whether a case they cannot use fails the request or is counted in
-    /// `errors`.
+    /// `errors`. The run's declared population is deliberately not consulted: an
+    /// external report names the cases it ran, and importing it is how those
+    /// cases come to be part of the run.
     fn store_imported_results(
         &self,
         run_id: &str,
@@ -214,14 +209,14 @@ impl<R: Repository> TestService<R> {
 
             composition::upsert_result(
                 &mut run,
-                TestCaseResult {
+                composition::ResultUpdate {
                     test_case_id: case.test_case_id,
                     status: case.status.as_str().to_owned(),
                     timestamp: case.timestamp.unwrap_or_else(current_timestamp_string),
-                    notes: case.notes,
-                    duration_ms: None,
-                    attachments: None,
-                    defect_links: None,
+                    notes: case
+                        .notes
+                        .map_or(composition::Patch::Keep, composition::Patch::Set),
+                    duration_ms: composition::Patch::Keep,
                 },
             );
             imported += 1;
@@ -330,4 +325,77 @@ impl<R: Repository> TestService<R> {
         composition::detach_defect_from_result(&mut run, case_id, link_id)?;
         self.save(Resource::Runs, run_id, Some(&home), &run)
     }
+}
+
+/// The fields a result-recording request may carry.
+///
+/// The body names the case and its status, and may describe the run's account of
+/// the execution; anything else is a field the API would have to drop, so it is
+/// rejected rather than ignored.
+const RESULT_REQUEST_FIELDS: [&str; 5] =
+    ["testCaseId", "status", "timestamp", "notes", "durationMs"];
+
+/// Validates a result-recording body and reads it into the update it describes.
+///
+/// The body is checked the way a create body is: an unknown field, a `notes`
+/// that is not a string, or a `durationMs` that is not a whole number of
+/// milliseconds is a 400 rather than a value quietly discarded. The optional
+/// fields keep the difference between "left out" and "explicitly null", so a
+/// re-recording that says nothing about `notes` keeps the stored one while an
+/// explicit `null` clears it. A `timestamp` — which storage always keeps as a
+/// string, either Unix seconds or ISO-8601 — falls back to now when the request
+/// omits it.
+fn result_update(body: &Value) -> Result<composition::ResultUpdate, DomainError> {
+    let object = body
+        .as_object()
+        .ok_or_else(|| DomainError::invalid_request("Request body must be a JSON object"))?;
+    for key in object.keys() {
+        if !RESULT_REQUEST_FIELDS.contains(&key.as_str()) {
+            return Err(DomainError::invalid_request(format!(
+                "Unknown field `{key}`"
+            )));
+        }
+    }
+
+    let test_case_id = required_string(body, "testCaseId")
+        .ok_or_else(|| DomainError::invalid_request("Required field testCaseId is missing"))?;
+    let status = required_string(body, "status")
+        .ok_or_else(|| DomainError::invalid_request("Required field status is missing"))?;
+    if !VALID_STATUSES.contains(&status.as_str()) {
+        return Err(DomainError::invalid_status());
+    }
+
+    let timestamp = match object.get("timestamp") {
+        None | Some(Value::Null) => current_timestamp_string(),
+        Some(Value::String(value)) if !value.is_empty() => value.clone(),
+        Some(_) => {
+            return Err(DomainError::invalid_request("Field `timestamp` is invalid"));
+        }
+    };
+    let notes = match object.get("notes") {
+        None => composition::Patch::Keep,
+        Some(Value::Null) => composition::Patch::Clear,
+        Some(Value::String(value)) => composition::Patch::Set(value.clone()),
+        Some(_) => return Err(DomainError::invalid_request("Field `notes` is invalid")),
+    };
+    let duration_ms = match object.get("durationMs") {
+        None => composition::Patch::Keep,
+        Some(Value::Null) => composition::Patch::Clear,
+        Some(value) => match value.as_u64() {
+            Some(milliseconds) => composition::Patch::Set(milliseconds),
+            None => {
+                return Err(DomainError::invalid_request(
+                    "Field `durationMs` is invalid",
+                ));
+            }
+        },
+    };
+
+    Ok(composition::ResultUpdate {
+        test_case_id,
+        status,
+        timestamp,
+        notes,
+        duration_ms,
+    })
 }

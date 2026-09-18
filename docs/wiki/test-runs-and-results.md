@@ -69,17 +69,29 @@ Omit the identifier and it is derived from the name; omit `timestamp` and the AP
 
 ## Recording a result
 
-`POST /test_runs/{id}/results` (`recordTestRunResult`) takes a `TestResultRequest` and writes one
-`TestCaseResult` into the run:
+`POST /test_runs/{id}/results` (`recordTestRunResult`) takes a `TestResultRequest` and records one
+`TestCaseResult` for a case the run holds:
 
 | Field | Notes |
 | --- | --- |
 | `testCaseId` | **Required.** The case this outcome belongs to |
 | `status` | **Required.** `Passed`, `Failed`, `Blocked`, `Untested` or `Retest` |
-| `timestamp` | Stamped with the current Unix seconds when omitted |
-| `notes` | Free prose — the "why" |
-| `durationMs` | Non-negative milliseconds |
-| `attachments`, `defectLinks` | Files and defect links recorded against this result |
+| `timestamp` | Replaced on every write; stamped with the current Unix seconds when omitted |
+| `notes` | Free prose — the "why". Replaced when supplied, cleared by an explicit `null` |
+| `durationMs` | Non-negative integer milliseconds. Replaced when supplied, cleared by an explicit `null` |
+
+`attachments` and `defectLinks` are **not** accepted in the body. A `TestCaseResult` carries them on
+reads, but the request schema is closed, so sending either is an unknown field and answers
+`400 invalid_request`. Link defects through the defect routes below.
+
+The body is validated, not read field by field: an unknown field, a missing `testCaseId` or
+`status`, a status outside the list, or a `durationMs` that is not a non-negative integer is
+rejected. A `timestamp` must be a non-empty string, or omitted. The route may only update a case the
+run already **holds** — one it declared in its `testCases`, carries inside one of its `testSuites`,
+or already records a result for. A result for any other case answers `404 not_found`
+(`"Test case not in test run"`). To run a new case, include it first with
+`POST /test_runs/{id}/test_cases`, or import the report that ran it (see
+[Result imports and reports](imports-and-reports.md)).
 
 It answers `200` with the message envelope, not the result:
 
@@ -94,8 +106,11 @@ curl -s -X POST http://localhost:3100/test_runs/run-2026-09-14.json/results \
 {"message":"Test result recorded"}
 ```
 
-Recording a result for the same case again replaces the run's record for that case — the run holds
-one outcome per case, and the latest write wins.
+Recording a result for a case the run already holds **merges** into that record rather than
+replacing it: `status` and `timestamp` are always written, while `notes` and `durationMs` keep their
+stored value when the body leaves them out and are replaced when it supplies them. An explicit
+`null` clears a field. The run still holds one outcome per case — a second call for the same case
+updates the first rather than adding a second record.
 
 ## Case versions in a run
 
@@ -153,7 +168,7 @@ Starting from a running instance on `http://localhost:3100` (see
 [Projects, suites, and cases](projects-suites-and-cases.md) present. Authentication is assumed off;
 with it on, add `-H "Authorization: Bearer $TOKEN"`.
 
-**1. Create a run in the project and include the suite.**
+**1. Create a run in the project, include the suite, and include the project-owned case.**
 
 ```sh
 curl -s -X POST http://localhost:3100/projects/Payments.json/test_runs \
@@ -162,7 +177,13 @@ curl -s -X POST http://localhost:3100/projects/Payments.json/test_runs \
 
 curl -s -X POST http://localhost:3100/test_runs/run-2026-09-14.json/test_suites \
   -H 'Content-Type: application/json' -d '{"suiteId":"Refunds.json"}'
+
+curl -s -X POST http://localhost:3100/test_runs/run-2026-09-14.json/test_cases \
+  -H 'Content-Type: application/json' -d '{"testCaseId":"smoke-checkout.json"}'
 ```
+
+The suite carries `refund-partial.json`; `smoke-checkout.json` lives directly in the project, so it
+needs its own include before a result can be recorded for it.
 
 **2. Record two outcomes.**
 
@@ -208,8 +229,11 @@ See [Result imports and reports](imports-and-reports.md) for what those numbers 
 | Symptom | Cause |
 | --- | --- |
 | The run shows an old case title | That is the point — the run is a snapshot, not a live view |
-| A result you recorded is gone | Recording a result for the same case replaces the run's record for it |
+| Two outcomes for one case collapse into one | A run holds one outcome per case; the second call **merges** into the first |
 | `400 invalid_status` | The status was not one of `Passed`, `Failed`, `Blocked`, `Untested`, `Retest` |
+| `404 not_found` on `POST /test_runs/{id}/results` | The run does not hold that case. Include it first with `POST /test_runs/{id}/test_cases`, or import the report that ran it |
+| `400 invalid_request` on a result body | An unknown field — the request schema is closed, so `attachments`, `defectLinks` and a GUI's `comment`/`duration` names are refused |
+| `400 invalid_request` on `durationMs` | `durationMs` must be a non-negative integer, not a negative or fractional number |
 | `409 conflict` linking a defect | That defect is already linked to this result |
 | `404 not_found` deleting a defect link | The link was already removed, or never existed |
 | `400` on `defectUrl` | The URL does not match the shape required by the chosen `trackerType` |
@@ -236,5 +260,6 @@ parameter and schema named here; the storage concept in the
 layout and the point-in-time rule; [`docs/architecture/adr-storage-layout-v3.md`](../architecture/adr-storage-layout-v3.md)
 for why runs live inside their project and are governed by it; the
 [compatibility contract](../contracts/api-compatibility.md) for the
-defect-link plans (#87, #88) and the run case-version capture plan (#92). Where this page and one of
-those disagree, the source wins and this page is a bug.*
+defect-link plans (#87, #88), the run case-version capture plan (#92) and the run-result merge and
+membership plan (#284, #285). Where this page and one of those disagree, the source wins and this
+page is a bug.*
