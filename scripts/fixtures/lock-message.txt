@@ -1,0 +1,15 @@
+Locked-account response
+=======================
+
+  POST /sign-in
+  { "username": "locked.demo", "password": "…" }
+
+  HTTP/1.1 423 Locked
+  { "error": "account_locked",
+    "message": "This account is locked. Contact support to unlock it." }
+
+The build under test shows no message at all, which is the defect
+BUG-101 was raised for. Expected: the `message` above, rendered in the
+sign-in form's error slot.
+
+Recorded from the demo storefront while seeding TC-LOGIN-2.

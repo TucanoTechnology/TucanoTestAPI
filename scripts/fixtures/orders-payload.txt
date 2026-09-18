@@ -1,0 +1,14 @@
+Orders payload
+==============
+
+  GET /accounts/42/orders
+
+  { "orders": [
+      { "id": "A-1001", "status": "shipped",   "total": "49.80" },
+      { "id": "A-1002", "status": "pending",   "total": "9.90"  },
+      { "id": "A-1003", "status": "cancelled", "total": "14.00" }
+    ] }
+
+Expected: the three orders above, newest first, with `A-1001` on top.
+
+Recorded from the demo storefront while seeding TC-ORDERS-1.

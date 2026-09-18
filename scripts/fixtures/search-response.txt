@@ -1,0 +1,15 @@
+Search response
+===============
+
+  GET /search?q=espresso
+
+  { "hits": 2,
+    "results": [
+      { "sku": "SKU-4471", "name": "Espresso cup",      "score": 0.98 },
+      { "sku": "SKU-4479", "name": "Espresso tamper",   "score": 0.71 }
+    ] }
+
+Expected: exactly two hits, `SKU-4471` first. A third hit, or a result
+with `score` below 0.5, is a failure of this case.
+
+Recorded from the demo storefront while seeding TC-SEARCH-1.

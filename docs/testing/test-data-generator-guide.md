@@ -22,17 +22,23 @@ and this guide is a bug.
 
 One run creates, over the HTTP API alone:
 
-- two projects (`checkout.json` with tags and a directly owned case, `payments.json`);
-- a test suite inside each project, plus a duplicate of the checkout suite;
-- four test cases, one of them carrying ordered steps and two carrying attachments (one on the case,
-  one on a step);
+- two projects: `checkout.json`, with tags and two directly owned cases, and `payments.json`, with one;
+- four suites plus a duplicate of the checkout suite: `checkout.json` gets `smoke.checkout.json`, a
+  second suite `regression.checkout.json` that the run deliberately leaves empty, and
+  `portable.checkout.json`; `payments.json` gets `smoke.payments.json`. `portable.checkout.json` is
+  then moved into `payments.json` and copied back, so it ends up in both projects;
+- eight test cases, every one carrying ordered steps and at least one attachment — fifteen uploads in
+  all, eight on the cases and seven on their steps, with two cases carrying two steps each;
 - a run with a linked configuration, pinned case membership and a recorded result for every status —
   `Passed`, `Failed` (with notes and a duration), `Blocked`, `Retest` — with `Untested` left implicit,
   and a result recorded twice to show replacement;
 - four defect links, one per tracker type, with the GitHub one unlinked again;
 - a second run whose results arrive by JSON and JUnit import;
 - a milestone deriving its progress from the first run;
-- a copy-vs-move placement pair, so `TC-LOGIN-1` ends up in two homes and `TC-PROJECT-1` moves.
+- every containment and placement shape the API offers: a copy per parent pair (`TC-LOGIN-1`
+  suite→project, `TC-ORDERS-1` project→project, `TC-CATALOG-1` project→suite, `TC-SEARCH-1`
+  suite→suite), four moves chained onto `TC-MOVE-1` so one case passes through all four move
+  directions, and a no-op move of `TC-PROJECT-1`.
 
 The result is the tree of specification §2 below `TUCANO_DATA_DIR`. The two properties that matter
 for every audience below are that it is **generated, never stored** (so it cannot drift from the API)
@@ -92,9 +98,14 @@ for the dataset itself.
 - **The coverage matrix** (specification §1) is the list of features that must each have a seeded
   example. It is the answer to "is this dataset still representative?" after a feature lands.
 - **The validation step** (specification §3 step 12) is the set of assertions a seeded deployment must
-  satisfy: health, every document readable back through its `GET` route, milestone progress with five
-  buckets whose `totalCases` matches the cases the run declares, both report scopes, the `?tags=` and
-  `?configuration=` filters, `GET /auth/me`, and a `403 forbidden` for an under-privileged write.
+  satisfy: health; every document readable back through a `GET` route that resolves it; every case
+  carrying ordered steps, at least one case-level attachment, the expected step attachments, a
+  `version` of 2 or more and a reported revision; the composed cases and the two-homed suite refused
+  with `409` on their bare lookup routes, yet still readable through the listing of a parent that
+  holds them; each project's case listing holding exactly the seed's cases; milestone progress with
+  five buckets whose `totalCases` matches the cases the run declares; both report scopes; the
+  `?tags=` and `?configuration=` filters; `GET /auth/me`; and a `403 forbidden` for an
+  under-privileged write.
 - **Reproducing a report or a bug** is a seed run away, and teardown puts the deployment back exactly
   as it was found.
 
@@ -215,7 +226,10 @@ before the row is how the two drift apart.
    call, on-disk evidence. A row with no example is a gap, not a deferral. If the feature stores a new
    file or folder, name it in §2's target tree as well.
 3. **Add the calls to specification §3**, in the step whose resources they depend on, in the order the
-   dependencies require. The step order in §3 is a dependency order, not a preference.
+   dependencies require. The step order in §3 is a dependency order, not a preference: a call that
+   addresses an entity by an identifier read back from an earlier response has to run before
+   step 11 gives that entity a second home, because a bare identifier that resolves to two parents
+   answers `409` from then on.
 4. **Implement the calls** in `scripts/seed.mjs` as a `stepN…` function and add it to the sequence in
    `runSeed()`. Rules that keep the generated tree a shape the API would write:
    - call the API over HTTP, as every other step does — the only permitted exception is the auth
@@ -223,7 +237,10 @@ before the row is how the two drift apart.
    - read anything the API derived (a duplicate's id, a defect link's id) back from the response, and
      assert it is present, rather than inventing a value;
    - let `call()` throw on an unexpected status, so a failure names the call and its response instead
-     of leaving a half-written tree behind.
+     of leaving a half-written tree behind;
+   - keep placement last. Every write that names an entity by its own identifier — a `PUT`, an
+     attachment upload, a run's membership — belongs before step 11, because placing an entity gives
+     it a second home and makes the bare identifier ambiguous.
 5. **Extend `scripts/teardown.mjs`** so the run stays reversible: add the new identifiers to the
    constants at the top of the file and a removal to the step whose dependencies allow it. Every
    removal goes through the guard mechanism, and anything the teardown cannot resolve is reported as
@@ -250,10 +267,16 @@ That is the cheap case. A feature that stores a new kind of file is the expensiv
 touches all five edits, and `step5Attachments` (a new file on an existing entity) is the example to
 copy there.
 
-### 5.2 What the epic still owes
+### 5.2 The validation step
 
-The validation step of specification §3 step 12 is out of scope for the generator and teardown issues;
-it is the Compose wiring and freshness check tracked by
-[#195](https://github.com/TucanoTechnology/TucanoTestAPI/issues/195) under the parent epic
-[#169](https://github.com/TucanoTechnology/TucanoTestAPI/issues/169). Until it exists, the assertions
-of §3 step 12 are run by hand after a seed run, as [§2.3](#23-qa-and-reviewers-a-test-bed) describes.
+The assertions of specification §3 step 12 live in
+[`scripts/validate-seed.mjs`](../../scripts/validate-seed.mjs) (issue
+[#195](https://github.com/TucanoTechnology/TucanoTestAPI/issues/195)), which runs against a seeded
+deployment rather than inside the generator, so the seed never validates its own work. A feature the
+seeded dataset must expose also belongs in that script: without an assertion the new row passes over
+a deployment that no longer has the feature.
+
+[`scripts/demo.sh`](../../scripts/demo.sh) is the one-command path that ties the three together —
+bring a stack up, seed it, run `scripts/smoke.sh`, then validate — and
+[`scripts/check-matrix.mjs`](../../scripts/check-matrix.mjs) is the static half CI runs, which
+catches a route that reaches no matrix row without starting anything.

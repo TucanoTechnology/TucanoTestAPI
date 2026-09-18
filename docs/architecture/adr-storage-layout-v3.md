@@ -371,8 +371,9 @@ stay global, and a retired flat creation route stays registered to explain itsel
   wrappers.
 - The parent-scoped delete requires the role in the **named project only** and then deletes that
   occurrence (`delete_in`). It does not resolve globally, so it succeeds for an id two projects
-  hold. (`delete_project_suite` resolves globally through `guard_delete`; that inconsistency is
-  pre-existing, is not touched here, and is noted under *Not done here*.)
+  hold. (`delete_project_suite` used to resolve globally through `guard_delete`; it now authorises
+  the project the route names, like `delete_project_case` and the run, milestone and configuration
+  deletes, so the route its own conflict message recommends can actually delete one home at a time.)
 - The parent-scoped lists publish **no query parameters** and answer a bare sorted id array, exactly
   like `GET /projects/{id}/test_suites`. `?filter=`, `?tags=` and `?configuration=` remain on the
   global scans only.
@@ -582,7 +583,6 @@ fixtures:
 
 - The `milestone_progress` skip-on-undeserialisable-run hazard — tracked by
   [#98](https://github.com/TucanoTechnology/TucanoTestAPI/issues/98).
-- `delete_project_suite`'s global resolution for an ambiguous suite id, noted under *Decision 6*.
 - Placement (`mode: copy|move`) for runs, milestones or configurations.
 - Environment-matrix semantics for configurations — still
   [#34](https://github.com/TucanoTechnology/TucanoTestAPI/issues/34) and

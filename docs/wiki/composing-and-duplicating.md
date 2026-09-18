@@ -190,21 +190,28 @@ curl -s -X POST http://localhost:3100/test_cases/refund-partial.json/duplicate \
 {"id":"refund-partial-copy.json","message":"Test case duplicated"}
 ```
 
-What comes along matters:
+What comes along matters, and it is less than the folder:
 
-- **Duplicating a project or a suite duplicates the whole subtree.** Suites keep their cases; cases
-  keep their steps, their attachments on disk, and their `revisions/` snapshots. The copy therefore
-  starts with the source's history, and its own future edits add to it.
-- **Duplicating a case copies the case folder**, including its attachments, its `steps/<n>/`
-  directories and its revision snapshots.
+- **A `duplicate` copies one document, not a subtree.** The source document is read and written under
+  the new id **in the same parent**; nothing else in the source folder travels. Duplicating a project
+  brings across no suites and no cases; duplicating a suite brings across no cases; duplicating a case
+  brings across no `steps/<n>/` directory and no `revisions/` snapshots.
+- **The copied document is the source document verbatim**, so the copy keeps the source's `attachments`
+  and `steps[].attachments` entries and its `version` — while the files those entries name exist only
+  in the source's folder. `GET /test_cases/{copy}/attachments/{filename}` therefore answers `404`, and
+  `GET /test_cases/{copy}/history` is empty even though the copy's `version` is not 1, because no
+  `revisions/` snapshot was written beside it.
 - **Runs and milestones are snapshots, not containers.** Duplicating a milestone copies which suites
   and runs it references, and those references still point at the same runs — nothing is re-executed
   or re-snapshotted. Duplicating a run copies its recorded snapshot verbatim. See
   [Milestones](milestones.md) and [Test runs and results](test-runs-and-results.md).
 
-Because a duplicate's copy is independent from that point on, a `duplicate` is the right tool for
-branching a suite into a new variation without touching the original — where composition `copy` is
-the tool for placing one existing case into an additional, already-existing parent.
+Both copies are independent from the moment they exist: editing one document never changes the other.
+That makes `duplicate` the right tool for branching an entity into a variation under the same parent
+without touching the original. When you also want the **contents** — the cases under a suite, a case's
+steps, attachment files and revision snapshots — that is composition `copy`, which duplicates the
+source **folder**. Copying a case into another parent is therefore the way to carry its steps,
+attachments and history with it; duplicating it and re-uploading the files by hand is the wrong shape.
 
 ## Runs always copy
 
@@ -225,6 +232,8 @@ therefore leaves the run exactly as recorded. See [Test runs and results](test-r
 | The source vanished | `mode` was `move`, or the default was overridden somewhere upstream. Check who sent the request |
 | A `POST …/test_cases` placed the wrong thing | The body created instead of placing, or vice versa: the presence of `title`/`expectedResult` makes it a create, of `testCaseId` alone makes it a placement |
 | Deleting the copy deleted the original | It did not — but check which occurrence the id resolved to, because a document-level delete on an ambiguous id is refused rather than applied to one of them |
+| A duplicated case has no cases/suites under it | `duplicate` copies only the document. Use composition `copy` when the contents must come too |
+| An attachment of a duplicated case answers `404`, or `GET …/history` is empty on a copy whose `version` is 3 | The document was copied, the files beside it were not: the copy's attachment and revision metadata points at files that exist only next to the source. Use composition `copy`, or re-upload |
 
 ## Next
 

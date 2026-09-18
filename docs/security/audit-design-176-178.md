@@ -163,10 +163,11 @@ Record the seeded identifiers the probes depend on, because the whole audit refe
 | Projects | `checkout.json`, `payments.json` | every role/IDOR probe |
 | Viewer account | `TUCANO_SEED_VIEWER_PASSWORD` (generated above) | every 403 probe |
 | Viewer grants | `owner` on `checkout.json`; **no grant** on `payments.json` | the cross-project probe |
-| Suite | `smoke.checkout.json` | suite-level guards |
-| Cases | `TC-LOGIN-1`, `TC-LOGIN-2`, `TC-PROJECT-1` | case-level probes |
-| Dual-home case | `TC-LOGIN-1`, copied into `payments.json` by seed step 11 | the ambiguity/IDOR probe |
-| Attachments | one on `TC-LOGIN-1`, one on `TC-LOGIN-2` step 0 | attachment probes |
+| Suites | `smoke.checkout.json`; `regression.checkout.json` (left empty); `smoke.payments.json` | suite-level guards, the empty-collection case |
+| Cases | `TC-LOGIN-1`, `TC-LOGIN-2`, `TC-CART-1`, `TC-MOVE-1`, `TC-PROJECT-1`, `TC-ORDERS-1`, `TC-CATALOG-1`, `TC-SEARCH-1` | case-level probes |
+| Dual-home case | `TC-LOGIN-1` and `TC-ORDERS-1` copied into `payments.json` by seed step 11; `TC-MOVE-1` is *moved* off its first home four times and ends in `payments.json/smoke.payments.json` | the ambiguity/IDOR probe |
+| Dual-home suite | `portable.checkout.json`, moved into `payments.json` and copied back, so it is held by both projects | the ambiguity probe on `GET /test_suites/{id}` |
+| Attachments | one on each of the eight cases, plus seven on their steps: step 0 of `TC-LOGIN-1`, `TC-CART-1`, `TC-MOVE-1`, `TC-ORDERS-1` and `TC-SEARCH-1`, steps 0 and 1 of `TC-LOGIN-2` | attachment probes; `TC-PROJECT-1` and `TC-CATALOG-1` are the cases whose steps carry none |
 | Run | `nightly.json` (+ imported `nightly-import.json`) | run guards, run scope |
 | Milestone | `v1.0.json` | milestone guards |
 | Configurations | `chrome-linux.json`, `firefox-linux.json` | configuration guards |
@@ -548,16 +549,20 @@ Each sub-task states the probe, the command, the control that must hold, and the
 **S1-7 — Cross-project references: the run scope and the dual-home identifier**
 
 - **Probe.**
-  1. The seed copies `TC-LOGIN-1` into `payments.json`, so the identifier has **two homes**. Address the
-     global case routes (`GET /test_cases/TC-LOGIN-1`, `GET /test_cases/TC-LOGIN-1/history`,
-     `GET /results/TC-LOGIN-1/defects`) as the `checkout.json`-only viewer and as the admin.
+  1. The seed copies `TC-LOGIN-1` and `TC-ORDERS-1` into `payments.json` and places
+     `portable.checkout.json` in both projects, so those three identifiers each have **two homes**.
+     Address the global case routes (`GET /test_cases/TC-LOGIN-1`, `GET /test_cases/TC-LOGIN-1/history`,
+     `GET /results/TC-LOGIN-1/defects`) and the global suite routes (`GET /test_suites/portable.checkout.json`,
+     `GET /test_suites/portable.checkout.json/test_cases`) as the `checkout.json`-only viewer and as the admin.
   2. A run's `projects` array decides which projects it reaches (`guard_update` → editor over the home *and*
      every project in the array). As an editor of `checkout.json`, update `nightly.json`'s `projects` array
      to name `payments.json`, then read the run and any embedded snapshots of `payments.json` cases.
   3. Compose across projects: copy a `checkout.json` case into `payments.json` and move one the other way,
-     as a caller with a role in only one of the two.
+     as a caller with a role in only one of the two. The seed's own step 11 already did both, so use
+     `TC-CART-1` (single home in `smoke.checkout.json`) for the copy and any case named here for the move.
 - **Expected (control holds).** `reachable_projects` answers `Conflict` when two projects hold one
-  identifier and `NotFound` when none does; a caller may not use a run to read another project's snapshots;
+  identifier and `NotFound` when none does, and every bare-identifier route above answers `409` rather than
+  picking a home; a caller may not use a run to read another project's snapshots;
   composition requires a role in both source and target. The known limitation that "Run scope can be
   narrowed by the caller that holds the run" is **accepted and is not a finding** — record it as a
   re-confirmation, and note explicitly that raising a run's privileges is not possible, so it is denial of
@@ -861,7 +866,7 @@ and no file type other than `.json` is accepted in the project tree
 - **Command.**
   ```bash
   docker exec audit-b find /data -printf '%M %u:%g %s %p\n' | sort | head -100
-  docker exec audit-b stat -c '%a %n' /data/auth/* /data/Projects/*/.tucano.json 2>/dev/null
+  docker exec audit-b stat -c '%a %n' /data/auth/* /data/projects/*/project.json 2>/dev/null
   docker exec audit-b ls -la /data /data/auth
   ```
 - **Expected (control holds).** Document mode is restrictive (owner-only or owner+group), per `AGENTS.md`
@@ -888,22 +893,22 @@ and no file type other than `.json` is accepted in the project tree
 **S2-3 — Symlink and hardlink escape fixtures**
 
 - **Probe.** Plant each fixture in the throwaway data directory and address it through the API:
-  1. a symlinked project folder pointing at `/etc` (`ln -s /etc /data/Projects/evil.json`);
-  2. a symlinked collection directory (`/data/Projects/checkout.json/test_runs` → `/tmp`);
+  1. a symlinked project folder pointing at `/etc` (`ln -s /etc /data/projects/evil`);
+  2. a symlinked collection directory (`/data/projects/checkout/test_runs` → `/tmp`);
   3. a symlinked case folder and a symlinked case document;
-  4. a symlinked attachment file inside a real case's attachments directory, pointing outside the root;
+  4. a symlinked attachment file inside a real case's folder, pointing outside the root;
   5. a symlink *inside* the root (case → another project's case) to test confinement rather than escape;
-  6. a **hardlink** from an outside file into the attachments directory and into a project folder (a
+  6. a **hardlink** from an outside file into a case folder and into a project folder (a
      hardlink cannot be detected by path inspection, so this tests whether the control is confinement or
      type-checking).
 - **Command.**
   ```bash
-  docker exec audit-b sh -lc 'ln -s /etc /data/Projects/evil.json;
-    ln -s /tmp /data/Projects/checkout.json/test_runs;
-    ln -s /tmp/escape.json /data/Projects/checkout.json/suites/smoke.checkout.json/cases/TC-LOGIN-1/attachments/escape.json'
+  docker exec audit-b sh -lc 'ln -s /etc /data/projects/evil;
+    ln -s /tmp /data/projects/checkout/test_runs;
+    ln -s /tmp/escape.json /data/projects/checkout/smoke.checkout/TC-LOGIN-1/escape.json'
   curl -s -o /dev/null -w '%{http_code}\n' "$B/test_cases/TC-LOGIN-1/attachments/escape.json"
   curl -s -o /dev/null -w '%{http_code}\n' "$B/projects/evil.json"
-  docker exec audit-b sh -lc 'ln /etc/hostname /data/Projects/checkout.json/hard.json; cat /data/Projects/checkout.json/hard.json'
+  docker exec audit-b sh -lc 'ln /etc/hostname /data/projects/checkout/hard.json; cat /data/projects/checkout/hard.json'
   ```
 - **Expected (control holds).** Refusal for every fixture; `ensure_within` / `resolve_existing_prefix`
   canonicalise before use; `find /data` never resolves outside the root; the hardlink cannot be turned into
@@ -972,10 +977,10 @@ and no file type other than `.json` is accepted in the project tree
   wrong shape; replace a document with a 100 MiB blob. Before and after each read, hash the file.
 - **Command.**
   ```bash
-  docker exec audit-b sh -lc 'F=/data/Projects/checkout.json/test_cases/TC-LOGIN-1/test_case.json;
+  docker exec audit-b sh -lc 'F=/data/projects/checkout/smoke.checkout/TC-LOGIN-1/test-case.json;
     cp "$F" /tmp/orig; head -c 200 "$F" > /tmp/t; mv /tmp/t "$F"; sha256sum "$F"'
   curl -s -w '\n%{http_code}\n' "$B/test_cases/TC-LOGIN-1"
-  docker exec audit-b sha256sum /data/Projects/checkout.json/test_cases/TC-LOGIN-1/test_case.json
+  docker exec audit-b sha256sum /data/projects/checkout/smoke.checkout/TC-LOGIN-1/test-case.json
   ```
 - **Expected (control holds).** A **safe storage error** (500 `storage_error` with a stable, non-disclosing
   message) and **the original file is preserved** — the corrupted bytes stay exactly as the auditor left
@@ -1026,7 +1031,7 @@ and no file type other than `.json` is accepted in the project tree
   whose destination is made unwritable, or a document whose ID passes HTTP validation but fails a later
   layout check), then immediately perform a normal successful write. Do it for a document write, an
   attachment write, and a revision write.
-- **Command.** `docker exec audit-b sh -lc 'chmod 0555 /data/Projects/checkout.json'` → attempted write →
+- **Command.** `docker exec audit-b sh -lc 'chmod 0555 /data/projects/checkout'` → attempted write →
   restore mode → successful write with `curl --max-time 10`.
 - **Expected (control holds).** The follow-up write succeeds: the failed path released the lock. The lock
   is acquired as a `File` (`src/storage/fs.rs:36`) and released by an explicit `unlock` at eight sites

@@ -66,7 +66,10 @@ async fn delete_project_suite<R: Repository>(
     principal: Principal,
     Path((id, suite_id)): Path<(String, String)>,
 ) -> Result<Json<Value>, DomainError> {
-    access::guard_delete(&service, &principal, Resource::Suites, &suite_id)?;
+    // The route names the project that owns the occurrence, so the role is
+    // checked there rather than through the global lookup in `guard_delete`,
+    // which conflicts while two projects hold the same suite identifier.
+    access::require(&service, &principal, &id, Role::Editor)?;
     service.delete_in(Resource::Suites, &Parent::Project(id), &suite_id)?;
     Ok(Json(json!({ "message": "Test suite deleted" })))
 }

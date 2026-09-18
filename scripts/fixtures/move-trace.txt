@@ -1,0 +1,20 @@
+Placement trace for TC-MOVE-1
+=============================
+
+One case, moved four times, never copied. The identifier stays the same
+throughout, which is what makes the case and everything stored beside it
+one physical home at a time:
+
+  1. created        projects/checkout.json/smoke.checkout.json/TC-MOVE-1
+  2. moved          projects/checkout.json/TC-MOVE-1                  (suite  -> project)
+  3. moved          projects/payments.json/TC-MOVE-1                  (project -> project)
+  4. moved          projects/payments.json/regression.checkout.json/TC-MOVE-1
+                                                                     (project -> suite)
+  5. moved          projects/payments.json/smoke.payments.json/TC-MOVE-1
+                                                                     (suite  -> suite)
+
+`revisions/v1.json` and both attachments travelled with the folder at
+every hop: `place` copies or renames the whole subtree, so a moved case
+loses nothing.
+
+Recorded while seeding TC-MOVE-1.

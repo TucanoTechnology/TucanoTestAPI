@@ -268,16 +268,17 @@ stored ones and everything else is kept. `null` counts as "not supplied". An arr
 replaces the stored array rather than being appended to. Unknown fields are rejected, not ignored.
 
 `POST /projects/{id}/duplicate` (`duplicateProject`), `POST /test_suites/{id}/duplicate`
-(`duplicateTestSuite`) and `POST /test_cases/{id}/duplicate` (`duplicateTestCase`) copy a container:
-see [Composing and duplicating](composing-and-duplicating.md) for what comes along and how the id of
-the copy is derived.
+(`duplicateTestSuite`) and `POST /test_cases/{id}/duplicate` (`duplicateTestCase`) write a second
+document under a new id in the same parent; the entities below the source are not copied with it. See
+[Composing and duplicating](composing-and-duplicating.md) for what comes along and how the id of the
+copy is derived.
 
 ## Next
 
 | I want to… | Read |
 | --- | --- |
 | Add steps, expected results and attachments to a case | [Steps and attachments](steps-and-attachments.md) |
-| Move a case into another parent, or duplicate a whole branch | [Composing and duplicating](composing-and-duplicating.md) |
+| Move a case into another parent, or bring a case's whole folder across | [Composing and duplicating](composing-and-duplicating.md) |
 | Group and filter entities with tags | [Tags and configurations](tags-and-configurations.md) |
 | Trace a case's edit history | [Case versioning and history](case-versioning-and-history.md) |
 | Record that a case passed or failed | [Test runs and results](test-runs-and-results.md) |
