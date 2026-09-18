@@ -165,11 +165,14 @@ is a success: a missing entity is a settled teardown, not a failure.
 A missing entity settles the run only when the teardown was pointed at the right entity. The auth step
 removes the account named by `TUCANO_SEED_VIEWER_USERNAME` / `TUCANO_SEED_EDITOR_USERNAME`, while the
 seed always writes `viewer` and `editor`; a name that is absent therefore says nothing about whether
-the account the seed wrote is still there. When the configured name is not the seed's, the teardown
-asks the server binary read-only (`unseed-auth --check`) what stands under the seed's own name, and an
-account still found there — unless it is a system administrator, which the seed never writes — is
-reported as kept and the run exits `1`. Everything else stays idempotent: a genuinely clean store,
-including a third run over an empty volume, still exits `0`.
+the account the seed wrote is still there. The teardown therefore always asks the server binary
+read-only (`unseed-auth --check`) — whichever name it was configured with — and treats two things it
+can report as kept: an account still found under the seed's own name (unless it is a system
+administrator, which the seed never writes), and a grant left keyed on an account the store no longer
+holds. That second one is residue a mis-scoped removal leaves behind: grants are stored by account
+identifier, so deleting an account does not delete its grants, and nothing that looks the name up can
+see one afterwards. Everything else stays idempotent: a genuinely clean store, including a third run
+over an empty volume, still exits `0`.
 
 `scripts/clear-data.mjs` is the opposite tool and is deliberately *not* what this does: it empties the
 whole of every collection (milestones, runs, suites, cases, projects), removes no configuration by a
@@ -238,12 +241,17 @@ Three properties keep this exception honest:
   only the grants it is missing are added, because a re-run must not silently reset a password.
 - **`unseed-auth` is scoped like teardown**: it requires at least one `--grant`, removes only the
   grants it is told about rather than every grant the account happens to hold, refuses the bootstrap
-  account outright, and reports anything it cannot find as left in place instead of guessing. The same
-  subcommand's `--check` is its read-only half: it reports where the account and the named grants
-  stand and writes nothing, which is the only way to ask whether a name resolves to an account at all
-  — `POST /auth/login` answers `401` for a missing account and for a wrong password alike, and every
-  other route a caller could try either needs a session or has to know the account id it does not
-  have.
+  account outright, and reports anything it cannot find as left in place instead of guessing. `kept`
+  is reserved for a grant that really is on the volume: a grant the account holds on a project it was
+  not pointed at is named as kept (removing the account orphans it), while a named project the account
+  holds nothing on is reported as nothing to remove and counted as neither, so a second run over a
+  clean volume exits `0`. The same subcommand's `--check` is its read-only half: it reports where the
+  account and the named grants stand, counts the grants left keyed on an account the store no longer
+  holds, and writes nothing — which is the only way to ask whether a name resolves to an account at
+  all, because `POST /auth/login` answers `401` for a missing account and for a wrong password alike,
+  and every other route a caller could try either needs a session or has to know the account id it
+  does not have. It writes no state, though opening the store still creates `auth/`,
+  `auth/projects/` and an empty `.tucano.lock`, even on a pristine data directory.
 - **`GET /auth/me` closes the loop.** After seeding, the script signs in as each seeded account and
   asserts the API reports no system-administrator flag and, on the granted project alone, exactly the
   role that account was given — `owner` for `viewer`, `editor` for `editor`, with no role recorded

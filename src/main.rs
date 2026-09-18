@@ -251,14 +251,22 @@ fn unseed_auth(args: Vec<String>) -> Result<(), Box<dyn std::error::Error>> {
         } else {
             println!("unseed-auth: check account {username} is absent");
         }
+        for (project, user_id, role) in &report.orphans {
+            println!(
+                "unseed-auth: check found a {role} grant on {project} for account {user_id}, \
+                 which no account answers for"
+            );
+        }
         // A stable summary line for `scripts/teardown.mjs`, distinct from the
         // removal summary so a probe can never be read as a removal.
         println!(
-            "unseed-auth: check account={} system_admin={} grants_present={} grants_absent={}",
+            "unseed-auth: check account={} system_admin={} grants_present={} grants_absent={} \
+             orphans={}",
             if report.present { "present" } else { "absent" },
             report.system_admin,
             report.grants_present.len(),
             report.grants_absent.len(),
+            report.orphans.len(),
         );
         return Ok(());
     }
@@ -282,6 +290,9 @@ fn unseed_auth(args: Vec<String>) -> Result<(), Box<dyn std::error::Error>> {
     }
     for (project, reason) in &removed.grants_kept {
         println!("unseed-auth: kept the grant on {project} ({reason})");
+    }
+    for project in &removed.grants_absent {
+        println!("unseed-auth: no grant on {project} to remove");
     }
     // A stable summary line for `scripts/teardown.mjs`, which drives this
     // subcommand and has to tell "already gone, nothing to do" from "there is
