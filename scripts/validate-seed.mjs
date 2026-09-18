@@ -519,42 +519,75 @@ async function stepProgress(token) {
     JSON.stringify(progress?.milestoneId),
   );
 
-  // The buckets are asserted against the run's own recorded results rather than
-  // against `totalCases`. A run can declare a case that has no recorded result
-  // yet, and `totalCases` counts those declared cases, so the two need not
-  // agree; the permissive semantics are recorded in
-  // docs/contracts/api-compatibility.md. What must hold is that every recorded
-  // result is bucketed by its status.
+  // A run holds every case it pins, every case its embedded suite snapshots
+  // declare, and every case it records a result for. Progress counts that union
+  // once per case id, so it is recomputed here from the run document: the five
+  // buckets partition the population (`passed + failed + blocked + untested +
+  // retest` always equals `totalCases`) and a held case with no result is
+  // `untested`. The semantics are recorded in docs/contracts/api-compatibility.md
+  // ("Milestone progress: the buckets partition `totalCases`").
   const run = await request(`/test_runs/${PROGRESS_RUN}`, { token });
-  const recorded = Array.isArray(run?.results) ? run.results : [];
-  const tally = {};
-  for (const result of recorded) {
-    const bucket = String(result?.status ?? "").toLowerCase();
-    if (buckets.includes(bucket)) {
-      tally[bucket] = (tally[bucket] ?? 0) + 1;
+  const statusOf = new Map();
+  const hold = (testCaseId) => {
+    if (typeof testCaseId === "string" && !statusOf.has(testCaseId)) {
+      statusOf.set(testCaseId, "untested");
+    }
+  };
+  for (const testCase of Array.isArray(run?.testCases) ? run.testCases : []) {
+    hold(testCase?.testCaseId);
+  }
+  for (const suite of Array.isArray(run?.testSuites) ? run.testSuites : []) {
+    for (const testCase of Array.isArray(suite?.testCases) ? suite.testCases : []) {
+      hold(testCase?.testCaseId);
     }
   }
+  const recorded = Array.isArray(run?.results) ? run.results : [];
+  for (const result of recorded) {
+    if (typeof result?.testCaseId !== "string") {
+      continue;
+    }
+    hold(result.testCaseId);
+    // A recorded result wins over the `untested` a hold alone implies, and an
+    // unrecognised status falls back to `untested` rather than a new bucket.
+    const bucket = String(result.status ?? "").toLowerCase();
+    statusOf.set(result.testCaseId, buckets.includes(bucket) ? bucket : "untested");
+  }
+
+  const expected = { passed: 0, failed: 0, blocked: 0, untested: 0, retest: 0 };
+  for (const status of statusOf.values()) {
+    expected[status] += 1;
+  }
+  const total = statusOf.size;
+  const sum = buckets.reduce((running, bucket) => running + (progress?.[bucket] ?? 0), 0);
+
   for (const bucket of buckets) {
     ok(
-      progress?.[bucket] === (tally[bucket] ?? 0),
-      `progress ${bucket} (${progress?.[bucket]}) matches the ${tally[bucket] ?? 0} recorded result(s)`,
-      JSON.stringify({ progress: progress?.[bucket], recorded: tally[bucket] ?? 0, results: recorded.length }),
+      progress?.[bucket] === expected[bucket],
+      `progress ${bucket} (${progress?.[bucket]}) counts the ${expected[bucket]} case(s) it holds under that status`,
+      JSON.stringify({ progress: progress?.[bucket], expected: expected[bucket], population: total }),
     );
   }
-  const sum = buckets.reduce((total, bucket) => total + (progress?.[bucket] ?? 0), 0);
-
-  // `totalCases` counts the cases the run *declares*, not the results it
-  // records, so it is asserted against the run's `testCases` array and is
-  // deliberately allowed to disagree with the bucket sum — the seeded run
-  // declares two cases and records four results. The permissive semantics are
-  // recorded in docs/contracts/api-compatibility.md ("Milestone progress:
-  // `totalCases` and the buckets need not agree"), and the fallback to the
-  // counters when nothing is declared is covered by tests/milestones.rs.
-  const declared = Array.isArray(run?.testCases) ? run.testCases.length : 0;
   ok(
-    progress?.totalCases === (declared > 0 ? declared : sum),
-    `progress totalCases (${progress?.totalCases}) counts the ${declared} declared case(s) (buckets sum to ${sum})`,
-    JSON.stringify({ totalCases: progress?.totalCases, declared, sum, results: recorded.length }),
+    progress?.totalCases === total,
+    `progress totalCases (${progress?.totalCases}) counts the ${total} case(s) the run holds once`,
+    JSON.stringify({ totalCases: progress?.totalCases, population: total, results: recorded.length }),
+  );
+  ok(
+    sum === progress?.totalCases,
+    `the five buckets sum to totalCases (${sum} == ${progress?.totalCases})`,
+    JSON.stringify({ sum, totalCases: progress?.totalCases, progress }),
+  );
+
+  // The percentage divides by the population, so it is a defined zero when the
+  // run holds nothing and can never leave 0..=100.
+  const percentage = total > 0 ? (expected.passed / total) * 100 : 0;
+  ok(
+    typeof progress?.passPercentage === "number" &&
+      Math.abs(progress.passPercentage - percentage) < 1e-9 &&
+      progress.passPercentage >= 0 &&
+      progress.passPercentage <= 100,
+    `passPercentage (${progress?.passPercentage}) is passed / totalCases and inside 0..=100`,
+    JSON.stringify({ passPercentage: progress?.passPercentage, percentage }),
   );
 }
 

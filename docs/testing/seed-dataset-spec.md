@@ -760,13 +760,16 @@ The generator's validation step asserts, at minimum:
   `chrome-linux.json` and not `firefox-linux.json`, and
   `GET /projects/payments.json/configurations` answers `403 forbidden`.
 - `GET /milestones/v1.0.json/progress` reports five buckets
-  (`Passed`, `Failed`, `Blocked`, `Untested`, `Retest`) that count the results
-  `nightly.json` records, while `totalCases` counts the cases that run
-  **declares**. The two come from different places and need not agree: the
-  seeded run declares two cases and records four results, so the buckets sum to
-  4 while `totalCases` is 2. This is the documented, permissive legacy
-  arithmetic — see *Milestone progress: `totalCases` and the buckets need not
-  agree* in
+  (`Passed`, `Failed`, `Blocked`, `Untested`, `Retest`) that partition
+  `totalCases`. The population is every case `nightly.json` **holds** once: the
+  two cases it pins (`TC-LOGIN-1`, `TC-PROJECT-1`), the four the linked
+  `smoke.checkout.json` snapshot embeds (`TC-LOGIN-1`, `TC-LOGIN-2`,
+  `TC-CART-1`, `TC-MOVE-1`) and the four it records results for, deduplicated by
+  case id. `TC-MOVE-1` is held through the suite snapshot and has no result, so
+  it is `Untested`; the other four carry the statuses step 7 recorded. The
+  report is therefore `totalCases` 5 with `Passed` 1, `Failed` 1, `Blocked` 1,
+  `Retest` 1 and `Untested` 1 — see *Milestone progress: the buckets partition
+  `totalCases`* in
   [`docs/contracts/api-compatibility.md`](../contracts/api-compatibility.md).
 - `GET /reports/coverage` and `GET /reports/summary` answer for both scopes.
 - `GET /test_runs?tags=nightly` and `GET /test_runs?configuration=chrome-linux.json`

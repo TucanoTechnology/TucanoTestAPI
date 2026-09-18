@@ -832,33 +832,43 @@ project section/suite". This child introduces the shared reports module the summ
   `::a_global_report_sums_every_project_and_keeps_their_suites`), and with
   `tests/service.rs::openapi_document_matches_the_registered_routes` holding the path to the registered route.
 
-### Milestone progress: `totalCases` and the buckets need not agree (Issue #195)
+### Milestone progress: the buckets partition `totalCases` (Issues #195, #286)
 
-`GET /milestones/{id}/progress` reports `totalCases` alongside five status buckets
-(`passed`, `failed`, `blocked`, `untested`, `retest`). The two count different things, and a client that adds
-up the buckets can therefore read the payload as inconsistent. The semantics are legacy-exact and are recorded
-here so the shape is not mistaken for a defect:
+`GET /milestones/{id}/progress` reports `totalCases` alongside five status buckets (`passed`, `failed`,
+`blocked`, `untested`, `retest`). [#195](https://github.com/TucanoTechnology/TucanoTestAPI/issues/195) froze
+the legacy arithmetic, in which the two counted different populations and a client that added up the buckets
+could read the payload as inconsistent. [#286](https://github.com/TucanoTechnology/TucanoTestAPI/issues/286)
+replaced that arithmetic with a single population, so the buckets now **partition** `totalCases`:
 
-- **`totalCases` counts the cases the referenced runs declare, not the results they record.** `progress.rs`
-  adds `run.test_cases.len()` for every linked run that carries a declared array, so a run that declares two
-  cases and records four results contributes 2 to `totalCases` while the buckets count all four. The inverse
-  is the same rule: a declared case with no recorded result yet is counted as not-yet-passed, which is what
-  `totalCases` buys.
-- **An absent or explicitly-empty `testCases` array falls back to the counters.** When no linked run declares
-  any case, `totalCases` becomes the sum of the five buckets, so the two agree. This is the shape
-  `tests/milestones.rs::milestone_progress_aggregates_linked_test_runs` covers — it records its run through
-  the `results` array alone — and the fallback is why a run recorded that way reports coherently.
-- **`passPercentage` divides by `totalCases`.** It is `passed / totalCases * 100` (or `0.0` when `totalCases`
-  is `0`), unrounded, matching the exact-fraction figure the summary report above also publishes
-  (`33.33333333333333` rather than `33.3`). When a run's results outnumber its declared cases the percentage
-  is therefore computed from the smaller declared count.
-- **This is frozen legacy arithmetic, not new behaviour.** The computation is byte-for-byte the pre-layering
-  handler: `git show a1bf7ba^:src/api.rs` lines 677-735 carry the identical `total_cases += cases.len()` and
-  the same `if total_cases == 0 { … }` fallback, and `a1bf7ba` (the #71 split) only re-homed it.
-  `record_run_result` never touches `run.test_cases`, so the API has no path that would reconcile the two
-  counts after the fact. [#195](https://github.com/TucanoTechnology/TucanoTestAPI/issues/195) recorded it and
-  the maintainer's decision was to keep the behaviour — hence no entry here claims they must agree, and
-  `src/domain/progress.rs::compute` is unchanged.
+- **One population per linked run, deduplicated by case id.** A run holds the cases its `testCases` snapshot
+  declares, the cases its embedded `testSuites` declare, and the cases it has a recorded result for; the
+  population is their union, and a case that appears in more than one of those places counts once, with its
+  recorded status when it has one.
+- **The five buckets partition the population.** `passed + failed + blocked + untested + retest` always
+  equals `totalCases`, so a client that adds the buckets up can never see them disagree. A held case with no
+  recorded result — and any case stored under a status the API does not recognise — is `untested`; `Retest`
+  keeps its own bucket.
+- **The `totalCases == 0` fallback is gone.** It existed only to reconcile the two populations, which no
+  longer exist. A milestone that links no runs, or whose linked runs hold no cases, reports `0` for every
+  counter.
+- **`passPercentage` divides by `totalCases`.** It is `passed / totalCases * 100`, unrounded, matching the
+  exact-fraction figure the summary report publishes (`33.33333333333333` rather than `33.3`), and is `0` when
+  `totalCases` is `0`. Because the buckets partition the total, the percentage is always inside `0..=100`;
+  the #195 arithmetic could report above `100` when results outnumbered the declared snapshot.
+- **This is a deliberate break from #195, and the only one from the legacy handler.** `compute` was
+  byte-for-byte the pre-layering handler (`git show a1bf7ba^:src/api.rs` lines 677-735 carried the same
+  `total_cases += cases.len()` and the `if total_cases == 0 { … }` fallback). The counts a milestone reports
+  for a run that records results beyond its snapshot therefore change; the field names, the response shape
+  and the `MilestoneProgress` schema do not.
+- Covered by `tests/milestones.rs` (`::milestone_progress_aggregates_linked_test_runs`,
+  `::progress_counts_the_cases_a_linked_suite_embeds`,
+  `::progress_counts_recorded_cases_the_snapshot_never_declared`,
+  `::a_milestone_created_from_a_name_alone_reads_back_and_reports_progress`), by
+  `src/domain/progress.rs` (`::a_run_contributes_every_case_it_holds`,
+  `::cases_embedded_in_a_linked_suite_are_part_of_the_population`,
+  `::results_beyond_the_declared_snapshot_extend_the_population`,
+  `::every_shape_of_run_keeps_the_buckets_summing_to_the_total`), and by
+  `src/domain/service/tests.rs::milestone_progress_counts_every_case_a_run_holds_once`.
 
 ## Summary Report Plan (Issue #95)
 
@@ -1337,6 +1347,15 @@ the run already holds replaced the whole result, so a partial recording discarde
   statuses, so it can exceed the sum of `passed` / `failed` / `blocked` / `untested`; and `passPercentage` is
   the exact fraction, not a rounded percentage. Deviation recorded with tests in `tests/reports.rs` and
   `src/domain/reports.rs` as listed in the plan.
+- **Milestone progress derives one population, so the counts change** (Issue #286, note above). No field,
+  response shape, schema or route changes: `MilestoneProgress` keeps its keys and `GET /milestones/{id}/progress`
+  keeps its path. What changes is the arithmetic behind them — `totalCases` and the five buckets now come from a
+  single deduplicated population per run, where before they counted two populations and could disagree (and
+  `passPercentage` could exceed `100`). A milestone whose runs record results beyond their snapshot therefore
+  reports different, now internally consistent, numbers: this is the first deliberate departure from the legacy
+  handler's arithmetic since layering, wire-compatible in shape but not in values, so a client asserting on the
+  old counts must be updated. Deviation recorded with tests in `tests/milestones.rs`,
+  `src/domain/progress.rs` and `src/domain/service/tests.rs` as listed in the note above.
 - **Tags added, and their query parameter withdrawn where it could not match** (Issue #49, plan above).
   `Project`, `TestSuite`, `TestCase` and `TestRun` gain an optional `tags` array and the list operations gain
   `?tags=a,b`. Additive only: no payload that used to succeed is refused, an existing document is never

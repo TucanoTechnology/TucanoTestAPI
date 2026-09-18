@@ -4,13 +4,18 @@
 //! references*, never from live source documents, so a milestone keeps reporting
 //! the same figures as the runs it executed.
 
+use std::collections::BTreeMap;
+
 use crate::models::{Milestone, MilestoneProgress, TestRun};
 
-/// Aggregates the result counters of every run linked to a milestone.
+/// Aggregates the case counters of every run linked to a milestone.
 ///
-/// A run contributes its declared case count when it has one; when none of the
-/// linked runs declare cases the counters themselves become the total, which is
-/// how the legacy handler reported progress for partial runs.
+/// A run contributes one entry per case it **holds**: the cases its snapshot
+/// declares — its own `testCases` and those embedded in the suites it links —
+/// plus any case it recorded a result for, because an import or a direct
+/// recording may name a case the snapshot never declared. Each case is counted
+/// once, in exactly one bucket, so the five buckets always add up to
+/// `totalCases` and `passPercentage` divides by the population it counted.
 pub fn compute(milestone: &Milestone, runs: &[TestRun]) -> MilestoneProgress {
     let mut total_cases = 0usize;
     let mut passed = 0usize;
@@ -20,25 +25,36 @@ pub fn compute(milestone: &Milestone, runs: &[TestRun]) -> MilestoneProgress {
     let mut retest = 0usize;
 
     for run in runs {
-        if let Some(cases) = run.test_cases.as_ref() {
-            total_cases += cases.len();
+        // A case id maps to the status the run recorded for it, or `None` when
+        // the run holds the case without having decided it yet. Declared cases
+        // go in first and results second, so a case that appears in both is
+        // held once and carries its recorded status.
+        let mut population: BTreeMap<&str, Option<&str>> = BTreeMap::new();
+        for case in run.test_cases.as_deref().unwrap_or_default() {
+            population.insert(case.test_case_id.as_str(), None);
         }
-        if let Some(results) = run.results.as_ref() {
-            for result in results {
-                match result.status.as_str() {
-                    "Passed" => passed += 1,
-                    "Failed" => failed += 1,
-                    "Blocked" => blocked += 1,
-                    "Untested" => untested += 1,
-                    "Retest" => retest += 1,
-                    _ => {}
-                }
+        for suite in run.test_suites.as_deref().unwrap_or_default() {
+            for case in &suite.test_cases {
+                population.insert(case.test_case_id.as_str(), None);
             }
         }
-    }
+        for result in run.results.as_deref().unwrap_or_default() {
+            population.insert(result.test_case_id.as_str(), Some(result.status.as_str()));
+        }
 
-    if total_cases == 0 {
-        total_cases = passed + failed + blocked + untested + retest;
+        for status in population.values() {
+            total_cases += 1;
+            match *status {
+                Some("Passed") => passed += 1,
+                Some("Failed") => failed += 1,
+                Some("Blocked") => blocked += 1,
+                Some("Retest") => retest += 1,
+                // `Untested` recorded explicitly, a case the run holds without a
+                // result, and a stored status this API does not recognise all
+                // describe the same thing here: not yet decided.
+                _ => untested += 1,
+            }
+        }
     }
 
     let pass_percentage = if total_cases > 0 {
@@ -62,7 +78,37 @@ pub fn compute(milestone: &Milestone, runs: &[TestRun]) -> MilestoneProgress {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::{TestCase, TestCaseResult};
+    use crate::models::{TestCase, TestCaseResult, TestSuite};
+
+    fn case(id: &str) -> TestCase {
+        TestCase {
+            test_case_id: id.to_owned(),
+            title: "case".to_owned(),
+            expected_result: "expected".to_owned(),
+            ..TestCase::default()
+        }
+    }
+
+    fn result(case_id: &str, status: &str) -> TestCaseResult {
+        TestCaseResult {
+            test_case_id: case_id.to_owned(),
+            status: status.to_owned(),
+            timestamp: "1".to_owned(),
+            notes: None,
+            duration_ms: None,
+            attachments: None,
+            defect_links: None,
+        }
+    }
+
+    fn suite(suite_id: &str, case_ids: &[&str]) -> TestSuite {
+        TestSuite {
+            suite_id: suite_id.to_owned(),
+            name: suite_id.to_owned(),
+            test_cases: case_ids.iter().map(|id| case(id)).collect(),
+            ..TestSuite::default()
+        }
+    }
 
     fn milestone(id: &str, run_ids: Option<Vec<String>>) -> Milestone {
         Milestone {
@@ -77,45 +123,32 @@ mod tests {
         }
     }
 
-    fn run(results: &[(&str, &str)], case_count: Option<usize>) -> TestRun {
+    /// A run holding `case_count` declared cases named `TC-0..`, the given linked
+    /// suites, and the given recorded results.
+    fn run_holding(
+        results: &[(&str, &str)],
+        case_count: Option<usize>,
+        suites: &[TestSuite],
+    ) -> TestRun {
         TestRun {
             test_run_id: "R".to_owned(),
             timestamp: "1".to_owned(),
             name: None,
             projects: None,
-            test_suites: None,
+            test_suites: if suites.is_empty() {
+                None
+            } else {
+                Some(suites.to_vec())
+            },
             test_cases: case_count.map(|count| {
                 (0..count)
-                    .map(|index| TestCase {
-                        test_case_id: format!("TC-{index}"),
-                        title: "case".to_owned(),
-                        description: None,
-                        preconditions: None,
-                        steps: None,
-                        expected_result: "expected".to_owned(),
-                        priority: None,
-                        severity: None,
-                        test_type: None,
-                        exploratory: None,
-                        attachments: None,
-                        tags: None,
-                        version: None,
-                        last_modified: None,
-                    })
+                    .map(|index| case(&format!("TC-{index}")))
                     .collect()
             }),
             results: Some(
                 results
                     .iter()
-                    .map(|(case_id, status)| TestCaseResult {
-                        test_case_id: (*case_id).to_owned(),
-                        status: (*status).to_owned(),
-                        timestamp: "1".to_owned(),
-                        notes: None,
-                        duration_ms: None,
-                        attachments: None,
-                        defect_links: None,
-                    })
+                    .map(|(case_id, status)| result(case_id, status))
                     .collect(),
             ),
             tags: None,
@@ -124,8 +157,16 @@ mod tests {
         }
     }
 
+    fn run(results: &[(&str, &str)], case_count: Option<usize>) -> TestRun {
+        run_holding(results, case_count, &[])
+    }
+
+    fn buckets(progress: &MilestoneProgress) -> usize {
+        progress.passed + progress.failed + progress.blocked + progress.untested + progress.retest
+    }
+
     #[test]
-    fn counters_aggregate_across_every_linked_run() {
+    fn a_run_contributes_every_case_it_holds() {
         let runs = [
             run(&[("TC-1", "Passed")], Some(2)),
             run(&[("TC-2", "Failed"), ("TC-3", "Blocked")], None),
@@ -133,41 +174,93 @@ mod tests {
         let progress = compute(&milestone("M-1", Some(vec!["R-1".to_owned()])), &runs);
 
         assert_eq!(progress.milestone_id, "M-1");
-        assert_eq!(progress.total_cases, 2);
+        // TC-0 is declared and undecided, TC-1 is declared and passed, and TC-2
+        // and TC-3 are recorded without being declared: four cases, one bucket
+        // each.
+        assert_eq!(progress.total_cases, 4);
         assert_eq!(progress.passed, 1);
         assert_eq!(progress.failed, 1);
         assert_eq!(progress.blocked, 1);
+        assert_eq!(progress.untested, 1);
+        assert_eq!(progress.pass_percentage, 25.0);
+    }
+
+    #[test]
+    fn a_case_declared_and_recorded_counts_once_with_its_recorded_status() {
+        let runs = [run(&[("TC-0", "Failed"), ("TC-1", "Passed")], Some(2))];
+        let progress = compute(&milestone("M-1", None), &runs);
+
+        assert_eq!(progress.total_cases, 2);
+        assert_eq!(progress.passed, 1);
+        assert_eq!(progress.failed, 1);
+        assert_eq!(progress.untested, 0);
+    }
+
+    #[test]
+    fn cases_embedded_in_a_linked_suite_are_part_of_the_population() {
+        let runs = [run_holding(
+            &[("TC-1", "Passed")],
+            Some(1),
+            &[suite("SMOKE", &["TC-0", "TC-1"])],
+        )];
+        let progress = compute(&milestone("M-1", None), &runs);
+
+        // The declared TC-0 and the suite's TC-0 and TC-1 dedupe to TC-0 and
+        // TC-1, the latter with its recorded status.
+        assert_eq!(progress.total_cases, 2);
+        assert_eq!(progress.passed, 1);
+        assert_eq!(progress.untested, 1);
         assert_eq!(progress.pass_percentage, 50.0);
     }
 
     #[test]
-    fn without_declared_cases_the_counters_become_the_total() {
+    fn results_beyond_the_declared_snapshot_extend_the_population() {
         let runs = [run(
             &[("TC-1", "Passed"), ("TC-2", "Failed"), ("TC-3", "Blocked")],
-            None,
+            Some(1),
         )];
         let progress = compute(&milestone("M-1", None), &runs);
 
-        assert_eq!(progress.total_cases, 3);
-        assert_eq!(progress.blocked, 1);
-        assert_eq!(progress.pass_percentage, 33.33333333333333);
+        assert_eq!(progress.total_cases, 4);
+        assert_eq!(progress.untested, 1);
+        assert_eq!(buckets(&progress), progress.total_cases);
+        assert_eq!(progress.pass_percentage, 25.0);
     }
 
     #[test]
-    fn untested_and_retest_results_are_counted() {
-        let runs = [run(
-            &[
-                ("TC-1", "Untested"),
-                ("TC-2", "Retest"),
-                ("TC-3", "Skipped"),
-            ],
-            None,
-        )];
+    fn a_held_case_without_a_result_and_an_unknown_status_both_count_as_untested() {
+        let runs = [run(&[("TC-1", "Untested"), ("TC-2", "Skipped")], Some(1))];
         let progress = compute(&milestone("M-1", None), &runs);
 
-        assert_eq!(progress.untested, 1);
+        assert_eq!(progress.total_cases, 3);
+        assert_eq!(progress.untested, 3);
+        assert_eq!(progress.retest, 0);
+        assert_eq!(progress.pass_percentage, 0.0);
+    }
+
+    #[test]
+    fn retest_keeps_its_own_bucket() {
+        let runs = [run(&[("TC-1", "Retest")], None)];
+        let progress = compute(&milestone("M-1", None), &runs);
+
+        assert_eq!(progress.total_cases, 1);
         assert_eq!(progress.retest, 1);
-        assert_eq!(progress.total_cases, 2);
+        assert_eq!(progress.untested, 0);
+    }
+
+    #[test]
+    fn every_shape_of_run_keeps_the_buckets_summing_to_the_total() {
+        let shapes = [
+            run(&[], None),
+            run(&[("TC-1", "Passed")], None),
+            run(&[("TC-0", "Passed"), ("TC-1", "Failed")], Some(2)),
+            run_holding(&[("TC-9", "Weird")], Some(1), &[suite("S", &["TC-9"])]),
+        ];
+        for shape in shapes {
+            let progress = compute(&milestone("M-1", None), &[shape]);
+            assert_eq!(buckets(&progress), progress.total_cases);
+            assert!((0.0..=100.0).contains(&progress.pass_percentage));
+        }
     }
 
     #[test]

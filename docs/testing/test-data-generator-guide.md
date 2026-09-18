@@ -103,7 +103,9 @@ for the dataset itself.
   `version` of 2 or more and a reported revision; the composed cases and the two-homed suite refused
   with `409` on their bare lookup routes, yet still readable through the listing of a parent that
   holds them; each project's case listing holding exactly the seed's cases; milestone progress with
-  five buckets whose `totalCases` matches the cases the run declares; both report scopes; the
+  five buckets that partition `totalCases`, the population being every case the run holds once —
+  the cases it pins, the cases its linked suite snapshot embeds and the cases it records results
+  for; both report scopes; the
   `?tags=` and `?configuration=` filters; `GET /auth/me`; and a `403 forbidden` for an
   under-privileged write.
 - **Reproducing a report or a bug** is a seed run away, and teardown puts the deployment back exactly

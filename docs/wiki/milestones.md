@@ -73,7 +73,11 @@ See the [authentication section](../../README.md#authentication) of the README f
 ## Progress is derived, not stored
 
 `GET /milestones/{id}/progress` (`getMilestoneProgress`) answers a `MilestoneProgress` computed from
-the **results recorded in the referenced runs**:
+the referenced runs. One run's **population** is every case it holds: the cases its `testCases`
+snapshot pins, the cases the suites it embedded brought with them, and the cases it has a recorded
+result for. Progress counts that union once per case id, so a case both pinned and recorded counts
+once, and the five buckets **partition** `totalCases` — `passed + failed + blocked + untested +
+retest` always equals `totalCases`. A case the run holds without a result is `untested`.
 
 ```sh
 curl -s http://localhost:3100/milestones/release-4.2.json/progress
@@ -82,13 +86,13 @@ curl -s http://localhost:3100/milestones/release-4.2.json/progress
 ```json
 {
   "milestoneId": "release-4.2.json",
-  "totalCases": 3,
+  "totalCases": 2,
   "passed": 1,
   "failed": 1,
   "blocked": 0,
-  "untested": 1,
+  "untested": 0,
   "retest": 0,
-  "passPercentage": 33.33
+  "passPercentage": 50.0
 }
 ```
 
@@ -138,8 +142,12 @@ curl -s http://localhost:3100/milestones/release-4.2.json/progress
 ```
 
 ```json
-{"milestoneId":"release-4.2.json","totalCases":2,"passed":0,"failed":2,"blocked":0,"untested":0,"retest":0,"passPercentage":0}
+{"milestoneId":"release-4.2.json","totalCases":2,"passed":1,"failed":1,"blocked":0,"untested":0,"retest":0,"passPercentage":50.0}
 ```
+
+The run holds two cases. `refund-partial.json` reaches it twice — the `Refunds.json` suite snapshot
+brought it in, and a recorded result names it — while `smoke-checkout.json` reaches it through its
+result alone. Neither counts twice, so `totalCases` is 2 and the buckets sum to it.
 
 **3. Improve a result and see progress move** — not because the milestone changed, but because its
 run recorded something new:
@@ -152,7 +160,12 @@ curl -s -X POST http://localhost:3100/test_runs/run-2026-09-14.json/results \
 curl -s http://localhost:3100/milestones/release-4.2.json/progress
 ```
 
-`passPercentage` moves because the run moved, and only for that reason.
+```json
+{"milestoneId":"release-4.2.json","totalCases":2,"passed":2,"failed":0,"blocked":0,"untested":0,"retest":0,"passPercentage":100.0}
+```
+
+`passPercentage` moves because the run moved, and only for that reason. The population is unchanged —
+the same two cases — and only one bucket gave a case up to another.
 
 **4. Duplicate it for the next release.**
 
@@ -177,6 +190,7 @@ curl -s 'http://localhost:3100/reports/summary?milestoneId=release-4.2.json'
 | Symptom | Cause |
 | --- | --- |
 | Progress never changes | The progress comes from the referenced runs' recorded results. Editing cases does nothing; record a result or add a run |
+| `totalCases` is larger than the cases the run's `testCases` array shows | A run also holds the cases its embedded suite snapshots brought and the cases it has a result for; progress counts that whole union once per case id |
 | A duplicate has the same numbers as the original | Duplication copies the references; the runs are shared, not re-executed |
 | `404 not_found` on a milestone id | The `milestoneId` is the file name (`<name>.json`), not the display `name` |
 | `?tags=` on `GET /milestones` does nothing | Milestones carry no `tags` field, so the listing offers only `?filter=` |
@@ -202,5 +216,6 @@ the [repository README](../../README.md#storage-concept) for milestones referenc
 and deriving progress from their results; [`docs/architecture/adr-storage-layout-v3.md`](../architecture/adr-storage-layout-v3.md)
 for why milestones live inside their project, that a reference-less milestone is legal, and how a
 shared identifier resolves; the
-[compatibility contract](../contracts/api-compatibility.md) for the milestone duplicate plan (#68).
+[compatibility contract](../contracts/api-compatibility.md) for the milestone duplicate plan (#68) and
+the progress population rule (#286).
 Where this page and one of those disagree, the source wins and this page is a bug.*

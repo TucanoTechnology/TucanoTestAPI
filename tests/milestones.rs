@@ -1,8 +1,23 @@
 mod common;
 
 use axum::http::StatusCode;
-use common::{assert_error_envelope, delete, fixture_home, get, json_request, send_json, test_app};
-use serde_json::json;
+use common::{
+    assert_error_envelope, case_body, create_suite, delete, fixture_home, get, json_request,
+    send_json, test_app, xml_request,
+};
+use serde_json::{Value, json};
+
+/// The five buckets a progress report splits its population into.
+fn bucket_sum(progress: &Value) -> u64 {
+    ["passed", "failed", "blocked", "untested", "retest"]
+        .iter()
+        .map(|bucket| {
+            progress[*bucket]
+                .as_u64()
+                .unwrap_or_else(|| panic!("{bucket} is not a number: {progress}"))
+        })
+        .sum()
+}
 
 #[tokio::test]
 async fn milestones_support_the_full_crud_lifecycle() {
@@ -95,6 +110,10 @@ async fn a_milestone_created_from_a_name_alone_reads_back_and_reports_progress()
     assert_eq!(progress["totalCases"], 0);
     assert_eq!(progress["passed"], 0);
     assert_eq!(progress["failed"], 0);
+    // An empty population has nothing to pass, so the percentage is a defined
+    // zero rather than a division by zero.
+    assert_eq!(progress["passPercentage"], 0.0);
+    assert_eq!(bucket_sum(&progress), 0);
 }
 
 #[tokio::test]
@@ -165,6 +184,167 @@ async fn milestone_progress_aggregates_linked_test_runs() {
     assert_eq!(progress["failed"], 1);
     assert_eq!(progress["blocked"], 1);
     assert_eq!(progress["passPercentage"], 33.33333333333333);
+    assert_eq!(
+        bucket_sum(&progress),
+        progress["totalCases"].as_u64().unwrap()
+    );
+}
+
+#[tokio::test]
+async fn progress_counts_the_cases_a_linked_suite_embeds() {
+    let (_directory, app) = test_app();
+
+    let home = fixture_home(&app).await;
+    let suite = create_suite(&app, &home, "SMOKE").await;
+    for case in ["TC-1.json", "TC-2.json", "TC-3.json"] {
+        let (status, created) = send_json(
+            &app,
+            json_request(
+                "POST",
+                &format!("/test_suites/{suite}/test_cases"),
+                &case_body(case),
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED, "creating {case}: {created}");
+    }
+
+    // The run's own snapshot names only one of the three cases.
+    let (status, created) = send_json(
+        &app,
+        json_request(
+            "POST",
+            &format!("/projects/{home}/test_runs"),
+            &json!({
+                "testRunId": "RUN-1.json",
+                "name": "RUN-1",
+                "timestamp": "2026-09-04T00:00:00Z",
+                "testCases": [case_body("TC-1.json")]
+            }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "creating: {created}");
+
+    // The linked suite brings its cases with it, so the run holds all three.
+    let (status, body) = send_json(
+        &app,
+        json_request(
+            "POST",
+            "/test_runs/RUN-1.json/test_suites",
+            &json!({"suiteId": suite}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "linking the suite: {body}");
+
+    for (case, status) in [("TC-2.json", "Passed"), ("TC-3.json", "Failed")] {
+        let (status, body) = send_json(
+            &app,
+            json_request(
+                "POST",
+                "/test_runs/RUN-1.json/results",
+                &json!({"testCaseId": case, "status": status, "timestamp": "2026-09-04T12:00:00Z"}),
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "recording {case}: {body}");
+    }
+
+    let (status, created) = send_json(
+        &app,
+        json_request(
+            "POST",
+            &format!("/projects/{home}/milestones"),
+            &json!({
+                "milestoneId": "M-1.json",
+                "name": "Sprint 42",
+                "testRunIds": ["RUN-1.json"]
+            }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "creating: {created}");
+
+    // Every case the run holds is counted once: the declared case, the two the
+    // suite embedded alongside it, and the two recorded outcomes.
+    let (status, progress) = send_json(&app, get("/milestones/M-1.json/progress")).await;
+    assert_eq!(status, StatusCode::OK, "progress: {progress}");
+    assert_eq!(progress["totalCases"], 3);
+    assert_eq!(progress["passed"], 1);
+    assert_eq!(progress["failed"], 1);
+    assert_eq!(progress["blocked"], 0);
+    assert_eq!(progress["untested"], 1);
+    assert_eq!(progress["retest"], 0);
+    assert_eq!(progress["passPercentage"], 33.33333333333333);
+    assert_eq!(bucket_sum(&progress), 3);
+}
+
+#[tokio::test]
+async fn progress_counts_recorded_cases_the_snapshot_never_declared() {
+    let (_directory, app) = test_app();
+
+    let home = fixture_home(&app).await;
+    let (status, created) = send_json(
+        &app,
+        json_request(
+            "POST",
+            &format!("/projects/{home}/test_runs"),
+            &json!({
+                "testRunId": "RUN-1.json",
+                "name": "RUN-1",
+                "timestamp": "2026-09-04T00:00:00Z",
+                "testCases": [case_body("TC-1.json")]
+            }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "creating: {created}");
+
+    // The import writes a result for every case the report names, whether or
+    // not the run's snapshot declared it.
+    let report = r#"<testsuite name="Checkout" timestamp="2026-09-10T12:00:00Z">
+        <testcase classname="Checkout" name="pays"/>
+        <testcase classname="Checkout" name="declines"><failure message="card declined"/></testcase>
+        <testcase classname="Checkout" name="times out"><error message="timeout"/></testcase>
+        <testcase classname="Checkout" name="is skipped"><skipped/></testcase>
+      </testsuite>"#;
+    let (status, summary) = send_json(
+        &app,
+        xml_request("/test_runs/RUN-1.json/import/junit", report.to_owned()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "importing: {summary}");
+    assert_eq!(summary["imported"], 4);
+
+    let (status, created) = send_json(
+        &app,
+        json_request(
+            "POST",
+            &format!("/projects/{home}/milestones"),
+            &json!({
+                "milestoneId": "M-1.json",
+                "name": "Sprint 42",
+                "testRunIds": ["RUN-1.json"]
+            }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "creating: {created}");
+
+    // The declared case has no result and the four imported ones were never
+    // declared: all five are in the population, so the buckets still sum to the
+    // total and the percentage stays inside 0..=100.
+    let (status, progress) = send_json(&app, get("/milestones/M-1.json/progress")).await;
+    assert_eq!(status, StatusCode::OK, "progress: {progress}");
+    assert_eq!(progress["totalCases"], 5);
+    assert_eq!(progress["passed"], 1);
+    assert_eq!(progress["failed"], 2);
+    assert_eq!(progress["blocked"], 1);
+    assert_eq!(progress["untested"], 1);
+    assert_eq!(progress["retest"], 0);
+    assert_eq!(progress["passPercentage"], 20.0);
+    assert_eq!(bucket_sum(&progress), 5);
 }
 
 #[tokio::test]

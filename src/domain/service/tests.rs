@@ -880,6 +880,62 @@ fn milestone_progress_reads_the_referenced_runs() {
 }
 
 #[test]
+fn milestone_progress_counts_every_case_a_run_holds_once() {
+    let (service, _directory) = service();
+    let home = project(&service);
+    let suite = add_suite(&service, &home);
+    for id in ["TC-1", "TC-2", "TC-3"] {
+        case(&service, &suite, id);
+    }
+
+    service
+        .create_in(
+            Resource::Runs,
+            &home,
+            &json!({
+                "testRunId": "R-1",
+                "name": "nightly",
+                "timestamp": "1",
+                "testCases": [{ "testCaseId": "TC-1", "title": "T", "expectedResult": "E" }]
+            }),
+        )
+        .expect("run");
+    service
+        .add_suite_to_run("nightly.json", &json!({ "suiteId": "smoke.json" }))
+        .expect("link suite");
+    for (id, status) in [("TC-2", "Passed"), ("TC-3", "Failed")] {
+        service
+            .record_run_result(
+                "nightly.json",
+                &json!({ "testCaseId": id, "status": status, "timestamp": "1" }),
+            )
+            .expect("record");
+    }
+    service
+        .create_in(
+            Resource::Milestones,
+            &home,
+            &json!({ "milestoneId": "M-1", "name": "v1.0", "testRunIds": ["nightly.json"] }),
+        )
+        .expect("milestone");
+
+    // The declared case, the three the suite embeds and the two recorded
+    // outcomes describe three distinct cases, not six.
+    let progress = service.milestone_progress("M-1.json").expect("progress");
+    assert_eq!(progress.total_cases, 3);
+    assert_eq!(progress.passed, 1);
+    assert_eq!(progress.failed, 1);
+    assert_eq!(progress.blocked, 0);
+    assert_eq!(progress.untested, 1);
+    assert_eq!(progress.retest, 0);
+    assert_eq!(
+        progress.passed + progress.failed + progress.blocked + progress.untested + progress.retest,
+        progress.total_cases
+    );
+    assert_eq!(progress.pass_percentage, 33.33333333333333);
+}
+
+#[test]
 fn progress_for_a_missing_milestone_is_not_found() {
     let (service, _directory) = service();
     let error = service
