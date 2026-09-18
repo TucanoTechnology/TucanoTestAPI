@@ -164,19 +164,33 @@ fn seed_auth(args: Vec<String>) -> Result<(), Box<dyn std::error::Error>> {
 /// something it was asked to remove could not be resolved to an account it is
 /// allowed to touch.
 ///
+/// `--check` is the read-only half: it reports where the account and the named
+/// grants stand and writes nothing, so a caller that was told "no such account"
+/// can ask whether the name *it* was pointed at is merely not the one the seed
+/// wrote. It is a mode of this subcommand rather than another one so the
+/// documented pair of auth subcommands stays a pair.
+///
 /// ```text
 /// tucano-test unseed-auth --username viewer \
 ///     --grant checkout.json
+///
+/// tucano-test unseed-auth --username viewer \
+///     --grant checkout.json --check
 /// ```
 fn unseed_auth(args: Vec<String>) -> Result<(), Box<dyn std::error::Error>> {
     let mut username: Option<String> = None;
     let mut grants: Vec<String> = Vec::new();
     let mut remove_account = true;
+    let mut check = false;
 
     let mut args = args.into_iter();
     while let Some(flag) = args.next() {
         if flag == "--keep-account" {
             remove_account = false;
+            continue;
+        }
+        if flag == "--check" {
+            check = true;
             continue;
         }
         let value = args.next().ok_or_else(|| format!("{flag} needs a value"))?;
@@ -190,7 +204,8 @@ fn unseed_auth(args: Vec<String>) -> Result<(), Box<dyn std::error::Error>> {
             }
             other => {
                 return Err(format!(
-                    "unknown option {other:?}; expected --username, --grant or --keep-account"
+                    "unknown option {other:?}; expected --username, --grant, --keep-account or \
+                     --check"
                 )
                 .into());
             }
@@ -205,8 +220,49 @@ fn unseed_auth(args: Vec<String>) -> Result<(), Box<dyn std::error::Error>> {
                 .into(),
         );
     }
+    if check && !remove_account {
+        return Err(
+            "--check reads the account and writes nothing, so --keep-account changes nothing; \
+             ask for one or the other"
+                .into(),
+        );
+    }
 
     let store = auth::AuthStore::new(data_dir())?;
+
+    if check {
+        let report = auth::report_account(&store, &username, &grants)?;
+        if report.present {
+            println!(
+                "unseed-auth: check account {} is present{}",
+                report.username,
+                if report.system_admin {
+                    " and administers the server"
+                } else {
+                    ""
+                }
+            );
+            for (project, role) in &report.grants_present {
+                println!("unseed-auth: check holds the {role} grant on {project}");
+            }
+            for project in &report.grants_absent {
+                println!("unseed-auth: check holds no grant on {project}");
+            }
+        } else {
+            println!("unseed-auth: check account {username} is absent");
+        }
+        // A stable summary line for `scripts/teardown.mjs`, distinct from the
+        // removal summary so a probe can never be read as a removal.
+        println!(
+            "unseed-auth: check account={} system_admin={} grants_present={} grants_absent={}",
+            if report.present { "present" } else { "absent" },
+            report.system_admin,
+            report.grants_present.len(),
+            report.grants_absent.len(),
+        );
+        return Ok(());
+    }
+
     let removed = auth::unseed_account(
         &store,
         &auth::UnseedSpec {

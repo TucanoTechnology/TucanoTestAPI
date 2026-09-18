@@ -785,9 +785,11 @@ The generator's validation step asserts, at minimum:
   answer both the same way. The probe suite the first call creates is deleted
   again in the same step, so the seeded listing is left as it was found.
 - A guarded write with a token that lacks the role answers `403 forbidden` —
-  the `viewer`, which holds no grant on `payments.json`, is refused
-  `POST /projects`, and no seeded session is accepted for a write above its
-  rung.
+  `POST /projects` is refused for the `viewer`, and no seeded session is
+  accepted for a write above its rung. Creating a project is not a project
+  resource: nothing exists yet for a grant to be scoped to, so this route is the
+  system-administrator check rather than a grant lookup, and the refusal is the
+  missing administrator flag, not the absent `payments.json` grant.
 
 This step needs a seeded stack, so it runs on the documented one-command path
 (`scripts/demo.sh`), not in CI. The static route-coverage check in
@@ -880,6 +882,18 @@ so it can never clear every grant an account holds. It ends with a summary line
 — `unseed-auth: account=removed|absent|kept grants_removed=<n> grants_kept=<n>`
 — which the teardown parses, so an account that was already gone reads as a
 settled teardown rather than as a refusal.
+
+The name it removes is the teardown's, not the seed's: the seed always writes
+`viewer` and `editor`, while `TUCANO_SEED_VIEWER_USERNAME` and
+`TUCANO_SEED_EDITOR_USERNAME` say which account that run should address, for a
+volume whose accounts were created under other names by hand. An `absent`
+outcome is therefore a settled teardown only while the seed's own name holds
+nothing. The subcommand's read-only `--check` mode reports where an account and
+the named grants stand and writes nothing, and the teardown consults it for the
+seed's own name whenever the configured one is missing: an account still found
+there — except a system administrator, which the seed never writes — is reported
+as kept and the run exits `1`, so a name that went astray cannot pass as a clean
+sweep while the seeded account and its grant survive.
 
 ## 5. Known gap: auth accounts and role grants
 
@@ -999,7 +1013,10 @@ the named projects, refuses the bootstrap account, and reports anything it could
 not resolve instead of guessing. The subcommand ends with a summary line
 (`unseed-auth: account=removed|absent|kept grants_removed=<n> grants_kept=<n>`)
 that the JS half parses, which is what makes a second teardown over an
-already-clean volume exit `0` rather than reporting a false refusal.
+already-clean volume exit `0` rather than reporting a false refusal. Since the
+name to remove is the teardown's rather than the seed's, the JS half also drives
+the subcommand's read-only `--check` mode before it accepts a missing account as
+settled ([§4](#4-teardown-scope)).
 
 The freshness checks ([§1](#stale-matrix-check)) are implemented by
 `scripts/check-matrix.mjs` (#195), and the two halves of the decision above are
@@ -1025,4 +1042,4 @@ call on the local path where a developer is already running a stack.
 | Generator ([§3](#3-generating-api-calls) steps 0–11) | #193 | merged |
 | Teardown ([§4](#4-teardown-scope)) | #194 | merged |
 | Compose wiring, route-coverage check, one-command path | #195 | see [`scripts/demo.sh`](../scripts/demo.sh) |
-| Editor grant and mid-ladder verification ([§1](#1-feature-coverage-matrix) rows 26–28, [§5](#5-known-gap-auth-accounts-and-role-grants)) | #281 | in review |
+| Editor grant and mid-ladder verification ([§1](#1-feature-coverage-matrix) rows 26–28, [§5](#5-known-gap-auth-accounts-and-role-grants)) | #281 | merged |

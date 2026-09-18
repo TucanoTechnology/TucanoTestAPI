@@ -40,8 +40,9 @@ pub use config::{
 };
 pub use password::{HashError, hash_password, verify_password};
 pub use seed::{
-    AccountSpec, NO_SUCH_ACCOUNT, SeedError, SeededAccount, UnseedError, UnseedSpec,
-    UnseededAccount, is_missing_account_reason, parse_role, seed_account, unseed_account,
+    AccountReport, AccountSpec, NO_SUCH_ACCOUNT, SeedError, SeededAccount, UnseedError, UnseedSpec,
+    UnseededAccount, is_missing_account_reason, parse_role, report_account, seed_account,
+    unseed_account,
 };
 pub use session::{Principal, SessionTokens, authenticate, login, logout, refresh};
 pub use store::{AuthStore, Grants, Role, StoredRefreshToken, User};
