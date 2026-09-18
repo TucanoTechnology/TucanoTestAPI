@@ -1637,3 +1637,140 @@ async fn composing_a_case_checks_the_source_only_when_it_exists() {
     )
     .await;
 }
+
+/// Deleting a suite through a project resolves the project the route names, so
+/// an identifier two projects hold is removed one home at a time. The caller
+/// needs the role in that project only, and the other home is left alone.
+#[tokio::test]
+async fn deleting_a_suite_through_a_project_resolves_that_project() {
+    let directory = tempfile::tempdir().expect("temp dir");
+    let seeding = seeding_app(directory.path());
+    let alpha = id_of(
+        &call_ok(
+            &seeding,
+            None,
+            "POST",
+            "/projects",
+            Some(json!({ "name": "alpha" })),
+        )
+        .await,
+    );
+    let beta = id_of(
+        &call_ok(
+            &seeding,
+            None,
+            "POST",
+            "/projects",
+            Some(json!({ "name": "beta" })),
+        )
+        .await,
+    );
+    let suite = id_of(
+        &call_ok(
+            &seeding,
+            None,
+            "POST",
+            &format!("/projects/{alpha}/test_suites"),
+            Some(json!({ "name": "smoke" })),
+        )
+        .await,
+    );
+    assert_eq!(suite, "smoke.json");
+    let beta_suite = id_of(
+        &call_ok(
+            &seeding,
+            None,
+            "POST",
+            &format!("/projects/{beta}/test_suites"),
+            Some(json!({ "suiteId": suite })),
+        )
+        .await,
+    );
+    assert_eq!(beta_suite, suite, "the copy keeps the identifier");
+
+    let app = enforcing_app_with_grants(directory.path(), &[(alpha.as_str(), Role::Editor)]);
+    let token = sign_in_token(&app).await;
+    let token = token.as_str();
+
+    // While two projects hold the identifier, the global route still refuses it.
+    let (status, _, answer) = send(
+        &app,
+        request(
+            "DELETE",
+            &format!("/test_suites/{suite}"),
+            Some(token),
+            None,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{answer}");
+    assert_eq!(error_code(&answer), "conflict", "{answer}");
+
+    // The parent-scoped route names the project, so the role there is enough.
+    let deleted = call_ok(
+        &app,
+        Some(token),
+        "DELETE",
+        &format!("/projects/{alpha}/test_suites/{suite}"),
+        None,
+    )
+    .await;
+    assert_eq!(deleted["message"], "Test suite deleted");
+
+    let (status, _, answer) = send(
+        &app,
+        request("GET", &format!("/test_suites/{suite}"), Some(token), None),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::FORBIDDEN,
+        "the surviving home is the project this caller cannot reach: {answer}"
+    );
+
+    // The other home, and the identifier's single resolution, survive.
+    let reader = seeding_app(directory.path());
+    let owned = call_ok(
+        &reader,
+        None,
+        "GET",
+        &format!("/projects/{alpha}/test_suites"),
+        None,
+    )
+    .await;
+    assert_eq!(owned, json!([]), "the named project lost the occurrence");
+    let owned = call_ok(
+        &reader,
+        None,
+        "GET",
+        &format!("/projects/{beta}/test_suites"),
+        None,
+    )
+    .await;
+    assert_eq!(owned, json!([suite]), "the other home is untouched");
+    let stored = call_ok(&reader, None, "GET", &format!("/test_suites/{suite}"), None).await;
+    assert_eq!(stored["suiteId"], json!(suite));
+
+    // Entitlement elsewhere does not authorize deleting this occurrence.
+    assert_forbidden(
+        &app,
+        token,
+        "DELETE",
+        &format!("/projects/{beta}/test_suites/{suite}"),
+        None,
+    )
+    .await;
+
+    let (status, _, answer) = send(
+        &app,
+        request(
+            "DELETE",
+            &format!("/projects/{alpha}/test_suites/{suite}"),
+            Some(token),
+            None,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{answer}");
+    assert_eq!(error_code(&answer), "not_found", "{answer}");
+}
