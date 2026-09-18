@@ -43,6 +43,7 @@
  *   TUCANO_BOOTSTRAP_USERNAME / TUCANO_BOOTSTRAP_PASSWORD  sign-in credentials
  *   TUCANO_API_URL                                          base URL, when no argument
  *   TUCANO_SEED_VIEWER_USERNAME                             account to remove (default `viewer`)
+ *   TUCANO_SEED_EDITOR_USERNAME                             account to remove (default `editor`)
  *   TUCANO_UNSEED_AUTH_CMD                                  command line that removes the
  *                                                          account and its grants; when unset
  *                                                          that step is reported as not run
@@ -54,8 +55,31 @@
 
 const PROJECTS_TO_REMOVE = ["checkout.json", "payments.json"];
 
-/** The one project the seed granted the viewer, so the one grant teardown names. */
-const VIEWER_GRANT_PROJECT = "checkout.json";
+/**
+ * The accounts the seed wrote, each with the one project it granted, so the one
+ * grant teardown names per account.
+ *
+ * The names are read when the step runs, so the overrides the seed documents
+ * (`TUCANO_SEED_VIEWER_USERNAME`, `TUCANO_SEED_EDITOR_USERNAME`) reach the
+ * removal too, and a renamed account is still found.
+ */
+const SEED_ACCOUNTS = [
+  {
+    usernameEnv: "TUCANO_SEED_VIEWER_USERNAME",
+    usernameDefault: "viewer",
+    grantProject: "checkout.json",
+  },
+  {
+    usernameEnv: "TUCANO_SEED_EDITOR_USERNAME",
+    usernameDefault: "editor",
+    grantProject: "checkout.json",
+  },
+];
+
+/** The name a seeded account was written under, override first. */
+function accountUsername(account) {
+  return process.env[account.usernameEnv] || account.usernameDefault;
+}
 
 /**
  * The two configurations the seed created, each with the project that owns it.
@@ -469,7 +493,7 @@ async function step6Projects() {
 }
 
 /**
- * 7. Auth account and grants the seed wrote.
+ * 7. Auth accounts and grants the seed wrote.
  *
  * The API publishes no route for either, so this runs the server binary's
  * `unseed-auth` subcommand on the volume the server reads — the same
@@ -480,21 +504,37 @@ async function step6Projects() {
  */
 async function step7Auth() {
   const cli = process.env.TUCANO_UNSEED_AUTH_CMD;
-  const username = process.env.TUCANO_SEED_VIEWER_USERNAME || "viewer";
   if (!cli) {
-    recordKept(
-      `auth account ${username} and its grants`,
-      "set TUCANO_UNSEED_AUTH_CMD to the server binary (e.g. `target/release/tucano-test " +
-        "unseed-auth`) to remove it; the API publishes no route for accounts or grants",
-    );
+    for (const account of SEED_ACCOUNTS) {
+      recordKept(
+        `auth account ${accountUsername(account)} and its grants`,
+        "set TUCANO_UNSEED_AUTH_CMD to the server binary (e.g. `target/release/tucano-test " +
+          "unseed-auth`) to remove it; the API publishes no route for accounts or grants",
+      );
+    }
     return;
   }
+  for (const account of SEED_ACCOUNTS) {
+    await unseedAccount(cli, account);
+  }
+}
 
+/**
+ * Removes one seeded account and the grant it holds, and records what happened.
+ *
+ * The subcommand ends with a summary line that says which of three things
+ * happened, because the prose above it cannot be told apart mechanically:
+ * `absent` means the account was already gone, so there is nothing to report
+ * and nothing to keep; `removed` means this run deleted it; `kept` means the
+ * account exists and the subcommand declined to touch it.
+ */
+async function unseedAccount(cli, account) {
+  const username = accountUsername(account);
   const { spawnSync } = await import("node:child_process");
   const args = ["--username", username];
-  // The seed grants the viewer exactly one project, so teardown names exactly
+  // The seed grants each account exactly one project, so teardown names exactly
   // one. `unseed-auth` requires at least one `--grant` to know what to remove.
-  args.push("--grant", VIEWER_GRANT_PROJECT);
+  args.push("--grant", account.grantProject);
   // `TUCANO_UNSEED_AUTH_CMD` is a command *line* (it may carry its own
   // `VAR=value` prefix), so it goes to a shell. Everything the script adds is quoted.
   const quoted = args
@@ -520,11 +560,6 @@ async function step7Auth() {
   }
   process.stdout.write(result.stdout);
 
-  // The subcommand ends with a summary line that says which of three things
-  // happened, because the prose above it cannot be told apart mechanically:
-  // `absent` means the account was already gone, so there is nothing to report
-  // and nothing to keep; `removed` means this run deleted it; `kept` means the
-  // account exists and the subcommand declined to touch it.
   const summary =
     /^unseed-auth: account=(\S+) grants_removed=(\d+) grants_kept=(\d+)$/m.exec(
       result.stdout,
@@ -536,10 +571,10 @@ async function step7Auth() {
     );
     return;
   }
-  const [, account, grantsRemoved, grantsKept] = summary;
-  if (account === "removed") {
+  const [, outcome, grantsRemoved, grantsKept] = summary;
+  if (outcome === "removed") {
     recordRemoved(`auth account ${username} and ${grantsRemoved} grant(s)`);
-  } else if (account === "absent") {
+  } else if (outcome === "absent") {
     console.log(`  · auth account ${username} is not there`);
   } else {
     recordKept(

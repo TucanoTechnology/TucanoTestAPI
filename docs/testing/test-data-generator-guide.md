@@ -122,10 +122,12 @@ enforced**, because each signs in as the bootstrap account:
 | --- | --- | --- |
 | `TUCANO_BOOTSTRAP_USERNAME` / `TUCANO_BOOTSTRAP_PASSWORD` | both | The account each script signs in as. Required. |
 | `TUCANO_API_URL` | both | Base URL when no argument is given. The seed probes `http://localhost:3100`, `http://localhost:8080/api`, then `http://localhost:3000`; teardown probes the same list but **never guesses** — it fails when no candidate answers `/health`. |
-| `TUCANO_SEED_VIEWER_PASSWORD` | seed | Password for the seeded non-administrator `viewer` account. |
-| `TUCANO_SEED_AUTH_CMD` | seed | Command line that seeds the `viewer` account and its grants (see [§4](#4-the-auth-exception)). When unset, that step is skipped with a notice. |
-| `TUCANO_SEED_VIEWER_USERNAME` | teardown | The account to remove. Defaults to `viewer`. |
-| `TUCANO_UNSEED_AUTH_CMD` | teardown | Command line that removes the account and its grants. When unset, that step is reported as not run and the run exits non-zero, because the account would otherwise survive. |
+| `TUCANO_SEED_VIEWER_PASSWORD` | seed | Password for the seeded non-administrator `viewer` account, which holds `owner` on one project. |
+| `TUCANO_SEED_EDITOR_PASSWORD` | seed | Password for the seeded non-administrator `editor` account, which holds `editor` on the same project and is what lets a client exercise a role-gated write mid-ladder. |
+| `TUCANO_SEED_AUTH_CMD` | seed | Command line that seeds the `viewer` and `editor` accounts and their grants (see [§4](#4-the-auth-exception)). When unset, that step is skipped with a notice. |
+| `TUCANO_SEED_VIEWER_USERNAME` | teardown | The `viewer` account to remove. Defaults to `viewer`. |
+| `TUCANO_SEED_EDITOR_USERNAME` | teardown | The `editor` account to remove. Defaults to `editor`. |
+| `TUCANO_UNSEED_AUTH_CMD` | teardown | Command line that removes both accounts and their grants. When unset, that step is reported as not run and the run exits non-zero, because the accounts would otherwise survive. |
 
 `TUCANO_AUTH_REQUIRED`, `TUCANO_JWT_SECRET` (or `TUCANO_JWT_SECRET_FILE`) and the two bootstrap
 settings are the deployment's, not the scripts': with auth off there is no token to obtain and
@@ -175,14 +177,21 @@ coverage matrix cannot be satisfied over HTTP like everything else. The server b
 exposes two subcommands that write through the same `AuthStore` the running server reads:
 
 ```sh
-# the seed's half: create the account and its grants (idempotent)
+# the seed's half: create the accounts and their grants (idempotent)
 TUCANO_DATA_DIR=/data ./tucano-test seed-auth \
     --username viewer --password viewer-password \
     --grant checkout.json=owner
 
-# the teardown's half: forget the account and the grants it holds on the named projects
+TUCANO_DATA_DIR=/data ./tucano-test seed-auth \
+    --username editor --password editor-password \
+    --grant checkout.json=editor
+
+# the teardown's half: forget the accounts and the grants they hold on the named projects
 TUCANO_DATA_DIR=/data ./tucano-test unseed-auth \
     --username viewer --grant checkout.json
+
+TUCANO_DATA_DIR=/data ./tucano-test unseed-auth \
+    --username editor --grant checkout.json
 ```
 
 The scripts invoke them through `TUCANO_SEED_AUTH_CMD` and `TUCANO_UNSEED_AUTH_CMD`, so each takes the
@@ -191,11 +200,24 @@ form of a command *line* rather than a binary path. Against the Compose volume:
 ```sh
 TUCANO_SEED_AUTH_CMD='docker compose exec -T api tucano-test seed-auth' \
 TUCANO_SEED_VIEWER_PASSWORD=viewer-password \
+TUCANO_SEED_EDITOR_PASSWORD=editor-password \
   node scripts/seed.mjs http://localhost:3000
 
 TUCANO_UNSEED_AUTH_CMD='docker compose exec -T api tucano-test unseed-auth' \
   node scripts/teardown.mjs http://localhost:3000
 ```
+
+Against a server running on the host instead, the command line has to carry the same
+`TUCANO_DATA_DIR` the server was given, because the subcommand is a second process that resolves the
+directory on its own:
+
+```sh
+TUCANO_SEED_AUTH_CMD='TUCANO_DATA_DIR=/tmp/tucano-data ./target/debug/tucano-test seed-auth' \
+  node scripts/seed.mjs http://127.0.0.1:3000
+```
+
+Without it the subcommand writes to `./data` and the accounts it reports as created never reach the
+server, which then answers the seed's `POST /auth/login` with `401 invalid_credentials`.
 
 Three properties keep this exception honest:
 
@@ -204,12 +226,16 @@ Three properties keep this exception honest:
 - **`unseed-auth` is scoped like teardown**: it requires at least one `--grant`, removes only the
   grants it is told about rather than every grant the account happens to hold, refuses the bootstrap
   account outright, and reports anything it cannot find as left in place instead of guessing.
-- **`GET /auth/me` closes the loop.** After seeding, the script signs in as the seeded account and
-  asserts the API reports no system-administrator flag and `owner` on `checkout.json` alone — the
-  project the account is granted, with no role recorded against `payments.json`. That single grant is
-  deliberate: a viewer who reaches one project and not the other is what makes the isolation the
-  validation step checks observable, and it proves the files were written in the format the server
-  actually honours.
+- **`GET /auth/me` closes the loop.** After seeding, the script signs in as each seeded account and
+  asserts the API reports no system-administrator flag and, on the granted project alone, exactly the
+  role that account was given — `owner` for `viewer`, `editor` for `editor`, with no role recorded
+  against the project it withholds from. Both grants are deliberate: a non-administrator who reaches
+  one project and not the other is what makes the isolation the validation step checks observable,
+  and the two rungs are what make a role-gated refusal distinguishable from a missing grant. The
+  `editor` token writes the content inside its project and is refused the project document itself,
+  while the same `403` from an account with no grant on the project would prove neither; the
+  validation step asserts both halves with the `editor` token, so a client can tell "the role is too
+  low for this operation" from "the account holds no grant here at all".
 
 The gap itself — that auth accounts and grants have no HTTP route, and what closing it would require —
 is recorded in specification §5 and tracked by the epic rather than papered over here.
