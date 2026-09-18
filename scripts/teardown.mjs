@@ -71,9 +71,23 @@ const CONFIGURATIONS = {
 
 const RUNS = ["nightly.json", "nightly-import.json"];
 const MILESTONES = ["v1.0.json"];
+
+/**
+ * The suites the seed created, each named with every project that holds it.
+ *
+ * `portable.checkout.json` is the one the seed places between the two projects:
+ * it is created in `checkout.json`, moved into `payments.json` and copied back,
+ * so it has a home in each and appears under both keys. The seed leaves
+ * `regression.checkout.json` empty, but it is still a suite of the seed's and
+ * is removed through the project that holds it.
+ */
 const SUITES = {
-  "checkout.json": "smoke.checkout.json",
-  "payments.json": "smoke.payments.json",
+  "checkout.json": [
+    "smoke.checkout.json",
+    "regression.checkout.json",
+    "portable.checkout.json",
+  ],
+  "payments.json": ["smoke.payments.json", "portable.checkout.json"],
 };
 
 /** The suites' copies the seed's duplicate step created. Derived, so a prefix. */
@@ -82,18 +96,32 @@ const SUITE_COPY_PREFIX = "smoke.checkout-copy-";
 /**
  * Cases the seed created, with every home spec §2 gives them.
  *
- * `TC-LOGIN-1` ends up in two places — inside `smoke.checkout.json` where it was
- * created and inside `payments.json` where step 11 copied it. `TC-PROJECT-1`
- * ends up directly inside `checkout.json` after its move. A case that is not
- * found in exactly the home recorded here is reported, not deleted: two homes
- * for one identifier makes the delete route ambiguous.
+ * A placed case is recorded under the home it *ends* in, never the parents it
+ * passed through: `TC-MOVE-1` is created in `smoke.checkout.json` and moved four
+ * times, so only `smoke.payments.json` still holds it. `TC-LOGIN-1`,
+ * `TC-ORDERS-1`, `TC-CATALOG-1` and `TC-SEARCH-1` each end up in two places —
+ * the home they were created in and the home step 11 copied them into — so each
+ * is listed twice. A case that is not found in exactly the home recorded here is
+ * reported, not deleted: two homes for one identifier makes the delete route
+ * ambiguous.
+ *
+ * The suites are removed before the cases, so a case inside a suite reads as
+ * absent by the time its turn comes: the suite's deletion took its folder with
+ * it. That is the recorded behaviour, not a miss.
  */
 const CASES = [
   { id: "TC-LOGIN-1", parent: { kind: "suite", id: "smoke.checkout.json" } },
   { id: "TC-LOGIN-2", parent: { kind: "suite", id: "smoke.checkout.json" } },
   { id: "TC-CART-1", parent: { kind: "suite", id: "smoke.checkout.json" } },
+  { id: "TC-MOVE-1", parent: { kind: "suite", id: "smoke.payments.json" } },
   { id: "TC-PROJECT-1", parent: { kind: "project", id: "checkout.json" } },
+  { id: "TC-ORDERS-1", parent: { kind: "project", id: "checkout.json" } },
+  { id: "TC-CATALOG-1", parent: { kind: "project", id: "payments.json" } },
+  { id: "TC-SEARCH-1", parent: { kind: "suite", id: "smoke.payments.json" } },
   { id: "TC-LOGIN-1", parent: { kind: "project", id: "payments.json" } },
+  { id: "TC-ORDERS-1", parent: { kind: "project", id: "payments.json" } },
+  { id: "TC-CATALOG-1", parent: { kind: "suite", id: "smoke.checkout.json" } },
+  { id: "TC-SEARCH-1", parent: { kind: "suite", id: "smoke.checkout.json" } },
 ];
 
 const candidateUrls = [
@@ -278,14 +306,16 @@ async function step2Runs() {
  * 3. Suites the seed created, and the copies its duplicate step made.
  *
  * The duplicate's identifier is derived by the API, so it is read back from the
- * project that owns it rather than assumed. Only a name carrying the seed's own
- * prefix is removed, and only inside a project the seed created.
+ * project that owns it rather than assumed. Everything else is checked against
+ * the names recorded per project — `portable.checkout.json` against both, since
+ * the seed placed it in each — and a copy is matched by the seed's own prefix.
+ * A suite that is neither is named as kept, never removed.
  */
 async function step3Suites() {
-  for (const [projectId, suiteId] of Object.entries(SUITES)) {
+  for (const [projectId, suiteIds] of Object.entries(SUITES)) {
     if (!(await listed("/projects", projectId))) {
       console.log(
-        `  · project ${projectId} is not there, so its suite is not either`,
+        `  · project ${projectId} is not there, so its suites are not either`,
       );
       continue;
     }
@@ -301,10 +331,10 @@ async function step3Suites() {
       continue;
     }
     for (const id of suites) {
-      if (id !== suiteId && !id.startsWith(SUITE_COPY_PREFIX)) {
+      if (!suiteIds.includes(id) && !id.startsWith(SUITE_COPY_PREFIX)) {
         recordKept(
           `suite ${id} in ${projectId}`,
-          "not one the seed created (the seed creates its two suites and the copy of smoke.checkout)",
+          "not one the seed created (the seed creates its own suites and the copy of smoke.checkout)",
         );
         continue;
       }

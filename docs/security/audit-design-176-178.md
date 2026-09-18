@@ -163,10 +163,11 @@ Record the seeded identifiers the probes depend on, because the whole audit refe
 | Projects | `checkout.json`, `payments.json` | every role/IDOR probe |
 | Viewer account | `TUCANO_SEED_VIEWER_PASSWORD` (generated above) | every 403 probe |
 | Viewer grants | `owner` on `checkout.json`; **no grant** on `payments.json` | the cross-project probe |
-| Suite | `smoke.checkout.json` | suite-level guards |
-| Cases | `TC-LOGIN-1`, `TC-LOGIN-2`, `TC-PROJECT-1` | case-level probes |
-| Dual-home case | `TC-LOGIN-1`, copied into `payments.json` by seed step 11 | the ambiguity/IDOR probe |
-| Attachments | one on `TC-LOGIN-1`, one on `TC-LOGIN-2` step 0 | attachment probes |
+| Suites | `smoke.checkout.json`; `regression.checkout.json` (left empty); `smoke.payments.json` | suite-level guards, the empty-collection case |
+| Cases | `TC-LOGIN-1`, `TC-LOGIN-2`, `TC-CART-1`, `TC-MOVE-1`, `TC-PROJECT-1`, `TC-ORDERS-1`, `TC-CATALOG-1`, `TC-SEARCH-1` | case-level probes |
+| Dual-home case | `TC-LOGIN-1` and `TC-ORDERS-1` copied into `payments.json` by seed step 11; `TC-MOVE-1` is *moved* off its first home four times and ends in `payments.json/smoke.payments.json` | the ambiguity/IDOR probe |
+| Dual-home suite | `portable.checkout.json`, moved into `payments.json` and copied back, so it is held by both projects | the ambiguity probe on `GET /test_suites/{id}` |
+| Attachments | one on each of the eight cases, plus seven on their steps: step 0 of `TC-LOGIN-1`, `TC-CART-1`, `TC-MOVE-1`, `TC-ORDERS-1` and `TC-SEARCH-1`, steps 0 and 1 of `TC-LOGIN-2` | attachment probes; `TC-PROJECT-1` and `TC-CATALOG-1` are the cases whose steps carry none |
 | Run | `nightly.json` (+ imported `nightly-import.json`) | run guards, run scope |
 | Milestone | `v1.0.json` | milestone guards |
 | Configurations | `chrome-linux.json`, `firefox-linux.json` | configuration guards |
@@ -548,16 +549,20 @@ Each sub-task states the probe, the command, the control that must hold, and the
 **S1-7 — Cross-project references: the run scope and the dual-home identifier**
 
 - **Probe.**
-  1. The seed copies `TC-LOGIN-1` into `payments.json`, so the identifier has **two homes**. Address the
-     global case routes (`GET /test_cases/TC-LOGIN-1`, `GET /test_cases/TC-LOGIN-1/history`,
-     `GET /results/TC-LOGIN-1/defects`) as the `checkout.json`-only viewer and as the admin.
+  1. The seed copies `TC-LOGIN-1` and `TC-ORDERS-1` into `payments.json` and places
+     `portable.checkout.json` in both projects, so those three identifiers each have **two homes**.
+     Address the global case routes (`GET /test_cases/TC-LOGIN-1`, `GET /test_cases/TC-LOGIN-1/history`,
+     `GET /results/TC-LOGIN-1/defects`) and the global suite routes (`GET /test_suites/portable.checkout.json`,
+     `GET /test_suites/portable.checkout.json/test_cases`) as the `checkout.json`-only viewer and as the admin.
   2. A run's `projects` array decides which projects it reaches (`guard_update` → editor over the home *and*
      every project in the array). As an editor of `checkout.json`, update `nightly.json`'s `projects` array
      to name `payments.json`, then read the run and any embedded snapshots of `payments.json` cases.
   3. Compose across projects: copy a `checkout.json` case into `payments.json` and move one the other way,
-     as a caller with a role in only one of the two.
+     as a caller with a role in only one of the two. The seed's own step 11 already did both, so use
+     `TC-CART-1` (single home in `smoke.checkout.json`) for the copy and any case named here for the move.
 - **Expected (control holds).** `reachable_projects` answers `Conflict` when two projects hold one
-  identifier and `NotFound` when none does; a caller may not use a run to read another project's snapshots;
+  identifier and `NotFound` when none does, and every bare-identifier route above answers `409` rather than
+  picking a home; a caller may not use a run to read another project's snapshots;
   composition requires a role in both source and target. The known limitation that "Run scope can be
   narrowed by the caller that holds the run" is **accepted and is not a finding** — record it as a
   re-confirmation, and note explicitly that raising a run's privileges is not possible, so it is denial of

@@ -1,0 +1,16 @@
+Catalog snapshot
+================
+
+  GET /catalog?page=1&size=3
+
+  { "total": 128,
+    "items": [
+      { "sku": "SKU-4471", "name": "Espresso cup",  "price": "9.90"  },
+      { "sku": "SKU-4472", "name": "Cappuccino cup", "price": "11.50" },
+      { "sku": "SKU-4473", "name": "Milk jug",       "price": "14.00" }
+    ] }
+
+The snapshot is stored beside its test case so the expected page 1 can be
+compared without reaching the catalog service again.
+
+Recorded from the demo storefront while seeding TC-CATALOG-1.

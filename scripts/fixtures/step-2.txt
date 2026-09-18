@@ -1,0 +1,13 @@
+Step 2 evidence
+===============
+
+  Before: sign-in form, empty, "Sign in" enabled
+  After:  form submitted with the locked account
+
+  HTTP/1.1 423 Locked
+  <div class="alert alert-error" hidden></div>
+
+The alert element exists but carries no text and is not shown. Captured
+here as the step-2 attachment of the case it belongs to.
+
+Recorded while seeding the seeded dataset.

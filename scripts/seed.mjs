@@ -45,10 +45,28 @@ const PROJECTS = ['checkout.json', 'payments.json'];
 const CONFIGURATIONS = ['chrome-linux.json', 'firefox-linux.json'];
 const RUNS = ['nightly.json', 'nightly-import.json'];
 const MILESTONES = ['v1.0.json'];
+/**
+ * The suites the seed creates, named as the API is asked for them: it derives
+ * `<name>.json` as the identifier, so `smoke.checkout` is stored as
+ * `smoke.checkout.json`.
+ *
+ * `checkout.json` gets three. `smoke.checkout` holds the cases it always held;
+ * `regression.checkout` is a second suite in the same project, the parent a
+ * move passes a case through, and it ends up holding no case at all — the
+ * "a suite may be empty" shape; `portable.checkout` is placed between the two
+ * projects by step 11 and ends up with a home in each — the composed-suite
+ * shape, which needs its own empty suite because placing a suite carries the
+ * cases inside it along.
+ */
 const SUITES = {
-  'checkout.json': 'smoke.checkout.json',
-  'payments.json': 'smoke.payments.json',
+  'checkout.json': ['smoke.checkout', 'regression.checkout', 'portable.checkout'],
+  'payments.json': ['smoke.payments'],
 };
+/** The identifiers the names above derive to, for the calls that name them. */
+const SMOKE_CHECKOUT = 'smoke.checkout.json';
+const REGRESSION = 'regression.checkout.json';
+const PORTABLE = 'portable.checkout.json';
+const SMOKE_PAYMENTS = 'smoke.payments.json';
 const VIEWER = { username: 'viewer', password: null };
 
 /**
@@ -168,6 +186,18 @@ function step(message) {
   console.log(`  → ${message}`);
 }
 
+/**
+ * The collection path that owns a case, from the parent the seed records.
+ *
+ * A case can be created directly in a project or inside one of its suites, and
+ * the two are different routes: the parent decides which. Every create, listing
+ * and placement the script makes for a case is built from this, so the seed
+ * never guesses which of the two it is addressing.
+ */
+function parentPath(parent) {
+  return parent.kind === 'suite' ? `/test_suites/${parent.id}` : `/projects/${parent.id}`;
+}
+
 /** Refuses to run over data the previous seed left behind. */
 async function assertClear() {
   const runs = await call('GET', '/test_runs');
@@ -242,66 +272,203 @@ async function step2Configurations() {
   step('configurations: chrome-linux.json in checkout.json, firefox-linux.json in payments.json');
 }
 
+/**
+ * The suites, each created inside the project that owns it.
+ *
+ * The names are asked for without the `.json` the API appends, so the request
+ * carries `"name": "smoke.checkout"` and the suite is stored as
+ * `smoke.checkout.json`. `checkout.json` gets three: the two the cases need and
+ * the empty pair step 11 places — see the `SUITES` comment.
+ */
 async function step3Suites() {
-  await call('POST', '/projects/checkout.json/test_suites', {
-    body: { name: 'smoke.checkout' },
-  });
-  await call('POST', '/projects/payments.json/test_suites', {
-    body: { name: 'smoke.payments' },
-  });
-  step(`suites: ${Object.values(SUITES).join(', ')}`);
+  for (const [projectId, names] of Object.entries(SUITES)) {
+    for (const name of names) {
+      await call('POST', `/projects/${projectId}/test_suites`, { body: { name } });
+    }
+  }
+  step(
+    `suites: ${Object.values(SUITES)
+      .flat()
+      .map((name) => `${name}.json`)
+      .join(', ')}`,
+  );
 }
+
+/**
+ * Every case the seed creates, with the ordered steps written onto it straight
+ * after creation.
+ *
+ * Every case carries steps: the steps are the second call, a qualifying `PUT`
+ * that stamps `version: 2` and writes `revisions/v1.json`, which is the version
+ * history the spec asserts. Creation is `POST` against the parent's collection
+ * and the parent decides the route, so a case lands directly in a project or
+ * inside one suite depending on what is recorded here.
+ *
+ * The steps run before any placement. Placing a case duplicates its folder
+ * under a second parent, after which its bare identifier resolves to two homes
+ * and every document-level route for it — the `PUT` that carries steps, the
+ * attachment uploads — answers 409. So cases, steps and attachments all happen
+ * while each identifier still has exactly one home, and step 11 places last.
+ */
+const CASES = [
+  {
+    id: 'TC-LOGIN-1',
+    parent: { kind: 'suite', id: SMOKE_CHECKOUT },
+    title: 'Sign in with a valid account',
+    expectedResult: 'Session is established',
+    tags: ['auth'],
+    steps: [
+      { action: 'Open the sign-in form', expectedResult: 'The form is shown' },
+      { action: 'Submit a valid account', expectedResult: 'The dashboard is shown' },
+    ],
+  },
+  {
+    id: 'TC-LOGIN-2',
+    parent: { kind: 'suite', id: SMOKE_CHECKOUT },
+    title: 'Sign in with a locked account',
+    expectedResult: 'Sign-in is refused with a message',
+    tags: ['auth'],
+    steps: [
+      { action: 'Open the sign-in form', expectedResult: 'The form is shown' },
+      { action: 'Submit a locked account', expectedResult: 'A lock message is shown' },
+    ],
+  },
+  {
+    id: 'TC-CART-1',
+    parent: { kind: 'suite', id: SMOKE_CHECKOUT },
+    title: 'Add an item to the cart',
+    expectedResult: 'Cart shows one item',
+    steps: [{ action: 'Add an item to the cart', expectedResult: 'The cart badge shows 1' }],
+  },
+  {
+    // Created in the suite step 11 moves it out of, four times over.
+    id: 'TC-MOVE-1',
+    parent: { kind: 'suite', id: SMOKE_CHECKOUT },
+    title: 'Keep an item in the cart across sign-in',
+    expectedResult: 'Cart still shows the item after signing in',
+    steps: [
+      {
+        action: 'Add an item, sign in, return to the cart',
+        expectedResult: 'The cart still holds the item',
+      },
+    ],
+  },
+  {
+    id: 'TC-PROJECT-1',
+    parent: { kind: 'project', id: 'checkout.json' },
+    title: 'Reach the checkout page',
+    expectedResult: 'Checkout page renders',
+    steps: [{ action: 'Open the checkout page', expectedResult: 'The checkout form is shown' }],
+  },
+  {
+    // A project-owned case that step 11 copies into the other project.
+    id: 'TC-ORDERS-1',
+    parent: { kind: 'project', id: 'checkout.json' },
+    title: 'List the orders of an account',
+    expectedResult: 'Every order of the account is listed with its status',
+    steps: [
+      { action: 'Open the order history', expectedResult: 'The orders are listed newest first' },
+    ],
+  },
+  {
+    // A project-owned case in the other project, copied into a suite.
+    id: 'TC-CATALOG-1',
+    parent: { kind: 'project', id: 'payments.json' },
+    title: 'Browse the catalog page by page',
+    expectedResult: 'Each page holds the page size asked for',
+    steps: [{ action: 'Request page 1 of the catalog', expectedResult: 'Three items are returned' }],
+  },
+  {
+    // The suite-owned case that step 11 copies into the other project's suite.
+    id: 'TC-SEARCH-1',
+    parent: { kind: 'suite', id: SMOKE_PAYMENTS },
+    title: 'Search the catalog for an item',
+    expectedResult: 'The matching items come back best match first',
+    steps: [
+      { action: 'Search for an item', expectedResult: 'The matching items are ranked by score' },
+    ],
+  },
+];
 
 async function step4Cases() {
-  const suite = '/test_suites/smoke.checkout.json';
-  await call('POST', `${suite}/test_cases`, {
-    body: {
-      testCaseId: 'TC-LOGIN-1',
-      title: 'Sign in with a valid account',
-      expectedResult: 'Session is established',
-      tags: ['auth'],
-    },
-  });
-  await call('POST', `${suite}/test_cases`, {
-    body: {
-      testCaseId: 'TC-LOGIN-2',
-      title: 'Sign in with a locked account',
-      expectedResult: 'Sign-in is refused with a message',
-    },
-  });
-  await call('POST', `${suite}/test_cases`, {
-    body: {
-      testCaseId: 'TC-CART-1',
-      title: 'Add an item to the cart',
-      expectedResult: 'Cart shows one item',
-    },
-  });
-  await call('POST', '/projects/checkout.json/test_cases', {
-    body: {
-      testCaseId: 'TC-PROJECT-1',
-      title: 'Reach the checkout page',
-      expectedResult: 'Checkout page renders',
-    },
-  });
-  // A qualifying update: stamps `version`/`lastModified` and writes revisions/v1.json.
-  await call('PUT', '/test_cases/TC-LOGIN-2', {
-    body: {
-      steps: [
-        { action: 'Open the sign-in form', expectedResult: 'The form is shown' },
-        { action: 'Submit a locked account', expectedResult: 'A lock message is shown' },
-      ],
-    },
-  });
-  step('cases: TC-LOGIN-1, TC-LOGIN-2, TC-CART-1, TC-PROJECT-1 (steps on TC-LOGIN-2)');
+  for (const testCase of CASES) {
+    await call('POST', `${parentPath(testCase.parent)}/test_cases`, {
+      body: {
+        testCaseId: testCase.id,
+        title: testCase.title,
+        expectedResult: testCase.expectedResult,
+        ...(testCase.tags ? { tags: testCase.tags } : {}),
+      },
+    });
+    // A qualifying update: stamps `version`/`lastModified` and writes revisions/v1.json.
+    await call('PUT', `/test_cases/${testCase.id}`, { body: { steps: testCase.steps } });
+  }
+  step(`cases: ${CASES.map((testCase) => testCase.id).join(', ')} — each with ordered steps`);
 }
 
+/**
+ * The files the seed attaches, and where each one belongs.
+ *
+ * Every case carries at least one case-level attachment, and the cases with a
+ * step worth illustrating carry a step-level attachment too. A step-level
+ * upload addresses `steps/<index>/attachments`, so it is only valid once the
+ * step exists — which is why the `PUT` that writes the steps runs in step 4,
+ * and why the index recorded here must stay inside the steps of that case.
+ *
+ * The fixtures are the recorded evidence of the case: the cart state, the
+ * locked sign-in, the order listing. They are read from `scripts/fixtures/`
+ * and uploaded, never written by hand onto the volume.
+ */
+const ATTACHMENTS = [
+  {
+    id: 'TC-LOGIN-1',
+    file: 'login-flow.txt',
+    stepFiles: [{ index: 0, file: 'step-1.txt' }],
+  },
+  {
+    id: 'TC-LOGIN-2',
+    file: 'lock-message.txt',
+    stepFiles: [
+      { index: 0, file: 'step-1.txt' },
+      { index: 1, file: 'step-2.txt' },
+    ],
+  },
+  {
+    id: 'TC-CART-1',
+    file: 'cart-state.txt',
+    stepFiles: [{ index: 0, file: 'step-2.txt' }],
+  },
+  {
+    id: 'TC-MOVE-1',
+    file: 'move-trace.txt',
+    stepFiles: [{ index: 0, file: 'step-1.txt' }],
+  },
+  { id: 'TC-PROJECT-1', file: 'checkout-page.txt' },
+  {
+    id: 'TC-ORDERS-1',
+    file: 'orders-payload.txt',
+    stepFiles: [{ index: 0, file: 'step-2.txt' }],
+  },
+  { id: 'TC-CATALOG-1', file: 'catalog-snapshot.txt' },
+  {
+    id: 'TC-SEARCH-1',
+    file: 'search-response.txt',
+    stepFiles: [{ index: 0, file: 'step-1.txt' }],
+  },
+];
+
 async function step5Attachments() {
-  const caseAttachment = await upload('/test_cases/TC-LOGIN-1/attachments', 'login-flow.txt');
-  const stepAttachment = await upload(
-    '/test_cases/TC-LOGIN-2/steps/0/attachments',
-    'step-1.txt',
+  let onSteps = 0;
+  for (const plan of ATTACHMENTS) {
+    await upload(`/test_cases/${plan.id}/attachments`, plan.file);
+    for (const stepFile of plan.stepFiles ?? []) {
+      await upload(`/test_cases/${plan.id}/steps/${stepFile.index}/attachments`, stepFile.file);
+      onSteps += 1;
+    }
+  }
+  step(
+    `attachments: one on each of the ${ATTACHMENTS.length} cases, plus ${onSteps} on their steps`,
   );
-  step(`attachments: ${caseAttachment}, ${stepAttachment}`);
 }
 
 async function step6Run() {
@@ -317,7 +484,7 @@ async function step6Run() {
     },
   });
   await call('POST', '/test_runs/nightly.json/test_suites', {
-    body: { suiteId: 'smoke.checkout.json' },
+    body: { suiteId: SMOKE_CHECKOUT },
   });
   await call('POST', '/test_runs/nightly.json/test_cases', {
     body: { testCaseId: 'TC-LOGIN-1' },
@@ -440,7 +607,7 @@ async function step10MilestoneAndDuplicate() {
     },
   });
   await call('GET', '/milestones/v1.0.json/progress');
-  const duplicate = await call('POST', '/test_suites/smoke.checkout.json/duplicate', {
+  const duplicate = await call('POST', `/test_suites/${SMOKE_CHECKOUT}/duplicate`, {
     body: {},
   });
   if (typeof duplicate.id !== 'string' || duplicate.id.length === 0) {
@@ -449,16 +616,83 @@ async function step10MilestoneAndDuplicate() {
   step(`milestone v1.0.json; suite duplicate ${duplicate.id}`);
 }
 
+/**
+ * The composition shapes, run last.
+ *
+ * Every placement here gives an identifier a second home (copy) or a new one
+ * (move), so each one runs only after the documents it touches have been
+ * written: creation, steps, attachments and run membership all address a case
+ * by bare identifier and would answer 409 once the identifier resolves to two
+ * parents. Nothing after this step addresses a placed identifier at all.
+ *
+ * Both parent kinds and both modes are covered, and each parent pair appears
+ * once per mode:
+ *
+ *   copy  TC-LOGIN-1    suite   -> project   smoke.checkout.json  -> payments.json
+ *   copy  TC-ORDERS-1   project -> project   checkout.json        -> payments.json
+ *   copy  TC-CATALOG-1  project -> suite     payments.json        -> smoke.checkout.json
+ *   copy  TC-SEARCH-1   suite   -> suite     smoke.payments.json -> smoke.checkout.json
+ *   move  TC-MOVE-1     suite   -> project   smoke.checkout.json  -> checkout.json
+ *   move  TC-MOVE-1     project -> project   checkout.json        -> payments.json
+ *   move  TC-MOVE-1     project -> suite     payments.json        -> regression.checkout.json
+ *   move  TC-MOVE-1     suite   -> suite     regression.checkout.json -> smoke.payments.json
+ *   move  TC-PROJECT-1  project -> project   checkout.json        -> checkout.json (same parent)
+ *
+ * One case runs through every move: its identifier stays unique from the first
+ * hop to the last, so the four hops are four calls onto one case and the final
+ * tree shows it in its fourth home, with `revisions/v1.json` and both of its
+ * attachments intact — `place` copies or renames the whole folder. `regression`
+ * is left empty by the last hop, which is the empty-suite shape. `TC-PROJECT-1`
+ * moves onto the parent that already holds it, the no-op the rules answer
+ * `201` to without touching the disk. Each copied case is copied once and is
+ * never addressed again, so the ambiguity its second home creates is harmless.
+ *
+ * The last two calls place a suite rather than a case: `portable.checkout.json`
+ * is moved out of `checkout.json` into `payments.json` and then copied back, so
+ * the suite ends up with one home in each project while the case identifiers
+ * stay unique. It is created empty for exactly that reason — a suite placement
+ * carries the cases inside it along.
+ */
 async function step11Placement() {
   // Copy is the default: the source keeps its home and both copies are editable.
-  await call('POST', '/projects/payments.json/test_cases', {
-    body: { testCaseId: 'TC-LOGIN-1' },
-  });
+  const copies = [
+    '/projects/payments.json/test_cases',
+    '/projects/payments.json/test_cases',
+    `/test_suites/${SMOKE_CHECKOUT}/test_cases`,
+    `/test_suites/${SMOKE_CHECKOUT}/test_cases`,
+  ];
+  const copiedCases = ['TC-LOGIN-1', 'TC-ORDERS-1', 'TC-CATALOG-1', 'TC-SEARCH-1'];
+  for (const [index, target] of copies.entries()) {
+    await call('POST', target, { body: { testCaseId: copiedCases[index] } });
+  }
+
   // Move is opt-in: the target parent becomes the case's only physical home.
+  for (const target of [
+    '/projects/checkout.json/test_cases',
+    '/projects/payments.json/test_cases',
+    `/test_suites/${REGRESSION}/test_cases`,
+    `/test_suites/${SMOKE_PAYMENTS}/test_cases`,
+  ]) {
+    await call('POST', target, { body: { testCaseId: 'TC-MOVE-1', mode: 'move' } });
+  }
+
+  // A move onto the parent that already holds the case, which is a no-op.
   await call('POST', '/projects/checkout.json/test_cases', {
     body: { testCaseId: 'TC-PROJECT-1', mode: 'move' },
   });
-  step('placed TC-LOGIN-1 into payments.json (copy) and TC-PROJECT-1 stayed in checkout.json (move)');
+
+  // The suite composition, which is why `portable.checkout.json` is empty.
+  await call('POST', '/projects/payments.json/test_suites', {
+    body: { suiteId: PORTABLE, mode: 'move' },
+  });
+  await call('POST', '/projects/checkout.json/test_suites', {
+    body: { suiteId: PORTABLE },
+  });
+
+  step(
+    `placement: ${copies.length} copies, 5 moves (TC-MOVE-1 through all four directions) and ` +
+      `${PORTABLE} held by both projects`,
+  );
 }
 
 /**

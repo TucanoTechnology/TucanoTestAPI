@@ -1,0 +1,11 @@
+Cart state after "Add an item to the cart"
+=========================================
+
+  line 1  SKU-4471  "Espresso cup"   qty 1   EUR 9.90
+  line 2  (empty)
+
+Subtotal: EUR 9.90
+Item count: 1
+Badge: "1" shown on the cart icon
+
+Recorded from the demo storefront while seeding TC-CART-1.

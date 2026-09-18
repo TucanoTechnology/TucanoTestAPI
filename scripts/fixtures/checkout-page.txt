@@ -1,0 +1,17 @@
+Checkout page render
+====================
+
+  <section id="checkout">
+    <h1>Checkout</h1>
+    <ol class="steps">
+      <li aria-current="step">Address</li>
+      <li>Shipping</li>
+      <li>Payment</li>
+      <li>Review</li>
+    </ol>
+    <p class="empty-cart">Your cart is empty.</p>
+  </section>
+
+The page renders with no error banner and the address step selected.
+
+Recorded from the demo storefront while seeding TC-PROJECT-1.
