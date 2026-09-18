@@ -29,6 +29,7 @@ impl<R: Repository> TestService<R> {
             "originalName": original_name,
             "mimeType": mime_type(&filename),
             "size": contents.len(),
+            "uploadedAt": current_iso8601_timestamp(),
         });
         self.repository
             .save_attachment(parent, id, &filename, &entry, contents)

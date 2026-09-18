@@ -10,14 +10,17 @@ use axum::{
     Json, Router,
     body::Bytes,
     extract::{Multipart, Path, State},
-    http::{StatusCode, header},
+    http::{HeaderValue, StatusCode, header},
     response::{IntoResponse, Response},
     routing::{delete, get, post},
 };
 use serde_json::{Value, json};
 
 use crate::{
-    domain::{DomainError, MAX_ATTACHMENT_BYTES, StoredAttachment, duplicate, mime_type},
+    domain::{
+        ATTACHMENT_MEDIA_TYPE, DomainError, MAX_ATTACHMENT_BYTES, StoredAttachment,
+        content_disposition, duplicate,
+    },
     storage::{Parent, Repository, Resource},
 };
 
@@ -333,8 +336,14 @@ async fn upload_step_file<R: Repository>(
     Ok(upload_response(stored))
 }
 
-/// Answers a download with the stored bytes and a content type derived from the
-/// file's name.
+/// Answers a download with the stored bytes, served opaquely and named for the
+/// client.
+///
+/// The body is `application/octet-stream` whatever the file is — the stored
+/// media type stays in the case document's `mimeType` — and the
+/// `Content-Disposition` names the file the uploader supplied, so a download
+/// lands under a name a human recognises instead of the stored
+/// `<suffix>-<original name>`.
 fn attachment_response<R: Repository>(
     service: &AppState<R>,
     parent: &Parent,
@@ -342,7 +351,19 @@ fn attachment_response<R: Repository>(
     filename: &str,
 ) -> Result<Response, DomainError> {
     let contents = service.read_attachment(parent, case_id, filename)?;
-    Ok(([(header::CONTENT_TYPE, mime_type(filename))], contents).into_response())
+    let disposition = HeaderValue::from_str(&content_disposition(filename))
+        .expect("the disposition is printable ASCII by construction");
+    Ok((
+        [
+            (
+                header::CONTENT_TYPE,
+                HeaderValue::from_static(ATTACHMENT_MEDIA_TYPE),
+            ),
+            (header::CONTENT_DISPOSITION, disposition),
+        ],
+        contents,
+    )
+        .into_response())
 }
 
 /// Deletes one stored file from the addressed case folder.
