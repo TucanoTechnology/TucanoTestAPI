@@ -506,11 +506,11 @@ async function step6Projects() {
  * documented exception spec §5 records for the seed. The subcommand refuses a
  * system administrator and reports what it kept, so the scoping rule holds
  * there too. It ends with a summary line this step parses, so an account that
- * was already gone reads as clean rather than as a refusal — and the read-only
- * `--check` that follows reports the grants nothing answers for and probes the
- * seed's own name, so the run cannot report a clean sweep while the seeded
- * account, or a grant keyed on an account the store no longer has, is still
- * sitting on the volume.
+ * was already gone reads as clean rather than as a refusal. One read-only
+ * `--check` then closes the run, whichever branch each account took: it counts
+ * the grants nothing answers for, so the run cannot report a clean sweep while
+ * a grant keyed on an account the store no longer has is still sitting on the
+ * volume.
  */
 async function step7Auth() {
   const cli = process.env.TUCANO_UNSEED_AUTH_CMD;
@@ -527,6 +527,7 @@ async function step7Auth() {
   for (const account of SEED_ACCOUNTS) {
     await unseedAccount(cli, account);
   }
+  await reportOrphans(cli);
 }
 
 /**
@@ -622,36 +623,23 @@ async function unseedAccount(cli, account) {
 }
 
 /**
- * Settles the case where the account the operator named was not there.
+ * Asks the server binary's read-only `--check` about one account.
  *
- * `unseed-auth` resolves accounts the way the store does, so `absent` for a
- * name the seed does not write means the seed's own account may be sitting on
- * the volume with its grant while this run reports nothing left to remove.
- * The read-only check is therefore always run, even when the configured name is
- * the seed's: it counts the grants nothing answers for — one an earlier removal
- * orphaned, still keyed in a grant file on an identifier the store no longer
- * holds, where no lookup by name can reach it — and a non-zero count is kept,
- * loudly. When the name is not the seed's, the same answer also says whether
- * the seed's own account is still there, and one still found under it is kept
- * too, so a name that went astray cannot pass as a clean teardown.
- *
- * A name that is absent, or one that administers the server, is not residue:
- * the seed never writes an administrator, so a server account that happens to
- * carry the name is somebody else's and is left alone.
+ * Hands back the summary it printed, or `null` when it could not answer — a
+ * check this teardown cannot read is recorded as kept, because a run that
+ * cannot tell whether the store is clean must not report that it is. `what` is
+ * what a failure is recorded against.
  */
-async function reportAbsent(cli, account, username) {
-  console.log(`  · auth account ${username} is not there`);
-  const seedName = account.usernameDefault;
-  const what = `auth account ${username} (${account.usernameEnv})`;
+async function runCheck(what, cli, account) {
   const stdout = await runAuthCommand(what, cli, [
     "--username",
-    seedName,
+    account.usernameDefault,
     "--grant",
     account.grantProject,
     "--check",
   ]);
   if (stdout === null) {
-    return;
+    return null;
   }
   const probe =
     /^unseed-auth: check account=(\S+) system_admin=(\S+) grants_present=(\d+) grants_absent=(\d+) orphans=(\d+)$/m.exec(
@@ -660,26 +648,72 @@ async function reportAbsent(cli, account, username) {
   if (probe === null) {
     recordKept(
       what,
-      `the read-only check answered without its summary line, so this teardown cannot tell whether the account the seed wrote is still there:\n${stdout}`,
+      `the read-only check answered without its summary line:\n${stdout}`,
     );
+    return null;
+  }
+  const [, presence, systemAdmin, grantsPresent, grantsAbsent, orphans] = probe;
+  return { presence, systemAdmin, grantsPresent, grantsAbsent, orphans };
+}
+
+/**
+ * Counts the grants on the volume that no account answers for.
+ *
+ * Runs once per teardown, after every account has been dealt with, whichever
+ * branch each one took. A grant outlives the account that wrote it: it is keyed
+ * on the identifier, so removing the account leaves it in the grant file where
+ * nothing that looks the account up by name can see it. Reaching this scan only
+ * from the branch that found an account already gone would miss the ordinary
+ * run, where every seeded account is present and one of them leaves such a
+ * grant behind — so the scan is unconditional, and one run answers for the
+ * whole volume rather than once per account.
+ *
+ * The check is read-only, so a grant it finds is recorded as kept rather than
+ * removed: `unseed-auth` clears grants only for the project it is pointed at,
+ * and the operator is left to name that project.
+ */
+async function reportOrphans(cli) {
+  const what = "grant(s) of an account the store no longer holds";
+  const probe = await runCheck(what, cli, SEED_ACCOUNTS[0]);
+  if (probe === null || Number(probe.orphans) === 0) {
     return;
   }
-  const [, presence, systemAdmin, grantsPresent, , orphans] = probe;
-  // A grant outlives the account that wrote it: it is keyed on the identifier,
-  // so removing the account leaves it in the grant file where nothing that
-  // looks the account up by name can see it. The removal that answered `absent`
-  // has nothing to say about such a grant, so the probe's own count is the only
-  // place this teardown can find one.
-  if (Number(orphans) > 0) {
-    recordKept(
-      `grant(s) of an account the store no longer holds`,
-      `the read-only check above names ${orphans} of them; \`unseed-auth\` removes grants only ` +
-        `for the project it is pointed at, so name that project to clear it`,
-    );
-  }
+  recordKept(
+    what,
+    `the read-only check above names ${probe.orphans} of them; \`unseed-auth\` removes grants ` +
+      `only for the project it is pointed at, so name that project to clear it`,
+  );
+}
+
+/**
+ * Settles the case where the account the operator named was not there.
+ *
+ * `unseed-auth` resolves accounts the way the store does, so `absent` for a
+ * name the seed does not write means the seed's own account may be sitting on
+ * the volume with its grant while this run reports nothing left to remove. A
+ * configured name that is the seed's leaves nothing to ask; when it is not, the
+ * read-only check answers under the seed's own name and an account still found
+ * there — or one still holding the grant the seed wrote — is kept, so a name
+ * that went astray cannot pass as a clean teardown. Grants nothing answers for
+ * are [`reportOrphans`]' business: it scans once per run, whichever branch each
+ * account took.
+ *
+ * A name that is absent, or one that administers the server, is not residue:
+ * the seed never writes an administrator, so a server account that happens to
+ * carry the name is somebody else's and is left alone.
+ */
+async function reportAbsent(cli, account, username) {
+  console.log(`  · auth account ${username} is not there`);
+  const seedName = account.usernameDefault;
   if (username.toLowerCase() === seedName.toLowerCase()) {
     return;
   }
+  const what = `auth account ${username} (${account.usernameEnv})`;
+  const probe = await runCheck(what, cli, account);
+  if (probe === null) {
+    return;
+  }
+  const { presence, systemAdmin, grantsPresent } = probe;
   if (presence !== "present") {
     console.log(`  · auth account ${seedName} is not there either`);
     return;

@@ -903,12 +903,13 @@ the named grants stand, writes no state, and ends with its own summary line —
 against an account identifier `auth/users.json` does not hold. Opening the store
 at all creates `auth/`, `auth/projects/` and an empty `.tucano.lock`, even on a
 volume that holds nothing, so a check on a pristine data directory leaves those
-three behind and nothing else. The teardown always runs that check, whichever
-name it was configured with: an orphan it finds is reported as kept and the run
-exits `1`, because a grant keyed on an account that is gone cannot be found by
-looking a name up. When the configured name is not the seed's, the same answer
-also says whether the seed's own account is still there: an account still found
-under it — except a system administrator, which the seed never writes — is
+three behind and nothing else. The teardown runs that check once per run, after
+every account has been dealt with, whichever name it was configured with and
+whichever branch each account took: an orphan it finds is reported as kept and
+the run exits `1`, because a grant keyed on an account that is gone cannot be
+found by looking a name up. When the configured name is not the seed's, the same
+answer also says whether the seed's own account is still there: an account still
+found under it — except a system administrator, which the seed never writes — is
 reported as kept too, so a name that went astray cannot pass as a clean sweep
 while the seeded account and its grant survive.
 
@@ -1032,11 +1033,11 @@ not resolve instead of guessing. The subcommand ends with a summary line
 that the JS half parses, and counts as kept only the grants that really are on
 the volume — a named project the account holds nothing on is prose, not a kept
 grant — which is what makes a second teardown over an already-clean volume exit
-`0` rather than reporting a false refusal. The JS half also drives the
-subcommand's read-only `--check` mode before it accepts a missing account as
-settled, and reads its `orphans` count for the grants left keyed on an account
-the store no longer holds, whichever name the run was configured with
-([§4](#4-teardown-scope)).
+`0` rather than reporting a false refusal. The JS half also runs the
+subcommand's read-only `--check` mode once per teardown, after every account has
+been dealt with, and reads its `orphans` count for the grants left keyed on an
+account the store no longer holds, whichever name the run was configured with
+and whichever branch each account took ([§4](#4-teardown-scope)).
 
 The freshness checks ([§1](#stale-matrix-check)) are implemented by
 `scripts/check-matrix.mjs` (#195), and the two halves of the decision above are
