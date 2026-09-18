@@ -27,6 +27,8 @@
  *   TUCANO_BOOTSTRAP_USERNAME / TUCANO_BOOTSTRAP_PASSWORD  sign-in credentials
  *   TUCANO_SEED_VIEWER_PASSWORD                            password for the
  *                                                          seeded `viewer` account
+ *   TUCANO_SEED_EDITOR_PASSWORD                            password for the
+ *                                                          seeded `editor` account
  *
  * The seed is not idempotent, by design: placing a case onto an identifier the
  * target parent already holds answers 409, so a second run onto the same volume
@@ -67,16 +69,42 @@ const SMOKE_CHECKOUT = 'smoke.checkout.json';
 const REGRESSION = 'regression.checkout.json';
 const PORTABLE = 'portable.checkout.json';
 const SMOKE_PAYMENTS = 'smoke.payments.json';
-const VIEWER = { username: 'viewer', password: null };
 
 /**
- * The one project the seeded viewer holds a grant on.
+ * The accounts the seed writes through the server binary's AuthStore path
+ * (spec §5), each with the single grant it holds.
  *
- * Configurations are project resources, so the viewer needs a grant to reach
- * the one the seed puts in `checkout.json`; it deliberately holds none on
- * `payments.json`, which is the isolation spec §3 step 12 asserts.
+ * Configurations are project resources, so a non-admin account needs a grant to
+ * reach the one the seed puts in `checkout.json`. Both accounts deliberately
+ * hold none on `payments.json` — the isolation spec §3 step 12 asserts.
+ *
+ * The ladder `viewer < editor < owner` is why both accounts exist. An `owner`
+ * may write anything in the project, an `editor` may write the content inside it
+ * — `POST /projects/{id}/test_suites` and `POST /projects/{id}/test_cases` — but
+ * not the project document itself, which `PUT /projects/{id}` refuses with
+ * `403 forbidden`. Holding a grant at a lower rung is what lets a client tell
+ * "the role is too low for this operation" apart from "the account holds no
+ * grant here at all", which the account with no grant would otherwise answer
+ * identically.
  */
-const VIEWER_PROJECT = 'checkout.json';
+const SEED_ACCOUNTS = [
+  {
+    username: 'viewer',
+    role: 'owner',
+    project: 'checkout.json',
+    passwordEnv: 'TUCANO_SEED_VIEWER_PASSWORD',
+    passwordDefault: 'viewer-seed-password',
+    password: null,
+  },
+  {
+    username: 'editor',
+    role: 'editor',
+    project: 'checkout.json',
+    passwordEnv: 'TUCANO_SEED_EDITOR_PASSWORD',
+    passwordDefault: 'editor-seed-password',
+    password: null,
+  },
+];
 
 const candidateUrls = [
   process.argv[2],
@@ -697,68 +725,75 @@ async function step11Placement() {
 
 /**
  * Writes the seed's accounts and grants through the server binary's AuthStore
- * path (spec §5). The API has no route for this, so `--auth` is the one
- * exception to "the generator drives the API"; it runs on the volume the
+ * path (spec §5). The API has no route for this, so `TUCANO_SEED_AUTH_CMD` is
+ * the one exception to "the generator drives the API"; it runs on the volume the
  * server reads.
  */
 async function stepAuth() {
-  const password = process.env.TUCANO_SEED_VIEWER_PASSWORD || 'viewer-seed-password';
   const cli = process.env.TUCANO_SEED_AUTH_CMD;
   if (!cli) {
     console.log(
       '  ℹ️  skipping auth seeding: set TUCANO_SEED_AUTH_CMD to the server binary ' +
-        '(e.g. `target/release/tucano-test seed-auth`) to create the viewer account and grants',
+        '(e.g. `target/release/tucano-test seed-auth`) to create the viewer and editor ' +
+        'accounts and their grants',
     );
     return;
   }
   const { spawnSync } = await import('node:child_process');
-  const args = ['--username', VIEWER.username, '--password', password];
-  args.push('--grant', `${VIEWER_PROJECT}=owner`);
-  // `TUCANO_SEED_AUTH_CMD` is a command *line* (it may carry its own
-  // `VAR=value` prefix), so it is handed to a shell. Everything the script adds
-  // to it — the username, the password, the project ids and roles — is quoted.
-  const quoted = args.map((arg) => `'${String(arg).replaceAll("'", `'\\''`)}'`).join(' ');
-  const result = spawnSync(`${cli} ${quoted}`, { encoding: 'utf8', shell: true });
-  if (result.error) {
-    throw new Error(`auth seeding via ${cli} could not run: ${result.error.message}`);
-  }
-  if (result.status !== 0) {
-    throw new Error(
-      `auth seeding via ${cli} failed (exit ${result.status}):\n${result.stderr || result.stdout}`,
-    );
-  }
-  process.stdout.write(result.stdout);
-  VIEWER.password = password;
-
-  // GET /auth/me closes the loop: it proves the files are honoured by the server.
-  const viewerSession = await call('POST', '/auth/login', {
-    body: { username: VIEWER.username, password: VIEWER.password },
-  });
-  const previous = token;
-  token = viewerSession.accessToken;
-  const me = await call('GET', '/auth/me');
-  token = previous;
-  if (me.systemAdmin !== false) {
-    throw new Error(`the seeded viewer should not be a system administrator: ${JSON.stringify(me)}`);
-  }
-  if (me.roles?.[VIEWER_PROJECT] !== 'owner') {
-    throw new Error(
-      `GET /auth/me reports role ${JSON.stringify(me.roles?.[VIEWER_PROJECT])} on ${VIEWER_PROJECT}, expected owner`,
-    );
-  }
-  // The grant is deliberately one project only: the validation step uses the
-  // viewer's lack of reach elsewhere to prove configurations are per-project.
-  for (const project of PROJECTS.filter((id) => id !== VIEWER_PROJECT)) {
-    if (me.roles?.[project] !== undefined) {
+  for (const account of SEED_ACCOUNTS) {
+    const password = process.env[account.passwordEnv] || account.passwordDefault;
+    const args = ['--username', account.username, '--password', password];
+    args.push('--grant', `${account.project}=${account.role}`);
+    // `TUCANO_SEED_AUTH_CMD` is a command *line* (it may carry its own
+    // `VAR=value` prefix), so it is handed to a shell. Everything the script adds
+    // to it — the username, the password, the project ids and roles — is quoted.
+    const quoted = args.map((arg) => `'${String(arg).replaceAll("'", `'\\''`)}'`).join(' ');
+    const result = spawnSync(`${cli} ${quoted}`, { encoding: 'utf8', shell: true });
+    if (result.error) {
+      throw new Error(`auth seeding via ${cli} could not run: ${result.error.message}`);
+    }
+    if (result.status !== 0) {
       throw new Error(
-        `GET /auth/me reports role ${JSON.stringify(me.roles[project])} on ${project}, but the seed grants the viewer none`,
+        `auth seeding via ${cli} failed (exit ${result.status}):\n${result.stderr || result.stdout}`,
       );
     }
+    process.stdout.write(result.stdout);
+    account.password = password;
+
+    // GET /auth/me closes the loop: it proves the files are honoured by the server.
+    const session = await call('POST', '/auth/login', {
+      body: { username: account.username, password: account.password },
+    });
+    const previous = token;
+    token = session.accessToken;
+    const me = await call('GET', '/auth/me');
+    token = previous;
+    if (me.systemAdmin !== false) {
+      throw new Error(
+        `the seeded ${account.username} should not be a system administrator: ${JSON.stringify(me)}`,
+      );
+    }
+    if (me.roles?.[account.project] !== account.role) {
+      throw new Error(
+        `GET /auth/me reports role ${JSON.stringify(me.roles?.[account.project])} on ` +
+          `${account.project}, expected ${account.role}`,
+      );
+    }
+    // The grant is deliberately one project only: the validation step uses each
+    // account's lack of reach elsewhere to prove configurations are per-project.
+    for (const project of PROJECTS.filter((id) => id !== account.project)) {
+      if (me.roles?.[project] !== undefined) {
+        throw new Error(
+          `GET /auth/me reports role ${JSON.stringify(me.roles[project])} on ${project}, but the ` +
+            `seed grants ${account.username} none`,
+        );
+      }
+    }
+    step(
+      `auth: ${account.username} holds ${account.role} on ${account.project} and no grant on ` +
+        PROJECTS.filter((id) => id !== account.project).join(', '),
+    );
   }
-  step(
-    `auth: ${VIEWER.username} holds owner on ${VIEWER_PROJECT} and no grant on ` +
-      PROJECTS.filter((id) => id !== VIEWER_PROJECT).join(', '),
-  );
 }
 
 // --- entry point ------------------------------------------------------------

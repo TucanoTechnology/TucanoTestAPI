@@ -65,9 +65,9 @@ example is a gap, not a deferral.
 | 23 | Coverage report | `GET /reports/coverage`, global and `?projectId=checkout.json` | the report routes | n/a (read-only — no new files) |
 | 24 | Summary report | `GET /reports/summary` and `?configurationId=chrome-linux.json` | the report routes | n/a (read-only — no new files) |
 | 25 | Auth users: system administrator | `admin` — the bootstrap account | `TUCANO_BOOTSTRAP_USERNAME`/`TUCANO_BOOTSTRAP_PASSWORD` at startup; `POST /auth/login` | `auth/users.json` (**not** produced by an API call — see [§5](#5-known-gap-auth-accounts-and-role-grants)) |
-| 26 | Auth users: non-admin account | `viewer` — a stored account with no `systemAdmin` flag | written through the `AuthStore` path by the generator; `POST /auth/login` | `auth/users.json` (**not** produced by an API call) |
-| 27 | Role grants per project | `viewer` holds `owner` on `checkout.json` and **no grant at all** on `payments.json`. `admin` holds **no grant at all** — a system administrator is authorized without one (see [§5](#5-known-gap-auth-accounts-and-role-grants)) | written through the `AuthStore` grant path; verified by `GET /auth/me` as `viewer`, and for `admin` by an authorized write and by `systemAdmin: true` | `auth/projects/checkout.json` (and no `auth/projects/payments.json`) |
-| 28 | Authorization enforcement | the `viewer`-scoped token proves reads succeed and a write is refused with `forbidden` | any guarded write with the scoped token | n/a (the refusal is the evidence) |
+| 26 | Auth users: non-admin accounts | `viewer` and `editor` — two stored accounts with no `systemAdmin` flag | written through the `AuthStore` path by the generator; `POST /auth/login` | `auth/users.json` (**not** produced by an API call) |
+| 27 | Role grants per project | `viewer` holds `owner` on `checkout.json` and `editor` holds `editor` on the same project; both hold **no grant at all** on `payments.json`. `admin` holds **no grant at all** — a system administrator is authorized without one (see [§5](#5-known-gap-auth-accounts-and-role-grants)) | written through the `AuthStore` grant path; verified by `GET /auth/me` as `viewer` and as `editor`, and for `admin` by an authorized write and by `systemAdmin: true` | `auth/projects/checkout.json` holding both grants (and no `auth/projects/payments.json`) |
+| 28 | Authorization enforcement | an `editor` token writes the content inside its project — `POST /projects/{id}/test_suites` is accepted — while `PUT /projects/{id}` on the same project is refused with `forbidden`, because the project document needs `owner`. The `viewer`-scoped token proves reads succeed and a write needing a grant it does not hold is refused | any guarded write with the scoped token | n/a (the acceptance and the refusal are the evidence) |
 | 29 | Sessions | sign in, refresh (rotating the refresh token once), sign out, `GET /auth/me` | `POST /auth/login`, `POST /auth/refresh`, `POST /auth/logout`, `GET /auth/me` | n/a (`auth/users.json` carries the revocable refresh tokens) |
 | 30 | Service surface | `GET /health`, `GET /ready`, `GET /diagnostics`, `GET /openapi.json` | the service routes | n/a (read-only) |
 
@@ -186,7 +186,7 @@ $TUCANO_DATA_DIR/
 ├── auth/
 │   ├── users.json                            # accounts, password hashes, refresh tokens
 │   └── projects/
-│       └── checkout.json                     # {"grants": {"<viewer id>": "owner"}}
+│       └── checkout.json                     # {"grants": {"<viewer id>": "owner", "<editor id>": "editor"}}
 ├── .tucano.lock                              # advisory lock, created by the API
 ├── projects/
 │   ├── checkout/
@@ -770,11 +770,24 @@ The generator's validation step asserts, at minimum:
   both return the seeded runs.
 - `GET /auth/me` reports the seeded **viewer's** role (`owner`) on
   `checkout.json`, which is the project it was granted, and no grant on
-  `payments.json`; and for the bootstrap account reports `systemAdmin: true` with
-  **no** grants at all — a system administrator needs none (see
-  [§5](#5-known-gap-auth-accounts-and-role-grants)), which the authorized write
-  below proves.
-- A guarded write with a token that lacks the role answers `403 forbidden`.
+  `payments.json`; the seeded **editor's** role (`editor`) on the same project
+  and no grant on `payments.json` either; and for the bootstrap account
+  `systemAdmin: true` with **no** grants at all — a system administrator needs
+  none (see [§5](#5-known-gap-auth-accounts-and-role-grants)), which the
+  authorized write below proves.
+- The seeded **editor** exercises the middle of the ladder, which is the whole
+  point of the account. `POST /projects/checkout.json/test_suites` with its
+  token is accepted — the content inside a project needs `editor` — while
+  `PUT /projects/checkout.json` with the *same* token answers `403 forbidden`,
+  because the project document itself needs `owner`. The first call is the
+  proof the token carries a real grant; the second is the proof the refusal is
+  the role and not a missing grant, since an account with no grant at all would
+  answer both the same way. The probe suite the first call creates is deleted
+  again in the same step, so the seeded listing is left as it was found.
+- A guarded write with a token that lacks the role answers `403 forbidden` —
+  the `viewer`, which holds no grant on `payments.json`, is refused
+  `POST /projects`, and no seeded session is accepted for a write above its
+  rung.
 
 This step needs a seeded stack, so it runs on the documented one-command path
 (`scripts/demo.sh`), not in CI. The static route-coverage check in
@@ -861,7 +874,7 @@ scopes every removal to the identifiers the seed fixed:
 Step 7 runs the server binary's `unseed-auth` subcommand (the inverse of the
 `seed-auth` of [§5](#5-known-gap-auth-accounts-and-role-grants)) over the volume
 the server reads, because the API publishes no route for accounts or grants. It
-removes one named account and the grants that account holds on the named
+removes each named account and the grants that account holds on the named
 projects, refuses the bootstrap account, and requires at least one `--grant`
 so it can never clear every grant an account holds. It ends with a summary line
 — `unseed-auth: account=removed|absent|kept grants_removed=<n> grants_kept=<n>`
@@ -897,22 +910,33 @@ API":
   store, which the unit test
   `a_system_administrator_is_authorized_without_any_grant` pins. So seeding a
   grant for `admin` would add an on-disk artifact the server never reads, and
-  the grants the generator does write exist to give the *non-admin* account
-  reach. Row 27 therefore seeds exactly one grantee — the `viewer`, holding
-  `owner` on `checkout.json` — and `GET /auth/me` intentionally reports
-  `"roles": {}` for the admin: `me` reports the account's grants, not its
-  effective authority, so an admin with no grant legitimately reports none.
+  the grants the generator does write exist to give the *non-admin* accounts
+  reach. Row 27 therefore seeds one grantee per rung the dataset has to
+  exercise: the `viewer`, holding `owner` on `checkout.json`, and the `editor`,
+  holding `editor` on the same project. One grantee would not do. With only a
+  `viewer` holding `owner`, the dataset has no session whose role is high enough
+  for a content write inside the project but too low for a project write, so a
+  client cannot tell "the role is too low for this operation" from "the account
+  holds no grant here at all" — the same caller gets the same `403` for both,
+  and a client that tests one against the other learns nothing. The second rung
+  is what makes the two answers distinguishable, and
+  [§3 step 12](#step-12--validation-of-the-seeded-environment) asserts exactly
+  that pair. `GET /auth/me` intentionally reports `"roles": {}` for the admin:
+  `me` reports the account's grants, not its effective authority, so an admin
+  with no grant legitimately reports none.
 - **A configuration needs a project role, which is why the grant is not
   optional.** A configuration is a project resource, so reading one needs
   `Viewer` in the project that holds it and creating one needs `Editor`;
   `GET /configurations` answers with the configurations of the projects the
   caller reaches, and a project the caller holds no grant in answers
   `403 forbidden` to its own configuration listing. The seed's `viewer` holds
-  `owner` on `checkout.json`, which subsumes `editor`, and that single grant is
-  what lets it see `chrome-linux.json` and not `firefox-linux.json` — the
-  isolation [§3 step 12](#step-12--validation-of-the-seeded-environment)
-  asserts. The bootstrap account is the only caller that needs no grant for any
-  of this, by the short-circuit above.
+  `owner` on `checkout.json`, which subsumes `editor`, and that grant is what
+  lets it see `chrome-linux.json` and not `firefox-linux.json` — the isolation
+  [§3 step 12](#step-12--validation-of-the-seeded-environment) asserts. The
+  editor's `editor` grant is lower on the ladder but still subsumes `Viewer`, so
+  it reaches the same configurations through the middle rung. The bootstrap
+  account is the only caller that needs no grant for any of this, by the
+  short-circuit above.
 - **`GET /auth/me` is the assertion that closes the loop.** After the seed, the
   validation step reads each seeded account's `roles` map and `systemAdmin` flag
   through the API, which proves the files the generator wrote are the ones the
@@ -963,13 +987,14 @@ accounts and grants: the API publishes no route for either, so the server binary
 grows a `seed-auth` subcommand (`src/auth/seed.rs`) that writes them through the
 same `AuthStore` the running server reads. Unlike the dataset itself it *is*
 idempotent — an existing account keeps its password and only missing grants are
-added. The script invokes it through `TUCANO_SEED_AUTH_CMD`, skips the step with
-a notice when that is unset, and then performs the `GET /auth/me` assertion that
-closes the loop.
+added. The script invokes it through `TUCANO_SEED_AUTH_CMD`, once per account
+the dataset needs — the `viewer` at `owner` and the `editor` at `editor` — skips
+the step with a notice when that is unset, and then performs the `GET /auth/me`
+assertion for each, which closes the loop.
 
 Teardown ([§4](#4-teardown-scope)) is implemented by `scripts/teardown.mjs`
 (#194). Its auth half is the `unseed-auth` subcommand, the inverse of
-`seed-auth`: it removes one named account and the grants that account holds on
+`seed-auth`: it removes each named account and the grants that account holds on
 the named projects, refuses the bootstrap account, and reports anything it could
 not resolve instead of guessing. The subcommand ends with a summary line
 (`unseed-auth: account=removed|absent|kept grants_removed=<n> grants_kept=<n>`)
@@ -1000,3 +1025,4 @@ call on the local path where a developer is already running a stack.
 | Generator ([§3](#3-generating-api-calls) steps 0–11) | #193 | merged |
 | Teardown ([§4](#4-teardown-scope)) | #194 | merged |
 | Compose wiring, route-coverage check, one-command path | #195 | see [`scripts/demo.sh`](../scripts/demo.sh) |
+| Editor grant and mid-ladder verification ([§1](#1-feature-coverage-matrix) rows 26–28, [§5](#5-known-gap-auth-accounts-and-role-grants)) | #281 | in review |

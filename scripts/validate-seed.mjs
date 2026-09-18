@@ -10,8 +10,11 @@
  * the calls the matrix promises actually return what the specification says
  * they leave behind.
  *
- * It reads only; it writes nothing and removes nothing. The intended flow is
- * `scripts/demo.sh`: bring a stack up, seed it, smoke it, then run this.
+ * It reads the seeded documents, and the only writes it makes are its own: the
+ * throwaway project that proves the admin's reach, and the throwaway suite that
+ * proves the editor's grant, each deleted again in the same step so a seeded
+ * document is never left rewritten. The intended flow is `scripts/demo.sh`:
+ * bring a stack up, seed it, smoke it, then run this.
  *
  * Usage:
  *   node scripts/validate-seed.mjs [BASE_URL]
@@ -27,10 +30,13 @@
  *   TUCANO_SEED_VIEWER_USERNAME  Non-admin account to prove the refusal with
  *                                (default viewer).
  *   TUCANO_SEED_VIEWER_PASSWORD  Its password (default viewer-seed-password).
+ *   TUCANO_SEED_EDITOR_USERNAME  Account holding `editor` to prove role-gated
+ *                                behaviour with (default editor).
+ *   TUCANO_SEED_EDITOR_PASSWORD  Its password (default editor-seed-password).
  *
- * Both tokens are obtained by signing in with `POST /auth/login`, the route the
- * specification documents in §3 step 0. Minting one from the signing secret is
- * deliberately not offered: the account identifier an access token must carry
+ * The admin token is obtained by signing in with `POST /auth/login`, the route
+ * the specification documents in §3 step 0. Minting one from the signing secret
+ * is deliberately not offered: the account identifier an access token must carry
  * is a random string the store assigns, so a token naming the username is not
  * resolvable by `GET /auth/me` however it is signed.
  *
@@ -40,6 +46,8 @@
 const API = (process.argv[2] ?? process.env.TUCANO_API_URL ?? "http://localhost:3100").replace(/\/$/, "");
 const VIEWER_USERNAME = process.env.TUCANO_SEED_VIEWER_USERNAME ?? "viewer";
 const VIEWER_PASSWORD = process.env.TUCANO_SEED_VIEWER_PASSWORD ?? "viewer-seed-password";
+const EDITOR_USERNAME = process.env.TUCANO_SEED_EDITOR_USERNAME ?? "editor";
+const EDITOR_PASSWORD = process.env.TUCANO_SEED_EDITOR_PASSWORD ?? "editor-seed-password";
 
 const PROJECTS = ["checkout.json", "payments.json"];
 const SUITES = {
@@ -115,11 +123,11 @@ const OWNED = {
     "payments.json": [],
   },
 };
-// The project the seed grants the viewer and the one it deliberately withholds
-// (spec §5 and row 27), which is the pair the configuration isolation below
-// turns on.
-const VIEWER_PROJECT = "checkout.json";
-const VIEWER_WITHHELD_PROJECT = "payments.json";
+// The project the seed grants the non-admin accounts and the one it withholds
+// from both (spec §5 and rows 27–28), which is the pair the configuration
+// isolation and the role-gated writes below turn on.
+const GRANTED_PROJECT = "checkout.json";
+const WITHHELD_PROJECT = "payments.json";
 
 const failures = [];
 let checks = 0;
@@ -189,10 +197,12 @@ async function getOrNull(path, token) {
  *
  * An ambiguity is a documented `409`, so a crash, a `404` or a `500` has to fail
  * here: the refusal is only evidence when it is the refusal the contract names.
+ * A refusal a write route answers is passed as `{ method, body }`, because a
+ * `GET` is the default and some refusals only exist on the write paths.
  */
-async function assertRefused(what, path, status, token) {
+async function assertRefused(what, path, status, token, { method = "GET", body } = {}) {
   try {
-    await request(path, { token, expect: [status] });
+    await request(path, { method, token, body, expect: [status] });
     pass(what);
   } catch (error) {
     if (error instanceof HttpError) {
@@ -263,6 +273,11 @@ async function adminToken() {
 /** The bearer token of the non-admin account whose write must be refused. */
 function viewerToken() {
   return login(VIEWER_USERNAME, VIEWER_PASSWORD);
+}
+
+/** The bearer token of the account that holds `editor`, one rung above `viewer`. */
+function editorToken() {
+  return login(EDITOR_USERNAME, EDITOR_PASSWORD);
 }
 
 // --- Steps ------------------------------------------------------------------
@@ -634,13 +649,13 @@ async function stepRefusal() {
     JSON.stringify(me),
   );
   ok(
-    me?.roles?.[VIEWER_PROJECT] === "owner",
-    `GET /auth/me reports the ${VIEWER_USERNAME} session's owner role on ${VIEWER_PROJECT}`,
+    me?.roles?.[GRANTED_PROJECT] === "owner",
+    `GET /auth/me reports the ${VIEWER_USERNAME} session's owner role on ${GRANTED_PROJECT}`,
     JSON.stringify(me?.roles),
   );
   ok(
-    me?.roles?.[VIEWER_WITHHELD_PROJECT] === undefined,
-    `GET /auth/me reports no grant on ${VIEWER_WITHHELD_PROJECT} for the ${VIEWER_USERNAME} session`,
+    me?.roles?.[WITHHELD_PROJECT] === undefined,
+    `GET /auth/me reports no grant on ${WITHHELD_PROJECT} for the ${VIEWER_USERNAME} session`,
     JSON.stringify(me?.roles),
   );
 
@@ -657,45 +672,118 @@ async function stepRefusal() {
     JSON.stringify(reachable),
   );
 
-  const granted = await request(`/projects/${VIEWER_PROJECT}/configurations`, { token });
+  const granted = await request(`/projects/${GRANTED_PROJECT}/configurations`, { token });
   ok(
     Array.isArray(granted) && granted.includes("chrome-linux.json"),
-    `GET /projects/${VIEWER_PROJECT}/configurations lists chrome-linux.json for the viewer session`,
+    `GET /projects/${GRANTED_PROJECT}/configurations lists chrome-linux.json for the viewer session`,
     JSON.stringify(granted),
   );
 
-  try {
-    await request(`/projects/${VIEWER_WITHHELD_PROJECT}/configurations`, { token, expect: [403] });
-    pass(
-      `a viewer session is refused GET /projects/${VIEWER_WITHHELD_PROJECT}/configurations with 403`,
-    );
-  } catch (error) {
-    const what = `a viewer session is refused GET /projects/${VIEWER_WITHHELD_PROJECT}/configurations with 403`;
-    if (error instanceof HttpError) {
-      fail(`${what}, got ${error.status}`, JSON.stringify(error.body));
-    } else {
-      fail(what, error.message);
-    }
-  }
+  await assertRefused(
+    `a viewer session is refused GET /projects/${WITHHELD_PROJECT}/configurations with 403`,
+    `/projects/${WITHHELD_PROJECT}/configurations`,
+    403,
+    token,
+  );
 
+  await assertRefused(
+    `a ${VIEWER_USERNAME} session is refused POST /projects with 403`,
+    "/projects",
+    403,
+    token,
+    { method: "POST", body: { name: `validate-refused-${Date.now()}` } },
+  );
+}
+
+/**
+ * Proves the `editor` grant is a real rung on the ladder rather than another
+ * account with no reach at all.
+ *
+ * The point of the account is the contrast: it holds `editor` on the granted
+ * project and none on the withheld one, and `editor` is enough to write the
+ * content inside a project but not the project document itself. So the same
+ * token is accepted for a suite and refused for a `PUT` on the project, which
+ * is what a client needs in order to tell "this role is too low" apart from
+ * "this account has no grant here" — the two a grant-less account answers
+ * identically.
+ */
+async function stepEditor() {
+  const token = await editorToken();
+
+  const me = await request("/auth/me", { token });
+  ok(
+    me?.systemAdmin === false,
+    `GET /auth/me with the ${EDITOR_USERNAME} session reports systemAdmin=false`,
+    JSON.stringify(me),
+  );
+  ok(
+    me?.roles?.[GRANTED_PROJECT] === "editor",
+    `GET /auth/me reports the ${EDITOR_USERNAME} session's editor role on ${GRANTED_PROJECT}`,
+    JSON.stringify(me?.roles),
+  );
+  ok(
+    me?.roles?.[WITHHELD_PROJECT] === undefined,
+    `GET /auth/me reports no grant on ${WITHHELD_PROJECT} for the ${EDITOR_USERNAME} session`,
+    JSON.stringify(me?.roles),
+  );
+
+  // A suite in the granted project: the write needs `editor`, so its acceptance
+  // is what proves the grant reaches the content. The suite is a probe that the
+  // next assertion removes again, so the seeded listing is left as it was found.
+  const probeName = `validate-editor-probe-${Date.now()}`;
+  let probeId = null;
   try {
-    await request("/projects", {
+    const created = await request(`/projects/${GRANTED_PROJECT}/test_suites`, {
       method: "POST",
       token,
-      body: { name: `validate-refused-${Date.now()}` },
-      expect: [403],
+      body: { name: probeName },
+      expect: [201],
     });
-    pass(`a ${VIEWER_USERNAME} session is refused POST /projects with 403`);
+    probeId = created?.id;
+    ok(
+      typeof probeId === "string",
+      `an ${EDITOR_USERNAME} session creates a suite in ${GRANTED_PROJECT} (needs editor)`,
+      JSON.stringify(created),
+    );
   } catch (error) {
     if (error instanceof HttpError) {
       fail(
-        `a ${VIEWER_USERNAME} session is refused POST /projects with 403, got ${error.status}`,
+        `an ${EDITOR_USERNAME} session creates a suite in ${GRANTED_PROJECT} (needs editor), got ${error.status}`,
         JSON.stringify(error.body),
       );
     } else {
-      fail(`a ${VIEWER_USERNAME} session is refused POST /projects with 403`, error.message);
+      fail(
+        `an ${EDITOR_USERNAME} session creates a suite in ${GRANTED_PROJECT} (needs editor)`,
+        error.message,
+      );
     }
   }
+
+  if (typeof probeId === "string") {
+    await request(`/projects/${GRANTED_PROJECT}/test_suites/${encodeURIComponent(probeId)}`, {
+      method: "DELETE",
+      token,
+      expect: [200, 204],
+    });
+    const suites = await request(`/projects/${GRANTED_PROJECT}/test_suites`, { token });
+    ok(
+      Array.isArray(suites) && !suites.includes(probeId),
+      `the ${EDITOR_USERNAME} probe suite is deleted, so the seeded listing is unchanged`,
+      JSON.stringify(suites),
+    );
+  }
+
+  // The project document itself needs `owner`, one rung above the grant, so the
+  // same token that just created a suite is refused here. The body is empty on
+  // purpose: authorization runs before the body is read, so the refusal is the
+  // role and never a validation answer.
+  await assertRefused(
+    `an ${EDITOR_USERNAME} session is refused PUT /projects/${GRANTED_PROJECT} with 403 (needs owner)`,
+    `/projects/${GRANTED_PROJECT}`,
+    403,
+    token,
+    { method: "PUT", body: {} },
+  );
 }
 
 async function main() {
@@ -710,6 +798,7 @@ async function main() {
   await stepRunFilters(token);
   await stepIdentity(token);
   await stepRefusal();
+  await stepEditor();
 
   console.log(`\n${checks - failures.length}/${checks} assertion(s) passed.`);
   if (failures.length > 0) {
