@@ -150,6 +150,9 @@ Each attachment family exists in three forms: bare (`/test_cases/{id}/…`), thr
 project (`/projects/{id}/test_cases/{case_id}/…`) and through the holding suite
 (`/test_suites/{id}/test_cases/{case_id}/…`). Only the case attachment has a download route, and it
 has one in all three forms; a step attachment is uploaded, listed and deleted, never downloaded.
+A download answers the stored bytes as `application/octet-stream`, whatever the file is, with
+`Content-Disposition: attachment` naming the file the uploader supplied; the `mimeType` recorded in
+the case document is metadata and never becomes the response content type.
 
 List endpoints share `?filter=`, `?tags=` (matched as an OR set), and — for runs, the only
 collection with configuration references — `?configuration=`. The retired flat creation routes

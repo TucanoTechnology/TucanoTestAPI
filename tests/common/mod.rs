@@ -91,6 +91,10 @@ pub fn content_type(headers: &HeaderMap) -> Option<&str> {
     headers.get(header::CONTENT_TYPE)?.to_str().ok()
 }
 
+pub fn content_disposition(headers: &HeaderMap) -> Option<&str> {
+    headers.get(header::CONTENT_DISPOSITION)?.to_str().ok()
+}
+
 pub fn get(uri: &str) -> Request<Body> {
     Request::builder()
         .uri(uri)

@@ -182,6 +182,12 @@ configurations with it, so a run is no longer guaranteed to outlive the project 
   instead of answering `409 Conflict`. No bare path, method, parameter or response shape changed, no field was
   added to a schema, and no pre-existing route was retired; the twelve new operations are purely additional
   surface. Step attachments still have no download route in any form.
+- **Issue #291 — downloads answer opaquely and name the file.** The three case-attachment downloads answer
+  `Content-Type: application/octet-stream` whatever the stored file is — the media type the document already
+  declared — and add `Content-Disposition: attachment` carrying an ASCII-safe `filename` plus, when the name is
+  not plain ASCII, an RFC 5987 `filename*`. `Attachment.mimeType` keeps its meaning: it is the description of
+  the stored file recorded in the case document, and it never becomes a response content type. The case upload
+  route also records `uploadedAt` on the attachment it stores.
 
 ### Storage security invariants
 
@@ -415,7 +421,9 @@ dropping it. `tests/service.rs` holds it in the strict group accordingly.
   advertised fields the route ignores.
 - `TestCaseResult.timestamp` no longer claims a date `format`. It is whatever string the run body carried and
   is never parsed, so the document now says so.
-- `Attachment` requires `filename`, `originalName`, `mimeType`, and `size`, with `uploadedAt` optional.
+- `Attachment` requires `filename`, `originalName`, `mimeType`, and `size`, with `uploadedAt` optional. The
+  field stays optional because documents written before Issue #291 carry no such key; the case upload route
+  now records it (ISO-8601 UTC) so a new attachment reports when the API stored it.
 
 ### Recorded, not changed
 
@@ -1060,7 +1068,8 @@ caller resolves and what had to be typed; the earlier figure of 26 counted only 
 omitted the duplicate routes. Three `2xx` answers deliberately keep no JSON body: `GET /health`,
 `GET /openapi.json` and `GET /api-docs`, which are not JSON operations. The `200` on
 `GET /test_cases/{id}/attachments/{filename}` was already typed — `application/octet-stream`, a binary body — so
-it is not one of the 31.
+it is not one of the 31. (Issue #291 left that media type as it was and added the `Content-Disposition` header
+to the three download `200`s.)
 
 `tests/service.rs` holds the invariant generically: every `2xx` response outside those three routes declares a
 non-empty `content` and a `schema` on every media type it publishes, so a future operation that forgets its body
@@ -1588,6 +1597,26 @@ the run already holds replaced the whole result, so a partial recording discarde
   `tests/service.rs::a_parent_scoped_attachment_route_reads_its_parent_from_the_path`, which holds all twelve
   routes to `400 invalid_id` for an unusable parent, plus `::openapi_document_matches_the_registered_routes`
   and `::openapi_documents_the_error_contract_of_every_operation` for the published surface.
+- **Downloads served opaquely and named for the client** (Issue #291, note above). The document already declared
+  `application/octet-stream` on the three case-attachment downloads, so no declared media type changes; what
+  changes is what the deployment serves. The `200` used to carry a content type derived from the stored name —
+  `text/plain` for a `.txt` attachment — which the operation's own `Blob` typing contradicts: a generated client
+  that picks its decoder from the response type read such a body as a `string`, so the browser download never
+  started, and non-UTF-8 bytes were corrupted by the text decode. All three now answer
+  `application/octet-stream` and add `Content-Disposition: attachment` naming the file the uploader supplied, so
+  bytes and filename reach every client in one shape. `openapi.json` gains the `ContentDisposition` header
+  component, references it from the three `200`s, and describes the `Attachment` members — including that
+  `mimeType` is metadata that never becomes a response content type. The case upload route additionally records
+  `uploadedAt` (ISO-8601 UTC) on the entry it stores. Observable departures: a client that read the response
+  content type now always sees `application/octet-stream` and must take the stored type from the case document's
+  `mimeType`; the response gains a header; and a newly uploaded case attachment gains an `uploadedAt` key. No
+  request that used to succeed is refused, no existing document is rewritten, `UploadResponse` keeps its four
+  fields, `StepAttachment` gains nothing, and the `Attachment` required set is unchanged. Deviation recorded with
+  tests in `tests/attachments.rs::attachment_downloads_are_opaque_and_named_for_the_client`,
+  `::a_non_ascii_file_name_is_named_for_the_client`, `::an_upload_records_when_the_file_arrived`,
+  `::a_step_attachment_records_no_upload_time`,
+  `tests/service.rs::openapi_types_and_names_every_binary_download`, and the `src/domain/mod.rs` unit tests for
+  `original_name` and `content_disposition`.
 
 ## Required case matrix
 

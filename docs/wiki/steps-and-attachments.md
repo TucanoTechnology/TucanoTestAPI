@@ -89,15 +89,19 @@ resolves to more than one folder; a parent-scoped form names the holder and does
 ├── <case-level attachment files>
 ```
 
-An uploaded file is stored under a sanitised name, and the case document records its metadata:
+An uploaded file is stored under a sanitised name — a unique prefix, a dash, then the name the
+client sent — and the case document records its metadata:
 
 | Case attachment (`Attachment`) | Step attachment (`StepAttachment`) |
 | --- | --- |
 | `filename` — stored name | `filename` |
 | `originalName` — name the client sent | `originalName` |
-| `mimeType` | `mimeType` |
+| `mimeType` — descriptive only | `mimeType` |
 | `size` | `size` |
-| `uploadedAt` | — (not carried) |
+| `uploadedAt` — ISO-8601 UTC instant | — (not carried) |
+
+`mimeType` is derived from the stored name and is metadata about the file: a download is always
+answered as `application/octet-stream`, so the recorded type never becomes a response content type.
 
 The upload response (`UploadResponse`) answers with `message`, `filename`, `originalName` and
 `size`: **use the returned `filename`** in later calls rather than assuming the client's name
@@ -194,11 +198,16 @@ curl -s -o receipt.txt http://localhost:3100/test_cases/refund-partial.json/atta
 ```
 
 `GET /test_cases/{id}/attachments/{filename}` (`downloadTestCaseAttachment`) answers the raw bytes
-with `Content-Type` derived from the stored file, not the envelope. Case attachments are also
-downloadable through that route's two parent-scoped mirrors — `downloadProjectTestCaseAttachment`
-and `downloadTestSuiteTestCaseAttachment`, the same bytes under the two paths above — and those
-three are the only download routes. **A step attachment has no download route in any form** — only
-upload, list and delete — so treat the file under `steps/<index>/` as write-only through the API.
+as `application/octet-stream`, with `Content-Disposition: attachment` naming the file the client
+uploaded — an ASCII-safe `filename` plus an RFC 5987 `filename*` when the name is not plain ASCII.
+The body is opaque whatever the file is: `mimeType` in the case document is metadata about the
+stored file, and it never becomes the response content type, so a client that picks its decoder
+from the response type still receives bytes and non-UTF-8 content survives unchanged. Case
+attachments are also downloadable through that route's two parent-scoped mirrors —
+`downloadProjectTestCaseAttachment` and `downloadTestSuiteTestCaseAttachment`, the same bytes under
+the two paths above — and those three are the only download routes. **A step attachment has no
+download route in any form** — only upload, list and delete — so treat the file under
+`steps/<index>/` as write-only through the API.
 
 There is likewise **no route that lists a case's attachments**, bare or parent-scoped: no
 `GET /test_cases/{id}/attachments` exists, and the two parent-scoped mirrors above list *step*
