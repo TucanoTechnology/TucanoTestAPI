@@ -63,6 +63,22 @@ the **0-based position** in this array — `steps/0/attachments` belongs to `"Op
 | **Case attachment** | `POST` (`uploadTestCaseAttachment`), `GET …/{filename}` (`downloadTestCaseAttachment`), `DELETE …/{filename}` (`deleteTestCaseAttachment`) | the case folder, beside `test-case.json` |
 | **Step attachment** | `POST` (`uploadStepAttachment`), `GET …/attachments` (`listStepAttachments`), `DELETE …/{filename}` (`deleteStepAttachment`) | the case folder's `steps/<index>/` |
 
+Those are the **bare** routes, relative to `/test_cases/{id}`: they reach a case by its identifier
+alone, which picks one occurrence only while that identifier has one home. Every one of them also
+exists in two parent-scoped forms that name the folder holding the case, so an attachment of a case
+id two parents share stays reachable:
+
+| Addressed through | Case attachment | Step attachment |
+| --- | --- | --- |
+| the case id alone, `/test_cases/{id}/…` | `uploadTestCaseAttachment`, `downloadTestCaseAttachment`, `deleteTestCaseAttachment` | `uploadStepAttachment`, `listStepAttachments`, `deleteStepAttachment` |
+| the holding project, `/projects/{id}/test_cases/{case_id}/…` | `uploadProjectTestCaseAttachment`, `downloadProjectTestCaseAttachment`, `deleteProjectTestCaseAttachment` | `uploadProjectTestCaseStepAttachment`, `listProjectTestCaseStepAttachments`, `deleteProjectTestCaseStepAttachment` |
+| the holding suite, `/test_suites/{id}/test_cases/{case_id}/…` | `uploadTestSuiteTestCaseAttachment`, `downloadTestSuiteTestCaseAttachment`, `deleteTestSuiteTestCaseAttachment` | `uploadTestSuiteTestCaseStepAttachment`, `listTestSuiteTestCaseStepAttachments`, `deleteTestSuiteTestCaseStepAttachment` |
+
+The path suffix is the same in every form — `/attachments` to upload, `/attachments/{filename}` to
+download or delete, `/steps/{step_index}/attachments` to list or upload a step's files — so the
+operation id is the only thing that changes. The bare form answers `409 conflict` when the case id
+resolves to more than one folder; a parent-scoped form names the holder and does not have to guess.
+
 ```text
 <case folder>/
 ├── test-case.json
@@ -160,6 +176,8 @@ curl -s -X POST http://localhost:3100/test_cases/refund-partial.json/steps/2/att
 | Route | Operation id | Returns |
 | --- | --- | --- |
 | `GET /test_cases/{id}/steps/{step_index}/attachments` | `listStepAttachments` | The step's `attachments` array |
+| `GET /projects/{id}/test_cases/{case_id}/steps/{step_index}/attachments` | `listProjectTestCaseStepAttachments` | The step's `attachments` array |
+| `GET /test_suites/{id}/test_cases/{case_id}/steps/{step_index}/attachments` | `listTestSuiteTestCaseStepAttachments` | The step's `attachments` array |
 
 ```sh
 curl -s http://localhost:3100/test_cases/refund-partial.json/steps/2/attachments
@@ -176,12 +194,15 @@ curl -s -o receipt.txt http://localhost:3100/test_cases/refund-partial.json/atta
 ```
 
 `GET /test_cases/{id}/attachments/{filename}` (`downloadTestCaseAttachment`) answers the raw bytes
-with `Content-Type` derived from the stored file, not the envelope. **This is the only download
-route.** A step attachment has no download route — only upload, list and delete — so treat the file
-under `steps/<index>/` as write-only through the API.
+with `Content-Type` derived from the stored file, not the envelope. Case attachments are also
+downloadable through that route's two parent-scoped mirrors — `downloadProjectTestCaseAttachment`
+and `downloadTestSuiteTestCaseAttachment`, the same bytes under the two paths above — and those
+three are the only download routes. **A step attachment has no download route in any form** — only
+upload, list and delete — so treat the file under `steps/<index>/` as write-only through the API.
 
-There is likewise **no route that lists a case's attachments**: no `GET /test_cases/{id}/attachments`
-exists. Read the case document instead, where the `attachments` array is stored:
+There is likewise **no route that lists a case's attachments**, bare or parent-scoped: no
+`GET /test_cases/{id}/attachments` exists, and the two parent-scoped mirrors above list *step*
+attachments, not case ones. Read the case document instead, where the `attachments` array is stored:
 
 ```sh
 curl -s http://localhost:3100/test_cases/refund-partial.json
@@ -191,11 +212,14 @@ curl -s http://localhost:3100/test_cases/refund-partial.json
 {"testCaseId":"refund-partial.json","title":"…","attachments":[{"filename":"receipt.txt","originalName":"receipt.txt","mimeType":"text/plain","size":42,"uploadedAt":"…"}]}
 ```
 
-Step attachments *are* listable, because their route exists:
+Step attachments *are* listable, because their route exists — in three forms, one per way of
+addressing the case:
 
 | Route | Operation id | Returns |
 | --- | --- | --- |
 | `GET /test_cases/{id}/steps/{step_index}/attachments` | `listStepAttachments` | The step's `attachments` array |
+| `GET /projects/{id}/test_cases/{case_id}/steps/{step_index}/attachments` | `listProjectTestCaseStepAttachments` | The step's `attachments` array |
+| `GET /test_suites/{id}/test_cases/{case_id}/steps/{step_index}/attachments` | `listTestSuiteTestCaseStepAttachments` | The step's `attachments` array |
 
 **6. Delete.**
 
@@ -214,9 +238,9 @@ they live in the case folder.
 | --- | --- |
 | `400` with code `invalid_request` naming `step_index` | The step index was not a non-negative integer (for example `steps/2a/attachments`) |
 | `400` with code `invalid_request` | The step index is a valid integer but there is no step at that position |
-| `404 not_found` | No case with that id (or a valid id that resolves to nothing) |
-| `400 invalid_id` | The case identifier was rejected — a separator, `..`, or an absolute path in it |
-| `409 conflict` | A copied case id resolves to more than one folder; use a parent-scoped route or the case's unique occurrence |
+| `404 not_found` | No case with that id (or a valid id that resolves to nothing); on a parent-scoped route, no case with that id under the named project or suite |
+| `400 invalid_id` | The case identifier was rejected — a separator, `..`, or an absolute path in it. On a parent-scoped route the **parent** is read as a stored-document identifier too, so an unusable project or suite id answers `invalid_id` as well |
+| `409 conflict` | A bare attachment route was given a case id that resolves to more than one folder. Use the parent-scoped form, which names the holder. A suite-scoped route still answers `409` when the *suite* id resolves to more than one project |
 | `413` with the plain-text body `length limit exceeded` | The body exceeded 50 MiB. This is the router's limit, checked before any handler, so it answers plain text, not the envelope |
 | `400 invalid_request` naming `attachments` | An attachment filename was not a plain path segment (a separator, `..`, or an absolute path) |
 | `400 missing_file` | The multipart part carried no filename |
@@ -246,5 +270,6 @@ Two more rules worth knowing:
 *Sources of truth: [`openapi.json`](../../openapi.json) for every attachment and step route,
 parameter and schema named here; the storage concept in the
 [repository README](../../README.md#storage-concept) for the on-disk layout; the
-[compatibility contract](../contracts/api-compatibility.md) for the per-step attachment plan (#93).
+[compatibility contract](../contracts/api-compatibility.md) for the per-step attachment plan (#93)
+and the parent-scoped attachment routes (#290).
 Where this page and one of those disagree, the source wins and this page is a bug.*

@@ -152,9 +152,11 @@ configurations with it, so a run is no longer guaranteed to outlive the project 
   scans are served but undocumented in `openapi.json` (retired with the flat creation routes — see *Real-Parent
   Creation Plan*), so an old caller can still enumerate the tree while the published contract advertises only the
   parent-scoped routes.
-- Global dereference (`GET`/`PUT`/`DELETE /test_suites/{id}`, `/test_cases/{id}`, attachment and duplicate
-  routes): zero occurrences → `404 Not Found`, exactly one → operate, two or more → `409 Conflict` with a
-  message directing the caller to the parent-scoped endpoints. Lists never fail on duplicates; they de-duplicate.
+- Global dereference (`GET`/`PUT`/`DELETE /test_suites/{id}`, `/test_cases/{id}`, duplicate routes, and the
+  **bare** attachment routes): zero occurrences → `404 Not Found`, exactly one → operate, two or more →
+  `409 Conflict` with a message directing the caller to the parent-scoped endpoints. The parent-scoped
+  attachment routes added by Issue #290 do not dereference globally at all — they name the holder — so a case
+  id shared by two parents stays addressable through them. Lists never fail on duplicates; they de-duplicate.
 - Create and update payloads for projects, suites, and cases are validated exactly as today. Child arrays in a
   parent payload (`testSuites`/`testCases`) are accepted for wire compatibility but never persisted — markers
   always store empty arrays and every read re-assembles membership from folders, so stored parents can never
@@ -167,9 +169,19 @@ configurations with it, so a run is no longer guaranteed to outlive the project 
 ### Attachments
 
 - Attachments are stored as sibling files inside the case folder (one case = one folder, wherever that case
-  lives). Upload/download/delete act on the resolved occurrence; an ambiguous case id returns `409 Conflict`.
+  lives). Upload/download/delete act on the resolved occurrence; an ambiguous case id returns `409 Conflict`
+  **on the bare routes** — see the parent-scoped mirrors below.
 - The case marker's `attachments` array is updated under the same storage lock as the file operation so metadata
   and files never diverge for API-mediated changes.
+- **Issue #290 — parent-scoped attachment routes (additive).** Every case- and step-attachment operation now
+  also exists in two parent-scoped forms that name the folder holding the case:
+  `/projects/{project_id}/test_cases/{case_id}/attachments[/{filename}]` and
+  `/test_suites/{suite_id}/test_cases/{case_id}/attachments[/{filename}]`, plus the
+  `/steps/{step_index}/attachments[/{filename}]` step forms. They address the named parent's occurrence
+  directly and never resolve globally, so an attachment of a case id shared by two parents stays reachable
+  instead of answering `409 Conflict`. No bare path, method, parameter or response shape changed, no field was
+  added to a schema, and no pre-existing route was retired; the twelve new operations are purely additional
+  surface. Step attachments still have no download route in any form.
 
 ### Storage security invariants
 
@@ -1556,6 +1568,26 @@ the run already holds replaced the whole result, so a partial recording discarde
   `::a_result_is_refused_for_a_case_the_run_does_not_hold`,
   `::a_result_body_is_checked_rather_than_read_field_by_field`, and the `src/domain/composition.rs` and
   `src/domain/service/tests.rs` unit tests listed in the plan.
+- **Parent-scoped attachment routes added** (Issue #290). Twelve operations are added and none is withdrawn:
+  the case- and step-attachment families each gain a form addressed through the holding project
+  (`/projects/{id}/test_cases/{case_id}/…`) and a form addressed through the holding suite
+  (`/test_suites/{id}/test_cases/{case_id}/…`), taking the documented count from 73 to 85. Purely additive:
+  no bare path, method, parameter or response shape changed, no schema gained or lost a field, no stored
+  document shape changed, and no request that used to succeed is refused — the new routes exist to answer
+  where the bare ones cannot, namely a case id that copy-on-include placed under two parents, which the bare
+  routes still refuse with `409 conflict`. The one recorded asymmetry is deliberate: a step attachment has no
+  download route in any form, bare or parent-scoped, so the new step routes are four upload/list/delete
+  operations. One existing message does change wording: the `409 conflict` an ambiguous identifier raises now
+  labels each home (`project billing.json`, `suite smoke.checkout.json in project payments.json`) instead of
+  printing a bare path, so the list it prints agrees with the count it opens with — the second defect the issue
+  reports — and, for a case id, it names the parent-scoped attachment routes among the ways to address one
+  occurrence. Only the prose moved; the status code, the `conflict` code and the envelope are unchanged, so a
+  client that reads `code` is unaffected. Deviation recorded with tests in `tests/attachments.rs`,
+  `src/domain/service/tests.rs::the_conflict_names_the_parent_scoped_routes_of_its_own_resource` and
+  `::the_conflict_labels_a_suite_home_so_the_list_counts`, and
+  `tests/service.rs::a_parent_scoped_attachment_route_reads_its_parent_from_the_path`, which holds all twelve
+  routes to `400 invalid_id` for an unusable parent, plus `::openapi_document_matches_the_registered_routes`
+  and `::openapi_documents_the_error_contract_of_every_operation` for the published surface.
 
 ## Required case matrix
 

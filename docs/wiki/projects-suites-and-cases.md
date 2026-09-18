@@ -239,7 +239,10 @@ project removes everything under it.
 Copy-on-include can put the **same** case id under several parents, so a document-level route such
 as `GET /test_cases/{id}` (`getTestCase`) operates on the single occurrence when the id resolves to
 one and answers `409 conflict` when it is ambiguous, naming the parent-scoped routes that are
-unambiguous. Listing routes never fail on duplicates; they de-duplicate.
+unambiguous. Listing routes never fail on duplicates; they de-duplicate. The attachment routes
+behave the same way on their bare form, and each of them also has a parent-scoped mirror under
+`/projects/{id}/test_cases/{case_id}/…` and `/test_suites/{id}/test_cases/{case_id}/…` — see
+[Steps and attachments](steps-and-attachments.md).
 
 Reads are global: `GET /test_cases/{id}` and `GET /test_suites/{id}` search the whole tree, so an
 entity is findable without knowing its home. There is no global listing route for cases — list them

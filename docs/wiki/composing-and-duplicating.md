@@ -133,7 +133,9 @@ curl -s -X PUT http://localhost:3100/test_cases/refund-partial.json \
 
 `PUT` on the ambiguous id answers `409` as well. To edit a specific occurrence, first make the id
 unique again — delete or move the other copy, or address the case through a parent-scoped route
-where one exists.
+where one exists. The attachment routes are the ones that have such a form (see
+[Steps and attachments](steps-and-attachments.md)); a bare `GET`/`PUT`/`DELETE` on the case document
+itself does not, so those need the id to be unique.
 
 **3. Move instead of copy.** With `mode` set to `move`, the case leaves its current home:
 
