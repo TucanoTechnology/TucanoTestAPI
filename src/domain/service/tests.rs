@@ -655,14 +655,19 @@ fn duplicating_a_missing_document_reports_the_named_entity() {
 }
 
 #[test]
-fn run_results_are_recorded_and_replaced() {
+fn run_results_are_recorded_and_updated() {
     let (service, _directory) = service();
     let home = project(&service);
     service
         .create_in(
             Resource::Runs,
             &home,
-            &json!({ "testRunId": "R-1", "name": "nightly", "timestamp": "1" }),
+            &json!({
+                "testRunId": "R-1",
+                "name": "nightly",
+                "timestamp": "1",
+                "testCases": [{ "testCaseId": "TC-1", "title": "T", "expectedResult": "E" }]
+            }),
         )
         .expect("run");
 
@@ -677,7 +682,7 @@ fn run_results_are_recorded_and_replaced() {
             "nightly.json",
             &json!({ "testCaseId": "TC-1", "status": "Failed", "notes": "flaky" }),
         )
-        .expect("replace");
+        .expect("update");
 
     let run = service.get(Resource::Runs, "nightly.json").expect("run");
     let results = run["results"].as_array().expect("results");
@@ -698,6 +703,111 @@ fn run_results_are_recorded_and_replaced() {
             ..
         }
     ));
+}
+
+#[test]
+fn a_result_for_a_case_the_run_does_not_hold_is_not_found() {
+    let (service, _directory) = service();
+    let home = project(&service);
+    // The run lists no case of its own, but it already records a result for
+    // TC-1, so that case is one the run holds.
+    run_in(&service, &home, "nightly");
+
+    service
+        .record_run_result(
+            "nightly.json",
+            &json!({ "testCaseId": "TC-1", "status": "Failed" }),
+        )
+        .expect("a case the run already records stays writable");
+
+    let error = service
+        .record_run_result(
+            "nightly.json",
+            &json!({ "testCaseId": "TC-2", "status": "Failed" }),
+        )
+        .expect_err("a case the run never picked up");
+    assert!(
+        matches!(error, DomainError::NotFound(message) if message == "Test case not in test run")
+    );
+}
+
+#[test]
+fn a_result_body_is_rejected_rather_than_read_field_by_field() {
+    let (service, _directory) = service();
+    let home = project(&service);
+    run_in(&service, &home, "nightly");
+
+    let unknown = service
+        .record_run_result(
+            "nightly.json",
+            &json!({ "testCaseId": "TC-1", "status": "Passed", "outcome": "ok" }),
+        )
+        .expect_err("unknown field");
+    assert!(
+        matches!(unknown, DomainError::InvalidRequest { ref message, .. } if message == "Unknown field `outcome`"),
+        "{unknown:?}"
+    );
+
+    for body in [
+        json!({ "testCaseId": "TC-1", "status": "Passed", "notes": 3 }),
+        json!({ "testCaseId": "TC-1", "status": "Passed", "durationMs": -5 }),
+        json!({ "testCaseId": "TC-1", "status": "Passed", "durationMs": 1.5 }),
+        json!({ "testCaseId": "TC-1", "status": "Passed", "durationMs": "5" }),
+        json!({ "testCaseId": "TC-1", "status": "Passed", "timestamp": 5 }),
+        json!({ "testCaseId": "TC-1", "status": "Passed", "timestamp": "" }),
+        json!({ "testCaseId": "TC-1", "status": "Passed" , "status2": "x"}),
+    ] {
+        let error = service
+            .record_run_result("nightly.json", &body)
+            .expect_err("malformed field");
+        assert!(
+            matches!(error, DomainError::InvalidRequest { .. }),
+            "{body} must be a 400, got {error:?}"
+        );
+    }
+}
+
+#[test]
+fn a_re_recorded_result_keeps_what_the_request_leaves_out() {
+    let (service, _directory) = service();
+    let home = project(&service);
+    run_in(&service, &home, "nightly");
+
+    service
+        .record_run_result(
+            "nightly.json",
+            &json!({
+                "testCaseId": "TC-1",
+                "status": "Failed",
+                "notes": "flaky on CI",
+                "durationMs": 1200
+            }),
+        )
+        .expect("record");
+
+    service
+        .record_run_result(
+            "nightly.json",
+            &json!({ "testCaseId": "TC-1", "status": "Passed" }),
+        )
+        .expect("update");
+
+    let run = service.get(Resource::Runs, "nightly.json").expect("run");
+    let result = &run["results"][0];
+    assert_eq!(result["status"], "Passed");
+    assert_eq!(result["notes"], "flaky on CI");
+    assert_eq!(result["durationMs"], 1200);
+
+    service
+        .record_run_result(
+            "nightly.json",
+            &json!({ "testCaseId": "TC-1", "status": "Passed", "notes": null, "durationMs": null }),
+        )
+        .expect("clear");
+
+    let run = service.get(Resource::Runs, "nightly.json").expect("run");
+    assert_eq!(run["results"][0].get("notes"), None);
+    assert_eq!(run["results"][0].get("durationMs"), None);
 }
 
 #[test]
@@ -1217,7 +1327,7 @@ fn a_write_goes_back_to_the_home_the_read_resolved() {
     service
         .record_run_result(
             "nightly.json",
-            &json!({ "testCaseId": "TC-9", "status": "Failed" }),
+            &json!({ "testCaseId": "TC-1", "status": "Failed" }),
         )
         .expect("record");
 
@@ -1236,7 +1346,9 @@ fn a_write_goes_back_to_the_home_the_read_resolved() {
     );
 
     let run = service.get(Resource::Runs, "nightly.json").expect("run");
-    assert_eq!(run["results"].as_array().map(Vec::len), Some(2));
+    let results = run["results"].as_array().expect("results");
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0]["status"], "Failed");
 }
 
 #[test]

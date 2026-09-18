@@ -53,8 +53,8 @@ example is a gap, not a deferral.
 | 11 | Linking a configuration to a run | `chrome-linux.json` linked to `nightly.json` | `POST /test_runs/{id}/configurations` | the `configurations` reference array in `projects/checkout/test_runs/nightly.json` |
 | 12 | Runs (point-in-time snapshots) | `nightly.json` covering the `checkout.json` project and its smoke suite, whose snapshot carries the four cases the suite held when it was added | `POST /projects/{id}/test_runs`, then `POST /test_runs/{id}/test_suites` | `projects/checkout/test_runs/nightly.json` |
 | 13 | Run case membership pinned from a template | run carries `TC-LOGIN-1`, `TC-LOGIN-2` as copies | `POST /test_runs/{id}/test_cases` | `test_cases` array in `projects/checkout/test_runs/nightly.json` |
-| 14 | Recorded results — every status | `TC-LOGIN-1` `Passed`, `TC-LOGIN-2` `Failed` (with notes and `durationMs`), `TC-PROJECT-1` `Blocked`, `TC-CART-1` `Retest`; `Untested` is never recorded — it is the status of a declared case with no result, so its bucket reads 0 | `POST /test_runs/{id}/results` per case (the route replaces an earlier result for the same case) | `results` array in `projects/checkout/test_runs/nightly.json` |
-| 15 | Result replacement (upsert) | `TC-LOGIN-2` recorded `Blocked` then replaced with `Failed` | same `POST /test_runs/{id}/results` twice | one `Failed` entry for `TC-LOGIN-2` |
+| 14 | Recorded results — every status | `TC-LOGIN-1` `Passed`, `TC-LOGIN-2` `Failed` (with notes and `durationMs`), `TC-PROJECT-1` `Blocked`, `TC-CART-1` `Retest`; `Untested` is never recorded — it is the status of a declared case with no result, so its bucket reads 0 | `POST /test_runs/{id}/results` per case (the route merges into an earlier result for the same case, and each case is one the run holds) | `results` array in `projects/checkout/test_runs/nightly.json` |
+| 15 | Result re-record (merge) | `TC-LOGIN-2` recorded `Blocked`, then recorded again as `Failed`; the second call merges, so `status` is replaced and a field the second body leaves out would keep its stored value | same `POST /test_runs/{id}/results` twice | one `Failed` entry for `TC-LOGIN-2` |
 | 16 | Defect links — all four trackers | one link per tracker type on the failed result of `TC-LOGIN-2` | `POST /test_runs/{id}/results/{case_id}/defects` ×4 | `defectLinks` array inside the `TC-LOGIN-2` result |
 | 17 | Defect link removal | the GitHub link of row 16, linked then unlinked | `POST …/defects` then `DELETE …/defects/{link_id}` | the removed link is absent from `defectLinks` |
 | 18 | JUnit XML import | `nightly-import.json` run, importing a fixture for two cases | `POST /test_runs/{id}/import/junit` | `results` array in `projects/checkout/test_runs/nightly-import.json` |
@@ -526,18 +526,21 @@ Adding a suite or a case to a run records a **copy**, so the source keeps its
 home and the run's `caseVersions` pins the revision it saw. Nothing here moves
 the source cases.
 
-### Step 7 — results, including the replacement and every status
+### Step 7 — results, including the re-record and every status
 
-`POST /test_runs/{id}/results` is the only route that writes a result. A second
-call for the same case in the same run replaces the first, which is how the
-replacement in row 15 is seeded.
+`POST /test_runs/{id}/results` is the only route that writes a result, and it
+only accepts a case the run holds. A second call for the same case in the same
+run **merges** into the first: `status` and `timestamp` are replaced, and a
+field the body leaves out keeps its stored value. That is how the merge in row
+15 is seeded — the second `TC-LOGIN-2` call carries `notes` and `durationMs`
+explicitly, so nothing is left to carry over.
 
 ```sh
 # Passed
 curl -sS -X POST "$API/test_runs/nightly.json/results" -H "Authorization: Bearer $TOKEN" \
   -H 'Content-Type: application/json' \
   -d '{"testCaseId":"TC-LOGIN-1","status":"Passed","notes":"signed in","durationMs":1200}'
-# Blocked first, then replaced with Failed — the same case, one stored result.
+# Blocked first, then re-recorded as Failed — one stored result, merged.
 curl -sS -X POST "$API/test_runs/nightly.json/results" -H "Authorization: Bearer $TOKEN" \
   -H 'Content-Type: application/json' -d '{"testCaseId":"TC-LOGIN-2","status":"Blocked"}'
 curl -sS -X POST "$API/test_runs/nightly.json/results" -H "Authorization: Bearer $TOKEN" \

@@ -31,7 +31,7 @@ One run creates, over the HTTP API alone:
   all, eight on the cases and seven on their steps, with two cases carrying two steps each;
 - a run with a linked configuration, pinned case membership and a recorded result for every status —
   `Passed`, `Failed` (with notes and a duration), `Blocked`, `Retest` — with `Untested` left implicit,
-  and a result recorded twice to show replacement;
+  and a result recorded twice to show a re-record merging into one stored result;
 - four defect links, one per tracker type, with the GitHub one unlinked again;
 - a second run whose results arrive by JSON and JUnit import;
 - a milestone deriving its progress from the first run;
@@ -304,14 +304,14 @@ is what turns "keep the matrix up to date" from an intention into a check.
 
 ### 5.1 A worked example
 
-Rows 14 and 15 of the matrix are the recorded results: every status, and the replacement of one
-result by a second call for the same case. They took:
+Rows 14 and 15 of the matrix are the recorded results: every status, and a second call for the same
+case merging into the one result the run holds. They took:
 
 - no fixture — nothing is uploaded;
 - two matrix rows, and no new entry in §2's tree, because a result lives inside the run's own
   `test_runs/<id>.json` rather than in a file of its own;
 - the `POST /test_runs/{id}/results` calls already sequenced into `step7Results` in §3, including the
-  `Blocked`-then-`Failed` pair that demonstrates replacement;
+  `Blocked`-then-`Failed` pair that demonstrates the merge;
 - no teardown change at all: a run's results are removed with the run, so the existing `step2Runs`
   removal already covers them.
 

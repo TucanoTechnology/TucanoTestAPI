@@ -870,8 +870,10 @@ async fn openapi_schemas_are_strict_only_where_the_api_rejects_unknown_fields() 
         .as_object()
         .expect("schemas object");
 
-    // These describe documents that deserialise into a model carrying
-    // `deny_unknown_fields`, so an extra field is a 400 and the schema says so.
+    // These describe documents whose fields the API checks against a model
+    // carrying `deny_unknown_fields`, or — for a body a handler reads field by
+    // field — against the explicit list of fields that handler accepts. An
+    // extra field is a 400 either way, and the schema says so.
     for name in [
         "Attachment",
         "Project",
@@ -886,6 +888,7 @@ async fn openapi_schemas_are_strict_only_where_the_api_rejects_unknown_fields() 
         "TestConfiguration",
         "ImportEntry",
         "TestRun",
+        "TestResultRequest",
         "ProjectCreateRequest",
         "ProjectUpdateRequest",
         "TestSuiteUpdateRequest",
@@ -918,7 +921,6 @@ async fn openapi_schemas_are_strict_only_where_the_api_rejects_unknown_fields() 
         "SuiteCoverage",
         "SummaryReport",
         "CompositionResponse",
-        "TestResultRequest",
         "CaseHistoryEntry",
         "Error",
         "CreateResponse",

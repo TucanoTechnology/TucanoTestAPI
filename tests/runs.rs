@@ -293,7 +293,19 @@ async fn test_runs_support_composition_execution_and_isolation() {
     .await;
     assert_eq!(status, StatusCode::OK);
 
-    // 5. Record result "Failed" for TC-001.json in RUN-2.json (Run isolation)
+    // 5. Give RUN-2.json the same case, then record a different result for it
+    // (Run isolation)
+    let (status, _) = send_json(
+        &app,
+        json_request(
+            "POST",
+            "/test_runs/run2.json/test_cases",
+            &json!({"testCaseId": "TC-001.json"}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
     let (status, _) = send_json(
         &app,
         json_request(
@@ -340,6 +352,9 @@ async fn a_partial_update_keeps_the_fields_the_body_leaves_out() {
                 "name": "nightly",
                 "timestamp": "2026-09-02T00:00:00Z",
                 "tags": ["ci"],
+                "testCases": [
+                    {"testCaseId": "TC-001.json", "title": "Login", "expectedResult": "Stored"}
+                ],
             }),
         ),
     )
@@ -359,9 +374,10 @@ async fn a_partial_update_keeps_the_fields_the_body_leaves_out() {
     assert_eq!(stored["name"], "nightly");
     assert_eq!(stored["timestamp"], "2026-09-02T00:00:00Z");
     assert_eq!(stored["tags"], json!(["ci"]));
+    assert_eq!(stored["testCases"][0]["testCaseId"], "TC-001.json");
 
     // The run still reads back as its model, so recording a result works.
-    let (status, _) = send_json(
+    let (status, body) = send_json(
         &app,
         json_request(
             "POST",
@@ -370,12 +386,216 @@ async fn a_partial_update_keeps_the_fields_the_body_leaves_out() {
         ),
     )
     .await;
-    assert_eq!(status, StatusCode::OK);
+    assert_eq!(status, StatusCode::OK, "recording: {body}");
 
     let (status, stored) = send_json(&app, get("/test_runs/nightly.json")).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(stored["results"][0]["status"], "Passed");
     assert_eq!(stored["name"], "nightly");
+}
+
+#[tokio::test]
+async fn a_re_recorded_result_keeps_what_the_request_leaves_out() {
+    let (_directory, app) = test_app();
+    create_run_holding(&app, "nightly", &["TC-1"]).await;
+
+    // A result that describes itself fully, with a defect linked to it.
+    let (status, body) = send_json(
+        &app,
+        json_request(
+            "POST",
+            "/test_runs/nightly.json/results",
+            &json!({
+                "testCaseId": "TC-1",
+                "status": "Failed",
+                "timestamp": "2026-09-04T12:00:00Z",
+                "notes": "card declined",
+                "durationMs": 1200,
+            }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "recording: {body}");
+
+    let (status, linked) = send_json(
+        &app,
+        json_request(
+            "POST",
+            "/test_runs/nightly.json/results/TC-1/defects",
+            &json!({
+                "defectId": "BUG-1",
+                "defectUrl": "https://tracker.example/BUG-1",
+                "trackerType": "custom",
+            }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "linking: {linked}");
+
+    // Re-recording names what it changes and no more: every field the body
+    // leaves out keeps the value the stored result carries...
+    let (status, body) = send_json(
+        &app,
+        json_request(
+            "POST",
+            "/test_runs/nightly.json/results",
+            &json!({"testCaseId": "TC-1", "status": "Passed"}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "re-recording: {body}");
+
+    let (_, run) = send_json(&app, get("/test_runs/nightly.json")).await;
+    let result = &run["results"][0];
+    assert_eq!(result["status"], "Passed");
+    // `status` and `timestamp` are the two fields a recording always describes,
+    // so an omitted `timestamp` is the current time rather than the stored one.
+    let recorded_at = result["timestamp"]
+        .as_str()
+        .expect("a recorded result carries a timestamp");
+    assert!(
+        recorded_at.parse::<u64>().is_ok(),
+        "an omitted timestamp falls back to Unix seconds, got {recorded_at}"
+    );
+    assert_eq!(result["notes"], "card declined");
+    assert_eq!(result["durationMs"], 1200);
+    // ...including the defect links, which a recording request cannot describe
+    // at all: they survive a re-recording because the body never mentions them.
+    assert_eq!(result["defectLinks"][0]["defectId"], "BUG-1");
+
+    // An explicit `null` is how a request clears a field it no longer carries,
+    // and a value it supplies is written over the stored one.
+    let (status, body) = send_json(
+        &app,
+        json_request(
+            "POST",
+            "/test_runs/nightly.json/results",
+            &json!({
+                "testCaseId": "TC-1",
+                "status": "Passed",
+                "timestamp": "2026-09-04T13:00:00Z",
+                "notes": null,
+                "durationMs": 900,
+            }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "clearing: {body}");
+
+    let (_, run) = send_json(&app, get("/test_runs/nightly.json")).await;
+    let result = &run["results"][0];
+    assert_eq!(result["timestamp"], "2026-09-04T13:00:00Z");
+    assert!(
+        result.get("notes").is_none(),
+        "an explicit null clears the stored notes: {result}"
+    );
+    assert_eq!(result["durationMs"], 900);
+    assert_eq!(result["defectLinks"][0]["defectId"], "BUG-1");
+}
+
+#[tokio::test]
+async fn a_result_body_is_checked_rather_than_read_field_by_field() {
+    let (_directory, app) = test_app();
+    create_run_holding(&app, "nightly", &["TC-1"]).await;
+
+    let bad_bodies = [
+        // Not an object at all.
+        json!("TC-1"),
+        // Fields a client may know from elsewhere but this route does not take.
+        json!({"testCaseId": "TC-1", "status": "Passed", "comment": "looks fine"}),
+        json!({"testCaseId": "TC-1", "status": "Passed", "duration": 1200}),
+        // A required field left out, or supplied empty.
+        json!({"testCaseId": "TC-1"}),
+        json!({"status": "Passed"}),
+        json!({"testCaseId": "", "status": "Passed"}),
+        // Malformed optionals, none of which is quietly dropped.
+        json!({"testCaseId": "TC-1", "status": "Passed", "timestamp": 1789735695}),
+        json!({"testCaseId": "TC-1", "status": "Passed", "timestamp": ""}),
+        json!({"testCaseId": "TC-1", "status": "Passed", "notes": 7}),
+        json!({"testCaseId": "TC-1", "status": "Passed", "durationMs": -5}),
+        json!({"testCaseId": "TC-1", "status": "Passed", "durationMs": 1.5}),
+        json!({"testCaseId": "TC-1", "status": "Passed", "durationMs": "1200"}),
+    ];
+    for body in bad_bodies {
+        let (status, response) = send_json(
+            &app,
+            json_request("POST", "/test_runs/nightly.json/results", &body),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "body {body}: {response}");
+        assert_error_envelope(&response, "invalid_request");
+    }
+
+    // A status the API does not know is its own error, and is the one check the
+    // route has always made.
+    let (status, response) = send_json(
+        &app,
+        json_request(
+            "POST",
+            "/test_runs/nightly.json/results",
+            &json!({"testCaseId": "TC-1", "status": "Nope"}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_error_envelope(&response, "invalid_status");
+
+    // Every rejection happened before the write, so the run records nothing.
+    let (_, run) = send_json(&app, get("/test_runs/nightly.json")).await;
+    assert!(run["results"].is_null(), "nothing was written: {run}");
+}
+
+#[tokio::test]
+async fn a_result_is_refused_for_a_case_the_run_does_not_hold() {
+    let (_directory, app) = test_app();
+    let project = fixture_home(&app).await;
+    create_run_holding(&app, "nightly", &["TC-1"]).await;
+
+    // The run declares TC-1 and nothing else, so a result for any other case is
+    // a 404: a run that records a case it never picked up is a document no
+    // client can render faithfully.
+    for case_id in ["TC-NOT-IN-RUN", "TC-2"] {
+        let (status, body) = send_json(
+            &app,
+            json_request(
+                "POST",
+                "/test_runs/nightly.json/results",
+                &json!({"testCaseId": case_id, "status": "Passed"}),
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "recording {case_id}: {body}");
+        assert_error_envelope(&body, "not_found");
+    }
+
+    let (_, run) = send_json(&app, get("/test_runs/nightly.json")).await;
+    assert!(run["results"].is_null(), "nothing was written: {run}");
+
+    // A run holds the cases its own suites declare too, so a case the run picked
+    // up through a suite is recordable.
+    let suite = create_suite(&app, &project, "smoke").await;
+    create_case_in(&app, &format!("/test_suites/{suite}/test_cases"), "TC-002").await;
+    let (status, body) = send_json(
+        &app,
+        json_request(
+            "POST",
+            "/test_runs/nightly.json/test_suites",
+            &json!({"suiteId": suite}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "adding the suite: {body}");
+
+    let (status, body) = send_json(
+        &app,
+        json_request(
+            "POST",
+            "/test_runs/nightly.json/results",
+            &json!({"testCaseId": "TC-002", "status": "Passed"}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "recording through a suite: {body}");
 }
 
 #[tokio::test]
@@ -704,6 +924,32 @@ async fn create_run(app: &Router, name: &str) -> String {
     created["id"].as_str().expect("run id").to_owned()
 }
 
+/// Creates a run that holds `cases` — each declared as the embedded snapshot
+/// the run was built from — and returns the identifier.
+///
+/// Recording a result is only legal for a case the run holds, so a test that
+/// records one without importing it declares the case here rather than relying
+/// on the run being a place where anything can be written.
+async fn create_run_holding(app: &Router, name: &str, cases: &[&str]) -> String {
+    let project = fixture_home(app).await;
+    let declared: Vec<serde_json::Value> = cases.iter().map(|id| common::case_body(id)).collect();
+    let (status, created) = send_json(
+        app,
+        json_request(
+            "POST",
+            &format!("/projects/{project}/test_runs"),
+            &json!({"name": name, "testCases": declared}),
+        ),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::CREATED,
+        "creating run {name}: {created}"
+    );
+    created["id"].as_str().expect("run id").to_owned()
+}
+
 #[tokio::test]
 async fn a_junit_report_imports_and_maps_statuses() {
     let (_directory, app) = test_app();
@@ -765,7 +1011,7 @@ async fn a_junit_report_imports_and_maps_statuses() {
 #[tokio::test]
 async fn a_junit_report_counts_duplicates_and_leaves_them_alone() {
     let (_directory, app) = test_app();
-    create_run(&app, "nightly").await;
+    create_run_holding(&app, "nightly", &["Checkout.pays"]).await;
 
     // A result recorded by hand first, so the import meets an existing one.
     let (status, _) = send_json(
@@ -1005,7 +1251,7 @@ async fn a_json_import_may_wrap_its_entries_in_a_results_field() {
 #[tokio::test]
 async fn a_json_import_counts_duplicates_and_leaves_them_alone() {
     let (_directory, app) = test_app();
-    create_run(&app, "nightly").await;
+    create_run_holding(&app, "nightly", &["TC-1"]).await;
 
     // A result recorded by hand first, so the import meets an existing one.
     let (status, _) = send_json(
@@ -1187,7 +1433,7 @@ async fn importing_json_into_an_unknown_run_is_not_found() {
 #[tokio::test]
 async fn a_result_without_links_lists_no_defects() {
     let (_directory, app) = test_app();
-    create_run(&app, "nightly").await;
+    create_run_holding(&app, "nightly", &["TC-1"]).await;
     let (status, _) = send_json(
         &app,
         json_request(
@@ -1209,7 +1455,7 @@ async fn a_result_without_links_lists_no_defects() {
 #[tokio::test]
 async fn listing_defects_returns_the_links_a_result_carries() {
     let (directory, app) = test_app();
-    create_run(&app, "nightly").await;
+    create_run_holding(&app, "nightly", &["TC-1"]).await;
     let (status, _) = send_json(
         &app,
         json_request(
@@ -1270,7 +1516,7 @@ async fn listing_defects_returns_the_links_a_result_carries() {
 #[tokio::test]
 async fn listing_defects_needs_a_run_and_a_result_to_read() {
     let (_directory, app) = test_app();
-    create_run(&app, "nightly").await;
+    create_run_holding(&app, "nightly", &["TC-1"]).await;
     let (status, _) = send_json(
         &app,
         json_request(
@@ -1326,7 +1572,7 @@ async fn record_failure(app: &Router, case_id: &str) {
 #[tokio::test]
 async fn a_result_links_a_defect_of_every_tracker_type() {
     let (_directory, app) = test_app();
-    create_run(&app, "nightly").await;
+    create_run_holding(&app, "nightly", &["TC-1"]).await;
     record_failure(&app, "TC-1").await;
 
     // One link per tracker the API knows. The URL shape each tracker accepts is
@@ -1425,7 +1671,7 @@ async fn a_result_links_a_defect_of_every_tracker_type() {
 #[tokio::test]
 async fn a_defect_link_rejects_a_body_or_tracker_the_api_cannot_use() {
     let (_directory, app) = test_app();
-    create_run(&app, "nightly").await;
+    create_run_holding(&app, "nightly", &["TC-1"]).await;
     record_failure(&app, "TC-1").await;
 
     // Every field the client must supply, an unknown field, and the two
@@ -1495,7 +1741,7 @@ async fn a_defect_link_rejects_a_body_or_tracker_the_api_cannot_use() {
 #[tokio::test]
 async fn the_same_defect_cannot_be_linked_to_one_result_twice() {
     let (_directory, app) = test_app();
-    create_run(&app, "nightly").await;
+    create_run_holding(&app, "nightly", &["TC-1", "TC-2"]).await;
     record_failure(&app, "TC-1").await;
 
     let body = json!({"defectId": "BUG-1", "defectUrl": "https://tracker.example/BUG-1", "trackerType": "custom"});
@@ -1570,7 +1816,7 @@ async fn the_same_defect_cannot_be_linked_to_one_result_twice() {
 #[tokio::test]
 async fn a_defect_link_can_be_removed_and_is_then_gone() {
     let (_directory, app) = test_app();
-    create_run(&app, "nightly").await;
+    create_run_holding(&app, "nightly", &["TC-1"]).await;
     record_failure(&app, "TC-1").await;
 
     let mut ids = Vec::new();
@@ -1727,14 +1973,16 @@ async fn recording_a_result_pins_the_version_of_the_case_the_store_holds() {
     let (_directory, app) = test_app();
     let project = create_project(&app, "checkout").await;
     create_case_in(&app, &format!("/projects/{project}/test_cases"), "TC-001").await;
+    // The run holds both cases it records results for: TC-001 lives in the
+    // store, TC-404 only in the run's own snapshot — the shape a case whose
+    // document was removed after the run captured it has.
     assert_eq!(
-        create_named(&app, "/test_runs", "nightly").await,
+        create_run_holding(&app, "nightly", &["TC-001", "TC-404"]).await,
         "nightly.json"
     );
 
-    // Recording a result for a case the store does not hold stays legal — the
-    // API has always accepted it — and the run pins that case at version 1
-    // rather than leaving it unversioned.
+    // A run that holds a case the store does not carry records a result for it
+    // and pins that case at version 1 rather than leaving it unversioned.
     let (status, body) = send_json(
         &app,
         json_request(

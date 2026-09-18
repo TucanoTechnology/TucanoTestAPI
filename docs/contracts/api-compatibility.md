@@ -382,11 +382,15 @@ typed models payload validation deserialises, all of which carry `deny_unknown_f
 `Project`, `TestSuite`, `TestCase`, `TestStep`, `TestCaseResult`, `Milestone`, `TestConfiguration`. The
 schemas stay permissive where the handler branches on a loose body or where the schema only ever describes a
 response: `AttachmentUpload` (a multipart part), `CompositionRequest` (the create/place union), the duplicate
-request bodies (`DuplicateRequest`, `DuplicateCaseRequest`, `DuplicateRunRequest`), `TestResultRequest`, and
-the response-only `CompositionResponse`, `MilestoneProgress`, and `Error`. Publishing `additionalProperties:
+request bodies (`DuplicateRequest`, `DuplicateCaseRequest`, `DuplicateRunRequest`), and the response-only
+`CompositionResponse`, `MilestoneProgress`, and `Error`. Publishing `additionalProperties:
 false` on those would advertise a rejection the service does not perform — the opposite of the problem this
 issue fixes. `tests/service.rs::openapi_schemas_are_strict_only_where_the_api_rejects_unknown_fields` holds
 the split to the models.
+
+**Amended by the run-result plan (Issues #284/#285, below):** `TestResultRequest` moved from the permissive
+list to the strict one, because the results route now rejects an unknown field in its body instead of
+dropping it. `tests/service.rs` holds it in the strict group accordingly.
 
 `Error` itself carries no top-level `required`: the envelope's only required member is the nested
 `error.code` / `error.message` pair.
@@ -1236,6 +1240,79 @@ legacy directory, which every pre-v3 volume has, is not an error. Rolling the im
 leaves the older build answering `404` for these three resources and reporting empty milestone progress, so a
 full rollback means restoring the pre-change snapshot the promotion runbook requires.
 
+## Run Result Merge and Membership Plan (Issues #284, #285)
+
+Issues: [#284](https://github.com/TucanoTechnology/TucanoTestAPI/issues/284) — re-recording a result for a case
+the run already holds replaced the whole result, so a partial recording discarded the `notes`, `durationMs` and
+`attachments` the previous one carried together with the defect links it had — and
+[#285](https://github.com/TucanoTechnology/TucanoTestAPI/issues/285) — `POST /test_runs/{id}/results` validated
+`status` and nothing else, so a run could hold a result for a case it never contained, and a malformed
+`durationMs` / `notes` or an unknown field was silently dropped.
+
+- **A recording merges into the result the run already holds.** `status` and `timestamp` are the two fields a
+  recording always describes, so both are replaced by every request; `notes` and `durationMs` are replaced only
+  when the body supplies them, so a re-recording that says nothing about either keeps the stored one. The stored
+  `attachments` and `defectLinks` are never touched — a run stops losing the evidence attached to an earlier
+  recording.
+- **An explicit `null` clears a field; leaving the field out keeps the stored value.** This is a **route-local
+  reading**, and the one place in the API where `null` does not mean "not supplied": `merged_document` (Issue
+  #80, above) reads a `null` field as absent and keeps the stored value, and every `PUT` still does. The reading
+  is kept because it is what this route has always done — the legacy `upsert_result` rebuilt the result from the
+  body and took `notes` from `body.get("notes")`, so an explicit `null` cleared it — and because it is the only
+  way a client can remove an optional field from a result. The deviation is stated here and in the
+  `TestResultRequest` description in `openapi.json`.
+- **A result can only be recorded for a case the run holds.** A run holds a case when it declares it — in the
+  run's own `testCases`, or inside a suite the run embedded — or when it already records a result for it. Any
+  other case answers `404 not_found` with "Test case not in test run" and nothing is written. The check runs
+  after the identifier is parsed and after the run is resolved, so the validation order the error contract
+  records is unchanged: an unusable run id is still `400 invalid_id` and an unknown run still `404` naming the
+  run. Before this change a run accepted any case id, which is how `GET /test_runs/{id}` could list a result for
+  a case the run never picked up.
+- **Both importers stay outside the membership gate.** `POST /test_runs/{id}/import/junit` and
+  `.../import/json` deliberately do not consult the run's declared population: an external report names the
+  cases it ran, and importing it is how those cases come to be part of the run — gating an import would refuse
+  exactly the reports the routes exist to read. An import still never overwrites a result the run already
+  records.
+- **The body is validated rather than read field by field.** The results route reads its body the way a create
+  body is read: the body must be a JSON object, an unknown field is `400 invalid_request` naming it (so the
+  `comment` and `duration` names a client may copy from the GUI ticket are rejected rather than dropped), a
+  missing `testCaseId` or `status` is `400`, an empty one is `400`, a `status` outside the five is
+  `400 invalid_status`, a `notes` that is not a string and a `durationMs` that is not a whole number are `400`,
+  and a `timestamp` that is neither a non-empty string nor `null` is `400`. Nothing is written when any of them
+  is refused.
+- **A `timestamp` is kept verbatim and falls back to now.** Storage always keeps it as a string, either Unix
+  seconds or ISO-8601, and the route neither parses nor reformats it: the value the body supplied is stored as
+  written, and an omitted (or explicitly `null`) `timestamp` becomes the current Unix seconds. That is the
+  format `TestCaseResult.timestamp` has always been documented with, so the field's contract does not change.
+- **The case version a recording pins falls back to 1.** Recording a result still pins the version of the case
+  the store holds; a case the run holds but the store no longer carries — a document removed after the run
+  captured it — is pinned at version 1 rather than left unversioned.
+- **`TestResultRequest` is published strictly.** `openapi.json` gains `additionalProperties: false`,
+  `minimum: 0` on `durationMs`, `nullable: true` on `timestamp` / `notes` / `durationMs`, and a description
+  stating the merge, the explicit-`null` reading and the membership rule, so the schema advertises the
+  rejection the route now performs. The results operation also carries a description saying it updates any
+  result the run already recorded for that case.
+- Deviation recorded with tests in
+  `tests/runs.rs::a_re_recorded_result_keeps_what_the_request_leaves_out`,
+  `::a_result_is_refused_for_a_case_the_run_does_not_hold`,
+  `::a_result_body_is_checked_rather_than_read_field_by_field`,
+  `::recording_a_result_pins_the_version_of_the_case_the_store_holds` (a run may hold a case the store no longer
+  carries), the run-population declarations the other result tests now make
+  (`tests/runs.rs::a_partial_update_keeps_the_fields_the_body_leaves_out`,
+  `::test_runs_support_composition_execution_and_isolation`), the results importers, whose exemption is pinned
+  by `::a_junit_report_counts_duplicates_and_leaves_them_alone` and
+  `::a_json_import_counts_duplicates_and_leaves_them_alone`, and in `src/domain/composition.rs`
+  (`::a_second_result_for_a_case_merges_into_the_first`,
+  `::a_re_recorded_result_keeps_the_fields_the_request_leaves_out`, `::an_explicit_null_clears_a_stored_field`,
+  `::a_new_result_stores_what_the_request_describes`,
+  `::a_new_result_stores_nothing_for_a_field_the_request_leaves_out`,
+  `::re_recording_keeps_the_defect_links_and_attachments_it_cannot_describe`,
+  `::a_run_holds_a_case_it_declares_directly`, `::a_run_holds_a_case_one_of_its_suites_declares`,
+  `::a_run_holds_a_case_it_already_records_a_result_for`) and `src/domain/service/tests.rs`
+  (`::run_results_are_recorded_and_updated`, `::a_result_for_a_case_the_run_does_not_hold_is_not_found`,
+  `::a_result_body_is_rejected_rather_than_read_field_by_field`,
+  `::a_re_recorded_result_keeps_what_the_request_leaves_out`).
+
 ## Breaking change accounting
 
 - **Request id propagated, echoed and published in the error envelope** (Issue #106, plan above). `X-Request-Id`
@@ -1445,6 +1522,21 @@ full rollback means restoring the pre-change snapshot the promotion runbook requ
   progress, so a full rollback means restoring the pre-change snapshot. Deviation recorded with tests in
   `src/storage/layout.rs`, `src/storage/fs.rs`, `tests/runs.rs`, `tests/milestones.rs`,
   `tests/configurations.rs`, `tests/reports.rs`, `tests/auth.rs` and `tests/service.rs` as listed in the plan.
+- **Run results merge, and only for a case the run holds** (Issues #284 and #285, plan above). The results route
+  becomes **restrictive** where it used to be permissive, which is the one place this change is not additive:
+  `POST /test_runs/{id}/results` now refuses a case the run does not hold (`404 not_found`), a body carrying an
+  unknown field, a `status` or `testCaseId` that is missing or empty, a `status` outside the five, a `notes`
+  that is not a string, a `durationMs` that is not a whole non-negative number, and a `timestamp` that is
+  neither a non-empty string nor `null` — where every one of those used to be accepted and silently dropped. A
+  client that recorded a result for a case it had not added to the run must add the case (or import the report
+  that names it) first. Every other request succeeds exactly as it did; the merge is additive for stored data,
+  in that a re-recording that used to discard `notes`, `durationMs`, `attachments` and `defectLinks` now keeps
+  them, while the explicit `null` that used to clear `notes` still clears it. No stored document is rewritten
+  and no field changed shape. The one documentation change is `TestResultRequest` joining the strict schemas.
+  Deviation recorded with tests in `tests/runs.rs::a_re_recorded_result_keeps_what_the_request_leaves_out`,
+  `::a_result_is_refused_for_a_case_the_run_does_not_hold`,
+  `::a_result_body_is_checked_rather_than_read_field_by_field`, and the `src/domain/composition.rs` and
+  `src/domain/service/tests.rs` unit tests listed in the plan.
 
 ## Required case matrix
 
