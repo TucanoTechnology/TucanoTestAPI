@@ -723,7 +723,7 @@ fn attachment_write_error(error: io::Error) -> DomainError {
 fn ambiguous(resource: Resource, homes: &[Parent]) -> DomainError {
     let endpoints = match resource {
         Resource::Cases => {
-            "POST /projects/{id}/test_cases, POST /test_suites/{id}/test_cases, or the matching /{case_id} delete"
+            "POST /projects/{id}/test_cases, POST /test_suites/{id}/test_cases, the matching /{case_id} delete, or the parent-scoped attachment routes /projects/{id}/test_cases/{case_id}/attachments and /test_suites/{id}/test_cases/{case_id}/attachments"
         }
         Resource::Runs => "POST /projects/{id}/test_runs, or the matching /{run_id} delete",
         Resource::Milestones => {
@@ -743,10 +743,16 @@ fn ambiguous(resource: Resource, homes: &[Parent]) -> DomainError {
     ))
 }
 
+/// One home as the conflict message lists it.
+///
+/// Each is labelled with the kind of parent it is, so the items in the list can
+/// be counted against the number the message opens with: a suite names itself
+/// and the project holding it, which a bare `project/suite` path would not make
+/// obvious.
 fn describe_parent(parent: &Parent) -> String {
     match parent {
-        Parent::Project(project) => project.clone(),
-        Parent::Suite { project, suite } => format!("{project}/{suite}"),
+        Parent::Project(project) => format!("project {project}"),
+        Parent::Suite { project, suite } => format!("suite {suite} in project {project}"),
     }
 }
 

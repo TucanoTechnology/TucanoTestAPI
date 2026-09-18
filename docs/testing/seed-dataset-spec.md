@@ -144,6 +144,12 @@ the check.
 | `DELETE /projects/{id}/test_runs/{run_id}` | teardown-scope call ([§4](#4-teardown-scope)) |
 | `DELETE /projects/{id}/test_cases/{case_id}` | teardown-scope call; placement is row 22 |
 | `GET /projects/{id}/test_cases` | list companion of the case routes; [§3 step 12](#step-12--validation-of-the-seeded-environment) reads each parent's cases back through it — both projects' listings, with `payments.json` carrying the copies composition placed into it |
+| `GET /projects/{id}/test_cases/{case_id}/attachments/{filename}` | read-back companion of row 6, addressed through the project that holds the case: the seed uploads and reads back through the bare route, which reaches a case by its identifier alone, while every case it attaches to still has one home |
+| `DELETE /projects/{id}/test_cases/{case_id}/attachments/{filename}` | teardown is scoped to the case folder, not to individual attachments |
+| `GET /projects/{id}/test_cases/{case_id}/steps/{step_index}/attachments` | read companion of the step-attachment upload (row 7), addressed through the project that holds the case |
+| `DELETE /projects/{id}/test_cases/{case_id}/steps/{step_index}/attachments/{filename}` | teardown is scoped to the case folder |
+| `POST /projects/{id}/test_cases/{case_id}/attachments` | upload companion of row 6, addressed through the project that holds the case: the seed uploads through the bare route, which reaches a case by its identifier alone, while every case it uploads to still has one home |
+| `POST /projects/{id}/test_cases/{case_id}/steps/{step_index}/attachments` | upload companion of row 7, addressed through the project that holds the case |
 | `GET /projects/{id}/test_suites` | list companion of `POST /projects/{id}/test_suites` (row 2); the seed reads this listing to learn the duplicate's derived identifier, and after row 22 `portable.checkout.json` appears in **both** projects' listings |
 | `DELETE /projects/{id}/test_suites/{suite_id}` | teardown-scope call ([§4](#4-teardown-scope)) |
 | `GET /test_cases/{id}` | read companion of the case routes, but only for a case with one home. Row 22 composes four cases — `TC-LOGIN-1`, `TC-ORDERS-1`, `TC-CATALOG-1` and `TC-SEARCH-1` — each into a second parent while its source keeps its home, so a bare `GET /test_cases/{id}` for any of the four is answered `409` by design and [§3 step 12](#step-12--validation-of-the-seeded-environment) asserts that refusal and reads them back through their parents' listings instead |
@@ -167,6 +173,12 @@ the check.
 | `DELETE /test_suites/{id}` | teardown-scope call, by parent ([§4](#4-teardown-scope)) |
 | `GET /test_suites/{id}/test_cases` | list companion of `POST /test_suites/{id}/test_cases` (row 4), exercised for the single-homed suites; the dual-homed `portable.checkout.json` is refused `409`, which [§3 step 12](#step-12--validation-of-the-seeded-environment) asserts |
 | `DELETE /test_suites/{id}/test_cases/{case_id}` | teardown-scope call ([§4](#4-teardown-scope)) |
+| `GET /test_suites/{id}/test_cases/{case_id}/attachments/{filename}` | read-back companion of row 6, addressed through the suite that holds the case; the seed reaches a case by its identifier alone while every case it attaches to still has one home |
+| `DELETE /test_suites/{id}/test_cases/{case_id}/attachments/{filename}` | teardown is scoped to the case folder, not to individual attachments |
+| `GET /test_suites/{id}/test_cases/{case_id}/steps/{step_index}/attachments` | read companion of the step-attachment upload (row 7), addressed through the suite that holds the case |
+| `DELETE /test_suites/{id}/test_cases/{case_id}/steps/{step_index}/attachments/{filename}` | teardown is scoped to the case folder |
+| `POST /test_suites/{id}/test_cases/{case_id}/attachments` | upload companion of row 6, addressed through the suite that holds the case: the seed uploads through the bare route, which reaches a case by its identifier alone, while every case it uploads to still has one home |
+| `POST /test_suites/{id}/test_cases/{case_id}/steps/{step_index}/attachments` | upload companion of row 7, addressed through the suite that holds the case |
 | `GET /api-docs` | the Swagger UI page, not part of the data model |
 | `GET /openapi.json` | the contract itself; row 30 covers it as a service-surface assertion |
 

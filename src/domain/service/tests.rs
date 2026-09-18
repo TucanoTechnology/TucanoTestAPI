@@ -1138,16 +1138,35 @@ fn the_conflict_names_the_parent_scoped_routes_of_its_own_resource() {
         ),
         (
             Resource::Cases,
-            "POST /projects/{id}/test_cases, POST /test_suites/{id}/test_cases, or the matching /{case_id} delete",
+            "POST /projects/{id}/test_cases, POST /test_suites/{id}/test_cases, the matching /{case_id} delete, or the parent-scoped attachment routes /projects/{id}/test_cases/{case_id}/attachments and /test_suites/{id}/test_cases/{case_id}/attachments",
         ),
     ] {
         let message = ambiguous(resource, &homes).to_string();
         assert!(message.contains(endpoint), "{resource:?}: {message}");
         assert!(
-            message.contains("2 parents (billing.json, checkout.json)"),
+            message.contains("2 parents (project billing.json, project checkout.json)"),
             "{resource:?}: {message}"
         );
     }
+}
+
+#[test]
+fn the_conflict_labels_a_suite_home_so_the_list_counts() {
+    let homes = [
+        Parent::Project("billing.json".to_owned()),
+        Parent::Suite {
+            project: "payments.json".to_owned(),
+            suite: "smoke.checkout.json".to_owned(),
+        },
+    ];
+
+    let message = ambiguous(Resource::Cases, &homes).to_string();
+    assert!(
+        message.contains(
+            "2 parents (project billing.json, suite smoke.checkout.json in project payments.json)"
+        ),
+        "{message}"
+    );
 }
 
 #[test]

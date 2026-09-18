@@ -150,12 +150,20 @@ async fn attachments_cannot_address_an_ambiguous_case() {
     .await;
     assert_eq!(status, StatusCode::CONFLICT);
     assert_error_envelope(&body, "conflict");
+    let message = body["error"]["message"].as_str().expect("error message");
     assert!(
-        body["error"]["message"]
-            .as_str()
-            .expect("error message")
-            .contains("/projects/{id}/test_cases"),
+        message.contains("/projects/{id}/test_cases"),
         "the conflict must name the parent-scoped routes: {body}"
+    );
+    assert!(
+        message.contains("/projects/{id}/test_cases/{case_id}/attachments"),
+        "an attachment request is told which routes address one occurrence: {body}"
+    );
+    assert!(
+        message.contains(
+            "2 parents (project checkout.json, suite smoke.json in project checkout.json)"
+        ),
+        "the homes are counted the way they are listed: {body}"
     );
 
     let (status, _) = send(&app, get("/test_cases/TC-001/attachments/missing.txt")).await;
@@ -405,4 +413,296 @@ async fn a_step_attachment_name_may_not_traverse() {
     let (status, listing) = send_json(&app, get("/test_cases/TC-STEPS/steps/1/attachments")).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(listing, json!([]));
+}
+
+/// One identifier in two folders, each copy carrying a structured step: the
+/// project's own case and the copy composed into its suite. This is the shape
+/// the bare-identifier routes refuse and the parent-scoped routes exist for.
+///
+/// Returns the project and the suite, both holding a case named `TC-001` whose
+/// second step is structured and whose first is still a plain string.
+async fn an_ambiguous_case(app: &Router) -> (String, String) {
+    let project = common::create_project(app, "checkout").await;
+    let suite = common::create_suite(app, &project, "smoke").await;
+
+    let (status, body) = send_json(
+        app,
+        json_request(
+            "POST",
+            &format!("/projects/{project}/test_cases"),
+            &json!({
+                "testCaseId": "TC-001",
+                "title": "Order flow",
+                "expectedResult": "Confirmation modal shown",
+                "steps": [
+                    "Open the product page",
+                    {"action": "Click Checkout", "expectedResult": "Payment screen"}
+                ]
+            }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "creating the case: {body}");
+
+    let (status, body) = send_json(
+        app,
+        json_request(
+            "POST",
+            &format!("/test_suites/{suite}/test_cases"),
+            &json!({"testCaseId": "TC-001"}),
+        ),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::CREATED,
+        "copying the case into the suite: {body}"
+    );
+
+    (project, suite)
+}
+
+#[tokio::test]
+async fn a_parent_scoped_attachment_route_reaches_the_occurrence_it_names() {
+    let (_directory, app) = test_app();
+    let (project, suite) = an_ambiguous_case(&app).await;
+
+    // The bare identifier names two folders, so it cannot carry a file.
+    let (status, body) = send_json(
+        &app,
+        multipart_request("/test_cases/TC-001/attachments", "notes.txt", b"bare"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_error_envelope(&body, "conflict");
+
+    // Each parent-scoped route names the occurrence it means.
+    let project_uri = format!("/projects/{project}/test_cases/TC-001/attachments");
+    let suite_uri = format!("/test_suites/{suite}/test_cases/TC-001/attachments");
+
+    let (status, uploaded) = send_json(
+        &app,
+        multipart_request(&project_uri, "notes.txt", b"project copy"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "project upload: {uploaded}");
+    let project_file = uploaded["filename"]
+        .as_str()
+        .expect("stored filename")
+        .to_owned();
+    assert!(
+        project_file.ends_with("-notes.txt"),
+        "stored name: {project_file}"
+    );
+
+    let (status, uploaded) = send_json(
+        &app,
+        multipart_request(&suite_uri, "notes.txt", b"suite copy"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "suite upload: {uploaded}");
+    let suite_file = uploaded["filename"]
+        .as_str()
+        .expect("stored filename")
+        .to_owned();
+    assert!(
+        suite_file.ends_with("-notes.txt"),
+        "stored name: {suite_file}"
+    );
+
+    // Each occurrence serves its own bytes and holds nothing of the other's.
+    let (status, contents) = send(&app, get(&format!("{project_uri}/{project_file}"))).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(contents, b"project copy");
+
+    let (status, contents) = send(&app, get(&format!("{suite_uri}/{suite_file}"))).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(contents, b"suite copy");
+
+    let (status, _) = send(&app, get(&format!("{project_uri}/{suite_file}"))).await;
+    assert_eq!(
+        status,
+        StatusCode::NOT_FOUND,
+        "the project does not hold the suite's file"
+    );
+
+    let (status, _) = send(&app, get(&format!("{suite_uri}/{project_file}"))).await;
+    assert_eq!(
+        status,
+        StatusCode::NOT_FOUND,
+        "the suite does not hold the project's file"
+    );
+
+    // Deleting one occurrence's file leaves the other's in place.
+    let (status, _) = send_json(&app, delete(&format!("{project_uri}/{project_file}"))).await;
+    assert_eq!(status, StatusCode::OK);
+
+    let (status, _) = send(&app, get(&format!("{project_uri}/{project_file}"))).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+
+    let (status, contents) = send(&app, get(&format!("{suite_uri}/{suite_file}"))).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(contents, b"suite copy");
+}
+
+#[tokio::test]
+async fn a_parent_scoped_step_attachment_route_reaches_the_occurrence_it_names() {
+    let (_directory, app) = test_app();
+    let (project, suite) = an_ambiguous_case(&app).await;
+
+    let project_uri = format!("/projects/{project}/test_cases/TC-001/steps/1/attachments");
+    let suite_uri = format!("/test_suites/{suite}/test_cases/TC-001/steps/1/attachments");
+
+    let (status, listing) = send_json(&app, get(&suite_uri)).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(listing, json!([]), "a step starts with no attachments");
+
+    let (status, uploaded) = send_json(
+        &app,
+        multipart_request(&project_uri, "shot.png", b"project step"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "project step: {uploaded}");
+    let project_file = uploaded["filename"]
+        .as_str()
+        .expect("stored filename")
+        .to_owned();
+
+    let (status, uploaded) = send_json(
+        &app,
+        multipart_request(&suite_uri, "shot.png", b"suite step"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "suite step: {uploaded}");
+    let suite_file = uploaded["filename"]
+        .as_str()
+        .expect("stored filename")
+        .to_owned();
+
+    // Each copy's step lists its own file only, and the metadata is recorded on
+    // the copy the path named.
+    let (status, listing) = send_json(&app, get(&project_uri)).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        listing,
+        json!([{
+            "filename": project_file,
+            "originalName": "shot.png",
+            "mimeType": "image/png",
+            "size": 12,
+        }])
+    );
+
+    let (status, listing) = send_json(&app, get(&suite_uri)).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        listing,
+        json!([{
+            "filename": suite_file,
+            "originalName": "shot.png",
+            "mimeType": "image/png",
+            "size": 10,
+        }])
+    );
+
+    let (status, project_document) = send_json(&app, get(&format!("/projects/{project}"))).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        project_document["testCases"][0]["steps"][1]["attachments"][0]["filename"],
+        project_file.as_str()
+    );
+    assert_eq!(
+        project_document["testCases"][0]["steps"][0], "Open the product page",
+        "the plain string step keeps its shape"
+    );
+
+    let (status, suite_document) = send_json(&app, get(&format!("/test_suites/{suite}"))).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        suite_document["testCases"][0]["steps"][1]["attachments"][0]["filename"],
+        suite_file.as_str()
+    );
+
+    // Deleting through one parent leaves the other parent's step file alone.
+    let (status, _) = send_json(&app, delete(&format!("{project_uri}/{project_file}"))).await;
+    assert_eq!(status, StatusCode::OK);
+
+    let (status, listing) = send_json(&app, get(&project_uri)).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(listing, json!([]));
+
+    // A step attachment has no download route, so the suite's copy is checked
+    // through the listing that does reach it.
+    let (status, listing) = send_json(&app, get(&suite_uri)).await;
+    assert_eq!(status, StatusCode::OK, "the suite's step file survives");
+    assert_eq!(listing[0]["filename"], suite_file.as_str());
+}
+
+#[tokio::test]
+async fn a_parent_scoped_attachment_route_requires_the_named_parent_to_hold_the_case() {
+    let (_directory, app) = test_app();
+    let holding = common::create_project(&app, "checkout").await;
+    let other = common::create_project(&app, "billing").await;
+    common::create_case_in(&app, &format!("/projects/{holding}/test_cases"), "TC-001").await;
+
+    // Every shape of the parent-scoped attachment surface, asked of a parent
+    // that does not hold the case and of a project that does not exist: the
+    // route never falls back to the occurrence the identifier does have.
+    for parent in [
+        format!("/projects/{other}"),
+        "/projects/nowhere.json".to_owned(),
+    ] {
+        let case = format!("{parent}/test_cases/TC-001");
+        for (request, label) in [
+            (
+                multipart_request(&format!("{case}/attachments"), "notes.txt", b"evidence"),
+                "POST attachments",
+            ),
+            (
+                get(&format!("{case}/attachments/notes.txt")),
+                "GET attachment",
+            ),
+            (
+                delete(&format!("{case}/attachments/notes.txt")),
+                "DELETE attachment",
+            ),
+            (
+                get(&format!("{case}/steps/1/attachments")),
+                "GET step attachments",
+            ),
+            (
+                multipart_request(
+                    &format!("{case}/steps/1/attachments"),
+                    "notes.txt",
+                    b"evidence",
+                ),
+                "POST step attachment",
+            ),
+            (
+                delete(&format!("{case}/steps/1/attachments/notes.txt")),
+                "DELETE step attachment",
+            ),
+        ] {
+            let (status, body) = send_json(&app, request).await;
+            assert_eq!(status, StatusCode::NOT_FOUND, "{label} {case}");
+            assert_error_envelope(&body, "not_found");
+            assert_eq!(
+                body["error"]["message"], "Test case not found",
+                "{label} {case}"
+            );
+        }
+    }
+
+    // The parent that does hold the case still answers, so the guard refuses
+    // the wrong parent rather than the route.
+    let (status, _) = send_json(
+        &app,
+        multipart_request(
+            &format!("/projects/{holding}/test_cases/TC-001/attachments"),
+            "notes.txt",
+            b"evidence",
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
 }
