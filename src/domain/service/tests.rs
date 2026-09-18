@@ -1619,6 +1619,13 @@ fn normalise_marker_configuration_sets_id() {
 }
 
 #[test]
+fn normalise_marker_configuration_takes_the_id_over_a_supplied_identity() {
+    let mut doc = json!({ "name": "c", "configId": "somewhere/else" });
+    normalise_marker(Resource::Configurations, "c.json", &mut doc);
+    assert_eq!(doc["configId"], "c.json");
+}
+
+#[test]
 fn normalise_marker_case_is_identity() {
     let mut doc = json!({ "testCaseId": "C-1", "title": "t" });
     let original = doc.clone();

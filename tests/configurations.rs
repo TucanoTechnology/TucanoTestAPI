@@ -40,7 +40,9 @@ async fn configurations_support_the_full_crud_lifecycle() {
 
     let (status, stored) = send_json(&app, get("/configurations/chrome-linux.json")).await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(stored["configId"], "CFG-001");
+    // The supplied `configId` is ignored: the identity is the derived id, so it
+    // cannot name a document other than the one it is stored in.
+    assert_eq!(stored["configId"], "chrome-linux.json");
     assert_eq!(stored["browser"], "Chrome");
 
     let (status, _) = send_json(
@@ -119,6 +121,83 @@ async fn a_configuration_created_from_a_name_alone_reads_back_as_its_model() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(stored["configId"], "C1.json");
     assert_eq!(stored["name"], "C1");
+}
+
+#[tokio::test]
+async fn a_supplied_config_id_is_ignored_in_favour_of_the_derived_id() {
+    let (directory, app) = test_app();
+
+    // Issue #288: a `configId` the body carries is not a second name. It is
+    // ignored, so the identity always equals the key the document is listed
+    // under and no traversal-shaped value is ever persisted.
+    let home = fixture_home(&app).await;
+    for (name, supplied) in [("probe", "EXPLICIT"), ("docprobe", "../../etc/passwd")] {
+        let (status, created) = send_json(
+            &app,
+            json_request(
+                "POST",
+                &format!("/projects/{home}/configurations"),
+                &json!({"name": name, "configId": supplied}),
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED, "creating {name}: {created}");
+        assert_eq!(created["id"], format!("{name}.json"));
+
+        let (status, stored) = send_json(&app, get(&format!("/configurations/{name}.json"))).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(stored["configId"], format!("{name}.json"), "{supplied}");
+        assert_eq!(stored["name"], name);
+
+        let marker = directory.path().join(format!(
+            "projects/{}/configurations/{name}.json",
+            project_folder(&home)
+        ));
+        let on_disk: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&marker).expect("marker readable"))
+                .expect("marker is valid JSON");
+        assert_eq!(on_disk["configId"], format!("{name}.json"), "{supplied}");
+    }
+
+    let (status, listing) = send_json(&app, get("/configurations")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(listing, json!(["docprobe.json", "probe.json"]));
+}
+
+#[tokio::test]
+async fn an_update_cannot_move_a_configuration_identity_away_from_its_id() {
+    let (_directory, app) = test_app();
+
+    let home = fixture_home(&app).await;
+    let (status, _) = send_json(
+        &app,
+        json_request(
+            "POST",
+            &format!("/projects/{home}/configurations"),
+            &json!({"name": "chrome-linux"}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    let (status, body) = send_json(
+        &app,
+        json_request(
+            "PUT",
+            "/configurations/chrome-linux.json",
+            &json!({"configId": "elsewhere.json"}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "updating: {body}");
+
+    let (_, stored) = send_json(&app, get("/configurations/chrome-linux.json")).await;
+    assert_eq!(stored["configId"], "chrome-linux.json");
+
+    // The id the body named is still not a document.
+    let (status, body) = send_json(&app, get("/configurations/elsewhere.json")).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_error_envelope(&body, "not_found");
 }
 
 #[tokio::test]
@@ -269,7 +348,7 @@ async fn configuration_markers_are_plain_json_under_the_data_root() {
     let stored: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(&marker).expect("marker readable"))
             .expect("marker is valid JSON");
-    assert_eq!(stored["configId"], "CFG-001");
+    assert_eq!(stored["configId"], "chrome-linux.json");
 }
 
 #[tokio::test]
@@ -389,7 +468,7 @@ async fn a_partial_update_keeps_the_fields_the_body_leaves_out() {
 
     let (status, stored) = send_json(&app, get("/configurations/chrome-linux.json")).await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(stored["configId"], "CFG-001");
+    assert_eq!(stored["configId"], "chrome-linux.json");
     assert_eq!(stored["name"], "chrome-linux");
     assert_eq!(stored["browser"], "Chrome");
     assert_eq!(stored["os"], "Linux");
@@ -409,5 +488,5 @@ async fn a_partial_update_keeps_the_fields_the_body_leaves_out() {
     let (_, stored) = send_json(&app, get("/configurations/chrome-linux.json")).await;
     assert_eq!(stored["resolution"], "1920x1080");
     assert_eq!(stored["browser"], "Chrome");
-    assert_eq!(stored["configId"], "CFG-001");
+    assert_eq!(stored["configId"], "chrome-linux.json");
 }
