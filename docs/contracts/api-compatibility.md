@@ -446,7 +446,10 @@ this plan resolves it.
 
 - Every resource with an identity field records it on write, from the identifier the create body already
   derived: `projectId`, `suiteId`, `testRunId`, `milestoneId`, `configId`. A value the body supplied is kept
-  verbatim; the derived id only fills a field that is absent or not a string.
+  verbatim; the derived id only fills a field that is absent or not a string. The configuration identity is the
+  one exception, and only since Issue #288: a `configId` is resolved to the file that holds it, so a stored value
+  that disagreed with its own document would name nothing, and `configId` is therefore taken from the name on
+  every write whether the body supplied one or not.
 - A test run stored without a `timestamp` records the moment it was stored — Unix seconds rendered as a string,
   applied by the same rule (`required_string(body, "timestamp").unwrap_or_else(current_timestamp_string)`) the
   run-result route already used. A `timestamp` the body carries is kept.
@@ -1030,8 +1033,9 @@ advertises that rejection instead of an open object.
 The write schemas are the read model's properties, so a field keeps the description the read schema publishes
 unless the write route behaves differently. Four descriptions are overridden to say what the write does:
 
-- `projectId`, `testRunId` and `configId` are **derived from `name`** as `<name>.json` when the body omits them,
-  and `milestoneId` defaults to `name` — the identity normalisation Issue #78 records.
+- `projectId` and `testRunId` are **derived from `name`** as `<name>.json` when the body omits them, and
+  `milestoneId` defaults to `name` — the identity normalisation Issue #78 records. `configId` is **always**
+  derived, so a value the body supplies is accepted for wire compatibility and ignored (Issue #288).
 - `testRunId` and `timestamp` on `TestRunCreateRequest` record that a run written from a name alone still gets a
   `timestamp`: the API stamps the current Unix-seconds string when the body omits one, and a supplied value is
   stored verbatim.
@@ -1577,6 +1581,22 @@ the run already holds replaced the whole result, so a partial recording discarde
   `::a_result_is_refused_for_a_case_the_run_does_not_hold`,
   `::a_result_body_is_checked_rather_than_read_field_by_field`, and the `src/domain/composition.rs` and
   `src/domain/service/tests.rs` unit tests listed in the plan.
+- **A supplied `configId` is ignored and the configuration identity is always derived** (Issue #288, amending the
+  Issue #78 identity plan above). The change is confined to one field of one document type: a create or update
+  body may still carry `configId` — the field stays in the schema and is accepted, so no request that used to
+  succeed is refused — but the stored value is always the `<name>.json` the document is listed under, because a
+  `configId` is resolved to the file that holds it and a value that disagreed with its own document would name
+  nothing. A client that supplied a **differing** `configId` used to read it back out of the document and now
+  reads the derived one, and the traversal-shaped value that path used to persist beside a safe listing key is
+  gone. No field is added or removed, the legacy Draft 2020-12 configuration schema is untouched, every other
+  resource keeps the verbatim rule, and a document already on disk that holds a disagreeing `configId` is not
+  rewritten by a read — the next write derives it. Deviation recorded with tests in
+  `tests/configurations.rs::a_supplied_config_id_is_ignored_in_favour_of_the_derived_id`,
+  `::an_update_cannot_move_a_configuration_identity_away_from_its_id`, the three existing configuration
+  assertions that now expect the derived id (`::configurations_support_the_full_crud_lifecycle`,
+  `::configuration_markers_are_plain_json_under_the_data_root`,
+  `::a_partial_update_keeps_the_fields_the_body_leaves_out`), and
+  `src/domain/service/tests.rs::normalise_marker_configuration_takes_the_id_over_a_supplied_identity`.
 - **Parent-scoped attachment routes added** (Issue #290). Twelve operations are added and none is withdrawn:
   the case- and step-attachment families each gain a form addressed through the holding project
   (`/projects/{id}/test_cases/{case_id}/…`) and a form addressed through the holding suite

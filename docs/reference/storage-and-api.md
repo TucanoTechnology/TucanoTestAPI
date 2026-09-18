@@ -55,8 +55,10 @@ body omits the `projectId`, `suiteId`, `testRunId`, `milestoneId`, or `configId`
 derived from, the stored document records it, and a test run stored without a `timestamp` records
 when it was written. A value the body did supply is never overwritten, so a name-only create such
 as `POST /projects/{id}/test_runs {"name": "nightly"}` stores a run that reads back as its typed
-model instead of one that fails to load. The rules are recorded in
-[docs/contracts/api-compatibility.md](../contracts/api-compatibility.md).
+model instead of one that fails to load. The configuration identity is the one exception: it is
+always the derived id, because a `configId` is resolved to the file that holds it, and a stored
+value that disagreed with its own document would name nothing (Issue #288). The rules are recorded
+in [docs/contracts/api-compatibility.md](../contracts/api-compatibility.md).
 
 ### Domain hierarchy
 

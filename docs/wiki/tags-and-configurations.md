@@ -76,7 +76,7 @@ A configuration is a flat document, inside the project that owns it, at
 
 | Field | Notes |
 | --- | --- |
-| `configId` | **Required.** The identifier; derived as `<name>.json` when omitted |
+| `configId` | **Required.** Always derived as `<name>.json`; a value supplied in a create or update body is accepted for wire compatibility and ignored, so the identity cannot name a document other than the one it is stored in (Issue #288) |
 | `name` | **Required.** The displayed name |
 | `browser` | Free-form, for example `Firefox` |
 | `os` | Free-form, for example `Windows 11` |

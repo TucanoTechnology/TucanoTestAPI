@@ -597,7 +597,11 @@ fn stamp_case_creation(document: &mut Value) {
 /// field the stored name stands for is filled in when the body did not carry
 /// one, so a document the API wrote always reads back as its typed model. A run
 /// also records the moment it was stored, because its model requires a
-/// timestamp. A value the client supplied is never overwritten.
+/// timestamp. A value the client supplied is never overwritten, except for the
+/// configuration identity: an id is resolved to the file that holds it, so a
+/// stored `configId` that disagreed with its own document would name nothing,
+/// and the identity is derived from the name on every write instead (Issue
+/// #288).
 fn normalise_marker(resource: Resource, id: &str, document: &mut Value) {
     let (collection, identity): (Option<&str>, &str) = match resource {
         Resource::Projects => (Some("testSuites"), "projectId"),
@@ -615,7 +619,9 @@ fn normalise_marker(resource: Resource, id: &str, document: &mut Value) {
     if let Some(collection) = collection {
         object.insert(collection.to_owned(), Value::Array(Vec::new()));
     }
-    if !object.get(identity).is_some_and(|value| value.is_string()) {
+    let supplied_identity_is_authoritative = resource != Resource::Configurations
+        && object.get(identity).is_some_and(|value| value.is_string());
+    if !supplied_identity_is_authoritative {
         object.insert(identity.to_owned(), Value::String(id.to_owned()));
     }
     if resource == Resource::Runs
