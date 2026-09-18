@@ -39,7 +39,9 @@ curl -s -X POST http://localhost:3100/auth/login \
 }
 ```
 
-`LoginRequest` is exactly two fields, `username` and `password`, and both are required.
+`LoginRequest` is exactly two fields, `username` and `password`, and both are required. In the
+shipped Compose stack the account is the `TUCANO_BOOTSTRAP_USERNAME`/`TUCANO_BOOTSTRAP_PASSWORD`
+pair from `.env`; the placeholders below stand in for your own credentials.
 
 **3. Keep the access token in a variable.** `expiresIn` is seconds until the access token dies:
 
@@ -66,9 +68,11 @@ refresh before it expires.** Everything below is detail on top of it.
 
 ## What authentication is, and when it applies
 
-**Authentication is off by default.** With `TUCANO_AUTH_REQUIRED` unset or `false`, every route is
-anonymous and no token is needed — the right choice for a laptop. Turning it on requires a signing
-secret of at least 32 bytes:
+**The shipped Compose stack authenticates by default** — `docker-compose.yml` sets
+`TUCANO_AUTH_REQUIRED=true` and takes the signing secret and bootstrap account from `.env`. The
+*service's* own default is `false`: with `TUCANO_AUTH_REQUIRED` unset or `false` every route is
+anonymous and no token is needed, which is only safe on a machine nothing else can reach. Turning it
+on in a hand-rolled deployment requires a signing secret of at least 32 bytes:
 
 ```yaml
     environment:

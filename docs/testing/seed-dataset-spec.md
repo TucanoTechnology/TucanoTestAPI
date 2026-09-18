@@ -343,10 +343,12 @@ every lookup by identifier is finished.
 
 ### Step 0 — session
 
-Auth is optional at runtime and off by default. The seed needs it on, because
-the whole sequence below carries a token and step 1 creates a project, which
-only a system administrator may do. The deployment must therefore be started
-with the four settings this step depends on:
+Auth is optional at runtime: the service's own default is off, and the shipped
+`docker-compose.yml` turns it on with the four settings below drawn from `.env`.
+Either way the seed needs it on, because the whole sequence below carries a
+token and step 1 creates a project, which only a system administrator may do.
+The deployment must therefore be started with the four settings this step
+depends on:
 
 | Variable | Value the seed needs |
 | --- | --- |

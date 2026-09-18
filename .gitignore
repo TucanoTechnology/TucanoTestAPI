@@ -17,3 +17,8 @@
 # is docs/deployment/config.example.json, which is committed.
 /tucano-config.json
 /*.config.json
+
+# `docker compose` loads `.env` automatically from this directory. It holds the
+# JWT signing secret and the bootstrap password, so it belongs on the machine,
+# not in a commit. The committed template is .env.example.
+/.env

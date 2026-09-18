@@ -104,11 +104,19 @@ and a container that will not start is actionable and reversible.
 ## Compose configuration
 
 `docker compose up -d --build` builds and starts both services from
-[`docker-compose.yml`](../../docker-compose.yml):
+[`docker-compose.yml`](../../docker-compose.yml). The `api` service requires the JWT signing secret
+and the bootstrap password, which the checked-in file reads from the environment Compose loads from
+`.env` — copy the committed template and set them first:
 
 ```sh
+cp .env.example .env
+# set TUCANO_JWT_SECRET (at least 32 bytes) and TUCANO_BOOTSTRAP_PASSWORD
 docker compose up -d --build
 ```
+
+Compose fails with an error naming the variable while either required value is unset, so the shipped
+file cannot start an unauthenticated stack by accident. `.env` is gitignored; the committed template
+is [`.env.example`](../../.env.example).
 
 The `api` service as checked in:
 
@@ -122,6 +130,10 @@ services:
     environment:
       TUCANO_DATA_DIR: /data
       PORT: 3000
+      TUCANO_AUTH_REQUIRED: "${TUCANO_AUTH_REQUIRED:-true}"
+      TUCANO_JWT_SECRET: "${TUCANO_JWT_SECRET:?TUCANO_JWT_SECRET is required and must be at least 32 bytes; copy .env.example to .env and set it}"
+      TUCANO_BOOTSTRAP_USERNAME: "${TUCANO_BOOTSTRAP_USERNAME:-admin}"
+      TUCANO_BOOTSTRAP_PASSWORD: "${TUCANO_BOOTSTRAP_PASSWORD:?TUCANO_BOOTSTRAP_PASSWORD is required; copy .env.example to .env and set it}"
     ports:
       - "3100:3000"
     volumes:
@@ -139,6 +151,9 @@ services:
           cpus: "1.0"
           memory: 512M
 ```
+
+(The checked-in file carries a short explanatory comment above the four authentication variables;
+the values are reproduced above verbatim.)
 
 `TUCANO_DATA_DIR=/data` and the `./data:/data` mount together are the whole persistence story: the
 host directory `./data` is the state (Docker creates it on first run), and `.gitignore` excludes
@@ -162,13 +177,15 @@ is the path `/data`, never the volume's name.
 
 ### Enabling authentication
 
-Authentication is **off by default** (`TUCANO_AUTH_REQUIRED` defaults to `false`), so an existing
-deployment behaves exactly as before until an operator opts in. Turning it on requires a signing
-secret and, on a fresh volume, a bootstrap account:
+The shipped `docker-compose.yml` **enables it**: it sets `TUCANO_AUTH_REQUIRED=true` and takes the
+signing secret and the bootstrap account from `.env`, so the local stack is authenticated out of the
+box. The *service's* own default is `false`, so a deployment that supplies its own container
+definition and does not set the variable keeps the historic anonymous behaviour until the operator
+opts in. Turning it on requires a signing secret and, on a fresh volume, a bootstrap account:
 
 | Variable | Purpose |
 | --- | --- |
-| `TUCANO_AUTH_REQUIRED` | `true` makes every guarded route require a bearer token; leave it unset or `false` to keep the historic behaviour. |
+| `TUCANO_AUTH_REQUIRED` | `true` makes every guarded route require a bearer token. The checked-in Compose file applies `true`; the service's built-in default is `false`. |
 | `TUCANO_JWT_SECRET` | The HS256 signing secret, at least 32 bytes. Mutually exclusive with `TUCANO_JWT_SECRET_FILE`. |
 | `TUCANO_JWT_SECRET_FILE` | Path to a file holding the secret (surrounding whitespace trimmed) — the preferred form here, so the secret is not visible in `docker inspect`. |
 | `TUCANO_ACCESS_TOKEN_TTL` / `TUCANO_REFRESH_TOKEN_TTL` | Access-token and refresh-token lifetimes (defaults `15m` and `14d`). |
@@ -388,8 +405,9 @@ layout, the refusal and the operator recipe are recorded in
       `GET /diagnostics` answers `200` either way with the individual checks, so it reads as evidence
       rather than as the probe itself.
 - [ ] Multi-node deployments: shared storage with working advisory locks; no per-replica volumes.
-- [ ] Authentication decided: either the historic `TUCANO_AUTH_REQUIRED`-unset shape, or a signing
-      secret plus a provisioned `$TUCANO_DATA_DIR/auth/` tree.
+- [ ] Authentication decided: the shipped Compose file runs authenticated — `TUCANO_AUTH_REQUIRED=true`
+      plus `TUCANO_JWT_SECRET` and the bootstrap pair from `.env`. A deployment that turns it off
+      keeps the historic anonymous shape and must be reachable only from a trusted network.
 - [ ] Configuration decided: environment-only (no `TUCANO_CONFIG_FILE`), or a `version: 1` file
       mounted read-only, with every secret it names also reachable from the environment.
 - [ ] Rollback target (`PREVIOUS` tag) recorded, and a volume snapshot taken if the release changes a
@@ -398,6 +416,7 @@ layout, the refusal and the operator recipe are recorded in
 | File | Role |
 | --- | --- |
 | [`docker-compose.yml`](../../docker-compose.yml) | The `api` and `gui` service definitions, volume mount, hardening and resource limits. |
+| [`.env.example`](../../.env.example) | The committed template for the `.env` file Compose loads, holding the JWT signing secret, the bootstrap account and the `TUCANO_AUTH_REQUIRED` default. |
 | [`Dockerfile`](../../Dockerfile) | Image build, `TUCANO_DATA_DIR=/data`, `PORT=3000`, unprivileged uid 10001, `VOLUME ["/data"]`. |
 | [`config.example.json`](config.example.json) | The optional configuration-file template, kept valid against the loader's schema by a unit test. |
 | [`docs/security/configuration-decision.md`](../security/configuration-decision.md) | The configuration and secrets decision: precedence, key management, and the deferred encrypted format. |

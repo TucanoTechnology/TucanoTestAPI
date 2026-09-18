@@ -182,6 +182,11 @@ names.
 | `TUCANO_BOOTSTRAP_USERNAME` | — | A `systemAdmin` account created at startup when the store held no accounts. Set with `TUCANO_BOOTSTRAP_PASSWORD`. |
 | `TUCANO_BOOTSTRAP_PASSWORD` | — | The password for the bootstrap account, stored only as an Argon2id hash. |
 
+The defaults above are the **service's** built-in defaults. The shipped `docker-compose.yml`
+overrides one of them: it sets `TUCANO_AUTH_REQUIRED=true` and takes `TUCANO_JWT_SECRET` and the
+bootstrap pair from `.env`, so the local Compose stack is authenticated while a deployment that
+supplies its own container definition starts anonymous.
+
 Accounts and grants live beside the data, under `TUCANO_DATA_DIR/auth/`; the deployment stays
 database-free. The decision of record is
 [docs/security/authentication-decision.md](../security/authentication-decision.md) and the

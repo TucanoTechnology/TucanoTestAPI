@@ -45,6 +45,11 @@ These settings may come from the environment, the configuration file, or the bui
 | Bootstrap username | `TUCANO_BOOTSTRAP_USERNAME` | `bootstrap_username` | *(unset)* | low | Account created at startup when the store holds no accounts. Must be paired with the password. |
 | Bootstrap password | `TUCANO_BOOTSTRAP_PASSWORD` | `bootstrap_password` | *(unset)* | **secret** | Password for the bootstrap account. Must be paired with the username. May be an AEAD-encrypted envelope in the file. |
 
+Defaults here are the **service's** built-in defaults. The shipped `docker-compose.yml` overrides
+one of them — it sets `TUCANO_AUTH_REQUIRED=true` and reads the signing secret and bootstrap pair
+from `.env` — so the local Compose stack is authenticated while the service itself still starts
+anonymous when the variable is unset.
+
 ## Validation rules
 
 The following combinations are rejected at startup with a clear error message. Errors name the

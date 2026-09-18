@@ -21,7 +21,7 @@ README](../../README.md); for the engineering records, see [docs/](../).
 
 | Page | What it covers |
 | --- | --- |
-| [Installation and first project](getting-started.md) | `docker compose up -d --build`, the ports, the data volume, authentication bootstrap, and a first project created end to end |
+| [Installation and first project](getting-started.md) | `cp .env.example .env` and `docker compose up -d --build`, the ports, the data volume, the authentication default, and a first project created end to end |
 
 ## Feature guides
 

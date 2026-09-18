@@ -7,6 +7,17 @@ services:
     environment:
       TUCANO_DATA_DIR: /data
       PORT: 3000
+      # Authentication is on by default for the local stack, so the safe posture
+      # is the one the shipped file produces (audit finding F-178-1 in
+      # docs/security/audit-s3-container-and-deployment.md). Supply the signing
+      # secret and the bootstrap password in a `.env` file next to this file —
+      # copy `.env.example` and set them. Set TUCANO_AUTH_REQUIRED to `false`
+      # to run anonymously, which is only safe on a single-user machine that
+      # nothing else can reach.
+      TUCANO_AUTH_REQUIRED: "${TUCANO_AUTH_REQUIRED:-true}"
+      TUCANO_JWT_SECRET: "${TUCANO_JWT_SECRET:?TUCANO_JWT_SECRET is required and must be at least 32 bytes; copy .env.example to .env and set it}"
+      TUCANO_BOOTSTRAP_USERNAME: "${TUCANO_BOOTSTRAP_USERNAME:-admin}"
+      TUCANO_BOOTSTRAP_PASSWORD: "${TUCANO_BOOTSTRAP_PASSWORD:?TUCANO_BOOTSTRAP_PASSWORD is required; copy .env.example to .env and set it}"
     ports:
       - "3100:3000"
     volumes:
