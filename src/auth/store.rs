@@ -17,7 +17,7 @@
 
 use fs2::FileExt;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
@@ -217,6 +217,31 @@ impl AuthStore {
         write_json_atomically(&self.grant_path(project_id)?, &value)
     }
 
+    /// Every project that holds a grant file, with the grants it holds.
+    ///
+    /// This is the one walk of the grants directory: the scans below differ
+    /// only in what they look for inside each file, and two walks of the same
+    /// directory are two things that can drift apart. A store with no grants
+    /// directory yet is a store with no grants, not an error.
+    fn read_all_grants_unlocked(&self) -> io::Result<Vec<(String, Grants)>> {
+        let entries = match fs::read_dir(self.grants_dir()) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(error) => return Err(error),
+        };
+        let mut projects = Vec::new();
+        for entry in entries.filter_map(Result::ok) {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            let Some(folder) = name.strip_suffix(".json") else {
+                continue;
+            };
+            let project_id = folder_wire_id(folder);
+            let grants = self.read_grants_unlocked(&project_id)?;
+            projects.push((project_id, grants));
+        }
+        Ok(projects)
+    }
+
     /// Every stored account, in the order the file lists them.
     pub fn users(&self) -> io::Result<Vec<User>> {
         let _lock = self.acquire_lock()?;
@@ -403,20 +428,10 @@ impl AuthStore {
     /// Wire identifiers of the projects `user_id` holds a role in, sorted.
     pub fn projects_for_user(&self, user_id: &str) -> io::Result<Vec<String>> {
         let _lock = self.acquire_lock()?;
-        let entries = match fs::read_dir(self.grants_dir()) {
-            Ok(entries) => entries,
-            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
-            Err(error) => return Err(error),
-        };
         let mut projects = Vec::new();
-        for entry in entries.filter_map(Result::ok) {
-            let name = entry.file_name().to_string_lossy().into_owned();
-            let Some(folder) = name.strip_suffix(".json") else {
-                continue;
-            };
-            let grants = self.read_grants_unlocked(&folder_wire_id(folder))?;
+        for (project_id, grants) in self.read_all_grants_unlocked()? {
             if grants.grants.contains_key(user_id) {
-                projects.push(folder_wire_id(folder));
+                projects.push(project_id);
             }
         }
         projects.sort();
@@ -441,24 +456,13 @@ impl AuthStore {
     /// should run.
     pub fn orphan_grants(&self) -> io::Result<Vec<(String, String, Role)>> {
         let _lock = self.acquire_lock()?;
-        let held: Vec<String> = self
+        let held: HashSet<String> = self
             .read_users_unlocked()?
             .into_iter()
             .map(|user| user.id)
             .collect();
-        let entries = match fs::read_dir(self.grants_dir()) {
-            Ok(entries) => entries,
-            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
-            Err(error) => return Err(error),
-        };
         let mut orphans = Vec::new();
-        for entry in entries.filter_map(Result::ok) {
-            let name = entry.file_name().to_string_lossy().into_owned();
-            let Some(folder) = name.strip_suffix(".json") else {
-                continue;
-            };
-            let project_id = folder_wire_id(folder);
-            let grants = self.read_grants_unlocked(&project_id)?;
+        for (project_id, grants) in self.read_all_grants_unlocked()? {
             for (user_id, role) in &grants.grants {
                 if !held.contains(user_id) {
                     orphans.push((project_id.clone(), user_id.clone(), *role));
