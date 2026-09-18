@@ -237,7 +237,7 @@ Two more rules worth knowing:
 | I want to… | Read |
 | --- | --- |
 | Understand what a case's folder looks like next to its parents | [Projects, suites, and cases](projects-suites-and-cases.md) |
-| Copy a case with its steps, attachments and revision history | [Composing and duplicating](composing-and-duplicating.md) |
+| Carry a case's steps, attachments and revision history to another parent | [Composing and duplicating](composing-and-duplicating.md) — composition `copy` duplicates the folder; `duplicate` copies the document only |
 | See how a step edit records a revision | [Case versioning and history](case-versioning-and-history.md) |
 | Record the outcome of executing a case | [Test runs and results](test-runs-and-results.md) |
 

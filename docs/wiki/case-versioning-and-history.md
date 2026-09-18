@@ -176,7 +176,7 @@ live document is the only thing that moved, and reading the history shows the sa
 | `404 not_found` fetching a version | The version has no snapshot (it is the live version), or it never existed |
 | `changedFields` looks incomplete | It lists only the **qualifying** fields, and only those that differed from the version that superseded it |
 | A version I sent was ignored | `version` and `lastModified` are API-managed; the API stamps its own |
-| A duplicate already has history | Duplicating a case copies `revisions/` with it. See [Composing and duplicating](composing-and-duplicating.md) |
+| A duplicate reports a `version` but no history | Duplicating a case copies the document only, so the copy inherits the source's `version` while no `revisions/` snapshot sits beside it and `GET /test_cases/{copy}/history` is empty. See [Composing and duplicating](composing-and-duplicating.md) |
 | Looking for a revert route | There is none. Snapshots are read-only; to go back, `PUT` the old values back as a new version |
 
 ## Next
@@ -184,7 +184,7 @@ live document is the only thing that moved, and reading the history shows the sa
 | I want to… | Read |
 | --- | --- |
 | Add steps and attachments, the fields that most often bump a version | [Steps and attachments](steps-and-attachments.md) |
-| Copy a case with its revision history | [Composing and duplicating](composing-and-duplicating.md) |
+| Carry a case's revision history to another parent | [Composing and duplicating](composing-and-duplicating.md) — composition `copy` duplicates the case folder; `duplicate` copies the document only |
 | See how a run pins the version it executed | [Test runs and results](test-runs-and-results.md) |
 
 ---

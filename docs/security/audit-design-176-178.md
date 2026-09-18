@@ -866,7 +866,7 @@ and no file type other than `.json` is accepted in the project tree
 - **Command.**
   ```bash
   docker exec audit-b find /data -printf '%M %u:%g %s %p\n' | sort | head -100
-  docker exec audit-b stat -c '%a %n' /data/auth/* /data/Projects/*/.tucano.json 2>/dev/null
+  docker exec audit-b stat -c '%a %n' /data/auth/* /data/projects/*/project.json 2>/dev/null
   docker exec audit-b ls -la /data /data/auth
   ```
 - **Expected (control holds).** Document mode is restrictive (owner-only or owner+group), per `AGENTS.md`
@@ -893,22 +893,22 @@ and no file type other than `.json` is accepted in the project tree
 **S2-3 — Symlink and hardlink escape fixtures**
 
 - **Probe.** Plant each fixture in the throwaway data directory and address it through the API:
-  1. a symlinked project folder pointing at `/etc` (`ln -s /etc /data/Projects/evil.json`);
-  2. a symlinked collection directory (`/data/Projects/checkout.json/test_runs` → `/tmp`);
+  1. a symlinked project folder pointing at `/etc` (`ln -s /etc /data/projects/evil`);
+  2. a symlinked collection directory (`/data/projects/checkout/test_runs` → `/tmp`);
   3. a symlinked case folder and a symlinked case document;
-  4. a symlinked attachment file inside a real case's attachments directory, pointing outside the root;
+  4. a symlinked attachment file inside a real case's folder, pointing outside the root;
   5. a symlink *inside* the root (case → another project's case) to test confinement rather than escape;
-  6. a **hardlink** from an outside file into the attachments directory and into a project folder (a
+  6. a **hardlink** from an outside file into a case folder and into a project folder (a
      hardlink cannot be detected by path inspection, so this tests whether the control is confinement or
      type-checking).
 - **Command.**
   ```bash
-  docker exec audit-b sh -lc 'ln -s /etc /data/Projects/evil.json;
-    ln -s /tmp /data/Projects/checkout.json/test_runs;
-    ln -s /tmp/escape.json /data/Projects/checkout.json/suites/smoke.checkout.json/cases/TC-LOGIN-1/attachments/escape.json'
+  docker exec audit-b sh -lc 'ln -s /etc /data/projects/evil;
+    ln -s /tmp /data/projects/checkout/test_runs;
+    ln -s /tmp/escape.json /data/projects/checkout/smoke.checkout/TC-LOGIN-1/escape.json'
   curl -s -o /dev/null -w '%{http_code}\n' "$B/test_cases/TC-LOGIN-1/attachments/escape.json"
   curl -s -o /dev/null -w '%{http_code}\n' "$B/projects/evil.json"
-  docker exec audit-b sh -lc 'ln /etc/hostname /data/Projects/checkout.json/hard.json; cat /data/Projects/checkout.json/hard.json'
+  docker exec audit-b sh -lc 'ln /etc/hostname /data/projects/checkout/hard.json; cat /data/projects/checkout/hard.json'
   ```
 - **Expected (control holds).** Refusal for every fixture; `ensure_within` / `resolve_existing_prefix`
   canonicalise before use; `find /data` never resolves outside the root; the hardlink cannot be turned into
@@ -977,10 +977,10 @@ and no file type other than `.json` is accepted in the project tree
   wrong shape; replace a document with a 100 MiB blob. Before and after each read, hash the file.
 - **Command.**
   ```bash
-  docker exec audit-b sh -lc 'F=/data/Projects/checkout.json/test_cases/TC-LOGIN-1/test_case.json;
+  docker exec audit-b sh -lc 'F=/data/projects/checkout/smoke.checkout/TC-LOGIN-1/test-case.json;
     cp "$F" /tmp/orig; head -c 200 "$F" > /tmp/t; mv /tmp/t "$F"; sha256sum "$F"'
   curl -s -w '\n%{http_code}\n' "$B/test_cases/TC-LOGIN-1"
-  docker exec audit-b sha256sum /data/Projects/checkout.json/test_cases/TC-LOGIN-1/test_case.json
+  docker exec audit-b sha256sum /data/projects/checkout/smoke.checkout/TC-LOGIN-1/test-case.json
   ```
 - **Expected (control holds).** A **safe storage error** (500 `storage_error` with a stable, non-disclosing
   message) and **the original file is preserved** — the corrupted bytes stay exactly as the auditor left
@@ -1031,7 +1031,7 @@ and no file type other than `.json` is accepted in the project tree
   whose destination is made unwritable, or a document whose ID passes HTTP validation but fails a later
   layout check), then immediately perform a normal successful write. Do it for a document write, an
   attachment write, and a revision write.
-- **Command.** `docker exec audit-b sh -lc 'chmod 0555 /data/Projects/checkout.json'` → attempted write →
+- **Command.** `docker exec audit-b sh -lc 'chmod 0555 /data/projects/checkout'` → attempted write →
   restore mode → successful write with `curl --max-time 10`.
 - **Expected (control holds).** The follow-up write succeeds: the failed path released the lock. The lock
   is acquired as a `File` (`src/storage/fs.rs:36`) and released by an explicit `unlock` at eight sites

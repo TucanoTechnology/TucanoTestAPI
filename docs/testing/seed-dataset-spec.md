@@ -40,7 +40,7 @@ example is a gap, not a deferral.
 
 | # | Feature | Seeded example | Producing call | On-disk evidence |
 | --- | --- | --- | --- | --- |
-| 1 | Projects | `checkout.json` (tags, three suites and two directly owned cases) and `payments.json` (a suite, a directly owned case, and the copies composition places into it) | `POST /projects` ×2 | `projects/checkout.json/project.json`, `projects/payments.json/project.json` |
+| 1 | Projects | `checkout.json` (tags, three suites and two directly owned cases) and `payments.json` (a suite, a directly owned case, and the copies composition places into it) | `POST /projects` ×2 | `projects/checkout/project.json`, `projects/payments/project.json` |
 | 2 | Suites inside a project | `smoke.checkout.json`, `regression.checkout.json` (left holding no case at all) and `portable.checkout.json` in `checkout.json`; `smoke.payments.json` in `payments.json` | `POST /projects/{id}/test_suites` ×4, plus the suite half of row 22 | `projects/<p>/<suite>/suite.json` |
 | 3 | Cases directly in a project | `TC-PROJECT-1` and `TC-ORDERS-1` in `checkout.json`; `TC-CATALOG-1` in `payments.json` | `POST /projects/{id}/test_cases` ×3 | `projects/<p>/<case>/test-case.json` |
 | 4 | Cases inside a suite | `TC-LOGIN-1`, `TC-LOGIN-2`, `TC-CART-1` and `TC-MOVE-1` in `smoke.checkout.json`; `TC-SEARCH-1` in `smoke.payments.json` | `POST /test_suites/{id}/test_cases` ×5 | `projects/<p>/<suite>/<case>/test-case.json` |
@@ -49,19 +49,19 @@ example is a gap, not a deferral.
 | 7 | Step attachments | seven uploads across six of the eight cases, e.g. `step-1.txt` on step index 0 of `TC-LOGIN-2` and `step-2.txt` on its step index 1 | `POST /test_cases/{id}/steps/{index}/attachments` ×7 | `…/<case>/steps/<index>/<stamp>-<file>` |
 | 8 | Tags on projects, suites, cases and runs | `checkout`/`regression` on the project; `smoke` on the suite; `auth` on a case; `nightly` on the run | the create/update calls that carry `tags`, then the seeded run read back through the tags filter (`tags=nightly`) | the `tags` array in each stored document |
 | 9 | Case versioning and revision history | every seeded case is updated once after creation by the `steps` write of row 5, so each one carries a revision | `PUT /test_cases/{id}` once per case, then `GET /test_cases/TC-LOGIN-2/history` | a `revisions/v1.json` in every case folder; `version`/`lastModified` in each `test-case.json` |
-| 10 | Configurations (one per project) | `chrome-linux.json` in `checkout.json`; `firefox-linux.json` in `payments.json` | `POST /projects/{id}/configurations` ×2 | `projects/checkout.json/configurations/chrome-linux.json`, `projects/payments.json/configurations/firefox-linux.json` |
-| 11 | Linking a configuration to a run | `chrome-linux.json` linked to `nightly.json` | `POST /test_runs/{id}/configurations` | the `configurations` reference array in `projects/checkout.json/test_runs/nightly.json` |
-| 12 | Runs (point-in-time snapshots) | `nightly.json` covering the `checkout.json` project and its smoke suite, whose snapshot carries the four cases the suite held when it was added | `POST /projects/{id}/test_runs`, then `POST /test_runs/{id}/test_suites` | `projects/checkout.json/test_runs/nightly.json` |
-| 13 | Run case membership pinned from a template | run carries `TC-LOGIN-1`, `TC-LOGIN-2` as copies | `POST /test_runs/{id}/test_cases` | `test_cases` array in `projects/checkout.json/test_runs/nightly.json` |
-| 14 | Recorded results — every status | `TC-LOGIN-1` `Passed`, `TC-LOGIN-2` `Failed` (with notes and `durationMs`), `TC-PROJECT-1` `Blocked`, `TC-CART-1` `Retest`; `Untested` is never recorded — it is the status of a declared case with no result, so its bucket reads 0 | `POST /test_runs/{id}/results` per case (the route replaces an earlier result for the same case) | `results` array in `projects/checkout.json/test_runs/nightly.json` |
+| 10 | Configurations (one per project) | `chrome-linux.json` in `checkout.json`; `firefox-linux.json` in `payments.json` | `POST /projects/{id}/configurations` ×2 | `projects/checkout/configurations/chrome-linux.json`, `projects/payments/configurations/firefox-linux.json` |
+| 11 | Linking a configuration to a run | `chrome-linux.json` linked to `nightly.json` | `POST /test_runs/{id}/configurations` | the `configurations` reference array in `projects/checkout/test_runs/nightly.json` |
+| 12 | Runs (point-in-time snapshots) | `nightly.json` covering the `checkout.json` project and its smoke suite, whose snapshot carries the four cases the suite held when it was added | `POST /projects/{id}/test_runs`, then `POST /test_runs/{id}/test_suites` | `projects/checkout/test_runs/nightly.json` |
+| 13 | Run case membership pinned from a template | run carries `TC-LOGIN-1`, `TC-LOGIN-2` as copies | `POST /test_runs/{id}/test_cases` | `test_cases` array in `projects/checkout/test_runs/nightly.json` |
+| 14 | Recorded results — every status | `TC-LOGIN-1` `Passed`, `TC-LOGIN-2` `Failed` (with notes and `durationMs`), `TC-PROJECT-1` `Blocked`, `TC-CART-1` `Retest`; `Untested` is never recorded — it is the status of a declared case with no result, so its bucket reads 0 | `POST /test_runs/{id}/results` per case (the route replaces an earlier result for the same case) | `results` array in `projects/checkout/test_runs/nightly.json` |
 | 15 | Result replacement (upsert) | `TC-LOGIN-2` recorded `Blocked` then replaced with `Failed` | same `POST /test_runs/{id}/results` twice | one `Failed` entry for `TC-LOGIN-2` |
 | 16 | Defect links — all four trackers | one link per tracker type on the failed result of `TC-LOGIN-2` | `POST /test_runs/{id}/results/{case_id}/defects` ×4 | `defectLinks` array inside the `TC-LOGIN-2` result |
 | 17 | Defect link removal | the GitHub link of row 16, linked then unlinked | `POST …/defects` then `DELETE …/defects/{link_id}` | the removed link is absent from `defectLinks` |
-| 18 | JUnit XML import | `nightly-import.json` run, importing a fixture for two cases | `POST /test_runs/{id}/import/junit` | `results` array in `projects/checkout.json/test_runs/nightly-import.json` |
-| 19 | JSON result import | `nightly-import.json`, importing `Passed` and `Failed` entries | `POST /test_runs/{id}/import/json` | `results` array in `projects/checkout.json/test_runs/nightly-import.json` |
-| 20 | Milestones and derived progress | `v1.0.json` referencing `nightly.json` | `POST /projects/{id}/milestones`, then `GET /milestones/v1.0.json/progress` | `projects/checkout.json/milestones/v1.0.json` |
-| 21 | Duplication | a suite duplicate kept under its project, its derived identifier read back from the project's suite listing | `POST /test_suites/smoke.checkout.json/duplicate` | `projects/checkout.json/<copy>/suite.json` |
-| 22 | Copy vs. move composition | copy is the default: `TC-LOGIN-1` (suite → project), `TC-ORDERS-1` (project → project), `TC-CATALOG-1` (project → suite) and `TC-SEARCH-1` (suite → suite) are each placed into a second parent while the source keeps its home. `"mode":"move"` relocates instead: `TC-MOVE-1` passes through all four directions (`smoke.checkout.json` → `checkout.json` → `payments.json` → `regression.checkout.json` → `smoke.payments.json`) and ends in the suite of the other project, and `TC-PROJECT-1` moves onto the project that already owns it, a no-op. The suite `portable.checkout.json` is moved into `payments.json` and then copied back, so it ends with one home in each — every parent pair is covered by one copy and one move | `POST /projects/{id}/test_cases`, `POST /test_suites/{id}/test_cases` and `POST /projects/{id}/test_suites`, each carrying `testCaseId`/`suiteId`, with `mode` selecting move (`mode` omitted is copy) | the copies in `projects/payments.json/` and `projects/checkout.json/smoke.checkout.json/` beside their sources in `projects/checkout.json/` and `projects/payments.json/`; `projects/payments.json/smoke.payments.json/TC-MOVE-1/` where the four-hop move ends; `portable.checkout.json` under both projects |
+| 18 | JUnit XML import | `nightly-import.json` run, importing a fixture for two cases | `POST /test_runs/{id}/import/junit` | `results` array in `projects/checkout/test_runs/nightly-import.json` |
+| 19 | JSON result import | `nightly-import.json`, importing `Passed` and `Failed` entries | `POST /test_runs/{id}/import/json` | `results` array in `projects/checkout/test_runs/nightly-import.json` |
+| 20 | Milestones and derived progress | `v1.0.json` referencing `nightly.json` | `POST /projects/{id}/milestones`, then `GET /milestones/v1.0.json/progress` | `projects/checkout/milestones/v1.0.json` |
+| 21 | Duplication | a suite duplicate kept under its project, its derived identifier read back from the project's suite listing | `POST /test_suites/smoke.checkout.json/duplicate` | `projects/checkout/<copy>/suite.json` |
+| 22 | Copy vs. move composition | copy is the default: `TC-LOGIN-1` (suite → project), `TC-ORDERS-1` (project → project), `TC-CATALOG-1` (project → suite) and `TC-SEARCH-1` (suite → suite) are each placed into a second parent while the source keeps its home. `"mode":"move"` relocates instead: `TC-MOVE-1` passes through all four directions (`smoke.checkout.json` → `checkout.json` → `payments.json` → `regression.checkout.json` → `smoke.payments.json`) and ends in the suite of the other project, and `TC-PROJECT-1` moves onto the project that already owns it, a no-op. The suite `portable.checkout.json` is moved into `payments.json` and then copied back, so it ends with one home in each — every parent pair is covered by one copy and one move | `POST /projects/{id}/test_cases`, `POST /test_suites/{id}/test_cases` and `POST /projects/{id}/test_suites`, each carrying `testCaseId`/`suiteId`, with `mode` selecting move (`mode` omitted is copy) | the copies in `projects/payments/` and `projects/checkout/smoke.checkout/` beside their sources in `projects/checkout/` and `projects/payments/`; `projects/payments/smoke.payments/TC-MOVE-1/` where the four-hop move ends; `portable.checkout.json` under both projects |
 | 23 | Coverage report | `GET /reports/coverage`, global and `?projectId=checkout.json` | the report routes | n/a (read-only — no new files) |
 | 24 | Summary report | `GET /reports/summary` and `?configurationId=chrome-linux.json` | the report routes | n/a (read-only — no new files) |
 | 25 | Auth users: system administrator | `admin` — the bootstrap account | `TUCANO_BOOTSTRAP_USERNAME`/`TUCANO_BOOTSTRAP_PASSWORD` at startup; `POST /auth/login` | `auth/users.json` (**not** produced by an API call — see [§5](#5-known-gap-auth-accounts-and-role-grants)) |
@@ -189,9 +189,9 @@ $TUCANO_DATA_DIR/
 │       └── checkout.json                     # {"grants": {"<viewer id>": "owner"}}
 ├── .tucano.lock                              # advisory lock, created by the API
 ├── projects/
-│   ├── checkout.json/
+│   ├── checkout/
 │   │   ├── project.json                      # {"projectId","name","tags":["checkout","regression"]}
-│   │   ├── smoke.checkout.json/              # a suite folder: three originals, two placed copies
+│   │   ├── smoke.checkout/              # a suite folder: three originals, two placed copies
 │   │   │   ├── suite.json
 │   │   │   ├── TC-LOGIN-1/
 │   │   │   │   ├── test-case.json            # tags, ordered steps, version 2
@@ -232,9 +232,9 @@ $TUCANO_DATA_DIR/
 │   │   │       └── steps/
 │   │   │           └── 0/
 │   │   │               └── <stamp>-step-1.txt
-│   │   ├── regression.checkout.json/         # second suite in this project, a move waypoint
+│   │   ├── regression.checkout/         # second suite in this project, a move waypoint
 │   │   │   └── suite.json                    # left holding no case — the empty-suite shape
-│   │   ├── portable.checkout.json/           # moved into payments.json, then copied back
+│   │   ├── portable.checkout/           # moved into payments.json, then copied back
 │   │   │   └── suite.json                    # created empty: a suite placement carries its cases
 │   │   ├── smoke.checkout-copy-<suffix>/     # the duplicate suite, id from the response
 │   │   │   └── suite.json
@@ -258,9 +258,9 @@ $TUCANO_DATA_DIR/
 │   │   │   └── v1.0.json                     # references nightly.json
 │   │   └── configurations/                   # reserved child of this project
 │   │       └── chrome-linux.json
-│   └── payments.json/
+│   └── payments/
 │       ├── project.json
-│       ├── smoke.payments.json/              # a suite folder; the four-hop move ends in it
+│       ├── smoke.payments/              # a suite folder; the four-hop move ends in it
 │       │   ├── suite.json
 │       │   ├── TC-MOVE-1/                    # the whole folder travelled, steps and attachments intact
 │       │   │   ├── test-case.json
@@ -278,7 +278,7 @@ $TUCANO_DATA_DIR/
 │       │       └── steps/
 │       │           └── 0/
 │       │               └── <stamp>-step-1.txt
-│       ├── portable.checkout.json/            # the copy placed back out of checkout.json
+│       ├── portable.checkout/            # the copy placed back out of checkout.json
 │       │   └── suite.json
 │       ├── TC-LOGIN-1/                       # a copy placed into this project; the source keeps
 │       │   ├── test-case.json                # its home in smoke.checkout.json
@@ -645,15 +645,15 @@ curl -sS -X POST "$API/test_suites/smoke.checkout.json/test_cases" -H "Authoriza
 
 A copy duplicates the case folder into the target parent and leaves the source
 where it was, so `TC-LOGIN-1` now sits both inside
-`projects/checkout.json/smoke.checkout.json/` where it was created and inside
-`projects/payments.json/`. The table is the whole copy half of the matrix:
+`projects/checkout/smoke.checkout/` where it was created and inside
+`projects/payments/`. The table is the whole copy half of the matrix:
 
 | Case | Direction | Source | Target |
 | --- | --- | --- | --- |
-| `TC-LOGIN-1` | suite → project | `projects/checkout.json/smoke.checkout.json/` | `projects/payments.json/` |
-| `TC-ORDERS-1` | project → project | `projects/checkout.json/` | `projects/payments.json/` |
-| `TC-CATALOG-1` | project → suite | `projects/payments.json/` | `projects/checkout.json/smoke.checkout.json/` |
-| `TC-SEARCH-1` | suite → suite | `projects/payments.json/smoke.payments.json/` | `projects/checkout.json/smoke.checkout.json/` |
+| `TC-LOGIN-1` | suite → project | `projects/checkout/smoke.checkout/` | `projects/payments/` |
+| `TC-ORDERS-1` | project → project | `projects/checkout/` | `projects/payments/` |
+| `TC-CATALOG-1` | project → suite | `projects/payments/` | `projects/checkout/smoke.checkout/` |
+| `TC-SEARCH-1` | suite → suite | `projects/payments/smoke.payments/` | `projects/checkout/smoke.checkout/` |
 
 `TC-MOVE-1` then walks all four move directions. It keeps one identifier and
 one home throughout, which is what makes the chain possible: each call
@@ -673,7 +673,7 @@ curl -sS -X POST "$API/test_suites/smoke.payments.json/test_cases" -H "Authoriza
 
 Those four calls are suite → project, project → project, project → suite and
 suite → suite, and they end with the case in
-`projects/payments.json/smoke.payments.json/`, its `revisions/v1.json` and both
+`projects/payments/smoke.payments/`, its `revisions/v1.json` and both
 attachments intact: a move relocates the whole folder rather than the document
 alone. `regression.checkout.json` is where the third hop leaves it and the
 fourth takes it away, so it ends empty.
