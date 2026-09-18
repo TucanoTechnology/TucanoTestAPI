@@ -423,6 +423,52 @@ impl AuthStore {
         projects.dedup();
         Ok(projects)
     }
+
+    /// Every grant recorded against an account the store does not hold.
+    ///
+    /// Grants are keyed by account identifier and live in the per-project
+    /// files, while the accounts live in `users.json`, so [`AuthStore::remove_user`]
+    /// leaves them behind — on purpose, because "forget this account" and
+    /// "forget this project" are separate decisions. A grant no account answers
+    /// for authorises nobody, yet it is invisible to every lookup that goes
+    /// through the accounts: [`AuthStore::role_of`] answers for the identifier
+    /// alone, so a caller that asks by *name* sees the account gone and the
+    /// grant nowhere. This is the scan that finds them anyway.
+    ///
+    /// Reported as `(project_id, user_id, role)`, sorted by project and then by
+    /// identifier. It reads every grant file, so it is a consistency report for
+    /// callers deciding whether a store is clean, not something a request path
+    /// should run.
+    pub fn orphan_grants(&self) -> io::Result<Vec<(String, String, Role)>> {
+        let _lock = self.acquire_lock()?;
+        let held: Vec<String> = self
+            .read_users_unlocked()?
+            .into_iter()
+            .map(|user| user.id)
+            .collect();
+        let entries = match fs::read_dir(self.grants_dir()) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(error) => return Err(error),
+        };
+        let mut orphans = Vec::new();
+        for entry in entries.filter_map(Result::ok) {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            let Some(folder) = name.strip_suffix(".json") else {
+                continue;
+            };
+            let project_id = folder_wire_id(folder);
+            let grants = self.read_grants_unlocked(&project_id)?;
+            for (user_id, role) in &grants.grants {
+                if !held.contains(user_id) {
+                    orphans.push((project_id.clone(), user_id.clone(), *role));
+                }
+            }
+        }
+        orphans.sort();
+        orphans.dedup();
+        Ok(orphans)
+    }
 }
 
 /// Write a JSON document atomically: a same-directory temporary file, flushed
@@ -697,6 +743,46 @@ mod tests {
             vec!["checkout.json".to_owned()]
         );
         assert!(store.projects_for_user("u3").expect("list").is_empty());
+    }
+
+    #[test]
+    fn grants_forgotten_accounts_are_reported_as_orphans() {
+        let (_directory, store) = store();
+        store
+            .insert_user(&account("alive", "alice"))
+            .expect("insert");
+        store
+            .set_role("payments.json", "alive", Role::Viewer)
+            .expect("set");
+        store
+            .set_role("checkout.json", "gone", Role::Owner)
+            .expect("set");
+        store
+            .set_role("checkout.json", "alive", Role::Editor)
+            .expect("set");
+        assert_eq!(
+            store.orphan_grants().expect("scan"),
+            vec![("checkout.json".to_owned(), "gone".to_owned(), Role::Owner)]
+        );
+
+        // Removing the account is what orphans the grants it wrote: the
+        // identifier in the grant file stops answering for anybody, and asking
+        // by name cannot see it any more.
+        store
+            .set_role("payments.json", "gone", Role::Viewer)
+            .expect("set");
+        assert!(store.remove_user("alive").expect("remove"));
+        assert_eq!(
+            store.orphan_grants().expect("scan"),
+            vec![
+                ("checkout.json".to_owned(), "alive".to_owned(), Role::Editor),
+                ("checkout.json".to_owned(), "gone".to_owned(), Role::Owner),
+                ("payments.json".to_owned(), "alive".to_owned(), Role::Viewer),
+                ("payments.json".to_owned(), "gone".to_owned(), Role::Viewer),
+            ],
+            "removing the account orphans every grant it held, not only the ones somebody \
+             else already orphaned"
+        );
     }
 
     #[test]

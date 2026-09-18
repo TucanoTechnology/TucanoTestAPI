@@ -201,8 +201,16 @@ pub struct UnseededAccount {
     pub account_kept: Option<String>,
     /// `(project_id, role)` grants this call removed.
     pub grants_removed: Vec<(String, String)>,
-    /// `(project_id, reason)` grants this call refused to remove.
+    /// `(project_id, reason)` grants this call found still on the volume and did
+    /// not remove, whether because it was not allowed to or because removing
+    /// the account left them keyed on an identifier nothing answers for.
     pub grants_kept: Vec<(String, String)>,
+    /// The asked-about projects the account holds no grant on.
+    ///
+    /// Nothing was removed for them, and nothing was left behind either: a
+    /// grant that is already gone is not a kept grant, and reporting it as one
+    /// has a caller refuse a store that holds nothing of the seed's any more.
+    pub grants_absent: Vec<String>,
 }
 
 /// [`SeedError`]'s inverse: the same store failures, none of the hashing.
@@ -232,6 +240,15 @@ pub struct AccountReport {
     pub grants_present: Vec<(String, String)>,
     /// The asked-about projects the account holds no grant on.
     pub grants_absent: Vec<String>,
+    /// `(project_id, role)` grants recorded anywhere in the store against an
+    /// account the store does not hold.
+    ///
+    /// Grants are keyed by identifier, so one that outlives its account cannot
+    /// be found by looking the account up — and a teardown asking for a name
+    /// the seed wrote, finding it absent and nothing else, would call a store
+    /// clean while such a grant sits in a grant file. This is the part of the
+    /// answer that a lookup by name cannot reach.
+    pub orphans: Vec<(String, String, String)>,
 }
 
 /// The reason [`unseed_account`] records when the account it was asked about was
@@ -259,6 +276,14 @@ pub fn is_missing_account_reason(reason: &str) -> bool {
 /// a system administrator is refused outright because the bootstrap account
 /// belongs to the deployment — deleting it would lock out the next run.
 ///
+/// A grant the account holds on a project this call was not pointed at is
+/// reported as kept, because removing the account does not remove it: the grant
+/// file keeps it keyed on an identifier no account answers for, where every
+/// lookup that goes through the accounts stops seeing it. Handing that to the
+/// caller is what keeps such a grant from being mistaken for a clean sweep.
+/// Only grants that really are on the volume are counted as kept, so an
+/// already-clean project is not read as one that was left behind.
+///
 /// # Errors
 ///
 /// [`SeedError::Storage`] when the store cannot be read or written. Nothing is
@@ -275,6 +300,7 @@ pub fn unseed_account(
         account_kept: None,
         grants_removed: Vec::new(),
         grants_kept: Vec::new(),
+        grants_absent: Vec::new(),
     };
 
     let Some(account) = store.user_by_username(&spec.username)? else {
@@ -306,10 +332,7 @@ pub fn unseed_account(
                     .grants_removed
                     .push((project_id.clone(), role_name(role).to_owned()));
             }
-            None => result.grants_kept.push((
-                project_id.clone(),
-                "the account holds no grant on this project".to_owned(),
-            )),
+            None => result.grants_absent.push(project_id.clone()),
         }
     }
 
@@ -323,6 +346,28 @@ pub fn unseed_account(
         result.account_kept = Some("--keep-account was requested".to_owned());
     }
 
+    // Whatever the account still holds now: the grants it held elsewhere when
+    // `--keep-account` was asked for, or the ones the removal just orphaned.
+    // Either way they are on the volume and this call did not take them away.
+    for project_id in store.projects_for_user(&account.id)? {
+        let Some(role) = store.role_of(&project_id, &account.id)? else {
+            // Gone between the two reads; another writer got there first.
+            continue;
+        };
+        let reason = if result.account_removed {
+            format!(
+                "the account was removed, so nothing answers for this {} grant any more",
+                role_name(role)
+            )
+        } else {
+            format!(
+                "the account still holds this {} grant and this call did not name it",
+                role_name(role)
+            )
+        };
+        result.grants_kept.push((project_id, reason));
+    }
+
     Ok(result)
 }
 
@@ -333,7 +378,8 @@ pub fn unseed_account(
 /// it. That is what a teardown needs before it accepts an `absent` removal as a
 /// clean sweep — a removal that reports nothing to do because it was pointed at
 /// a name the seed never wrote must not leave the seed's own account behind
-/// unnoticed.
+/// unnoticed — and, because the account it asks about may be the one that is
+/// gone, the answer also names the grants nothing answers for.
 ///
 /// # Errors
 ///
@@ -344,6 +390,12 @@ pub fn report_account(
     username: &str,
     grants: &[String],
 ) -> Result<AccountReport, UnseedError> {
+    let orphans = store
+        .orphan_grants()?
+        .into_iter()
+        .map(|(project_id, user_id, role)| (project_id, user_id, role_name(role).to_owned()))
+        .collect();
+
     let Some(account) = store.user_by_username(username)? else {
         return Ok(AccountReport {
             username: username.to_owned(),
@@ -351,6 +403,7 @@ pub fn report_account(
             system_admin: false,
             grants_present: Vec::new(),
             grants_absent: grants.to_vec(),
+            orphans,
         });
     };
 
@@ -371,6 +424,7 @@ pub fn report_account(
         system_admin: account.system_admin,
         grants_present,
         grants_absent,
+        orphans,
     })
 }
 
@@ -646,7 +700,7 @@ mod tests {
         ));
         assert!(!is_missing_account_reason("--keep-account was requested"));
         assert!(!is_missing_account_reason(
-            "the account holds no grant on this project"
+            "the account was removed, so nothing answers for this owner grant any more"
         ));
         assert!(!is_missing_account_reason(""));
     }
@@ -688,6 +742,10 @@ mod tests {
             Some("--keep-account was requested")
         );
         assert_eq!(removed.grants_removed.len(), 2);
+        assert!(
+            removed.grants_kept.is_empty(),
+            "a grant that was removed is not one left behind: {removed:?}"
+        );
         assert!(store.user_by_username("viewer").expect("read").is_some());
         assert!(
             store
@@ -698,7 +756,7 @@ mod tests {
     }
 
     #[test]
-    fn unseeding_reports_a_grant_the_account_never_held() {
+    fn unseeding_does_not_call_a_grant_that_was_never_there_a_kept_one() {
         let (_directory, store) = store();
         seed_account(&store, &spec()).expect("seed");
         let mut spec = unseed_spec();
@@ -708,11 +766,51 @@ mod tests {
 
         assert_eq!(removed.grants_removed.len(), 2);
         assert_eq!(
+            removed.grants_absent,
+            vec!["unrelated.json".to_owned()],
+            "a project the account holds no grant on has nothing on the volume to keep"
+        );
+        assert!(
+            removed.grants_kept.is_empty(),
+            "counting an absent grant as kept makes a caller refuse an already-clean \
+             store: {removed:?}"
+        );
+    }
+
+    #[test]
+    fn unseeding_reports_the_grants_removing_the_account_orphaned() {
+        let (_directory, store) = store();
+        let seeded = seed_account(&store, &spec()).expect("seed");
+
+        let removed = unseed_account(
+            &store,
+            &UnseedSpec {
+                username: "viewer".to_owned(),
+                grants: vec!["checkout.json".to_owned()],
+                remove_account: true,
+            },
+        )
+        .expect("unseed");
+
+        assert!(removed.account_removed);
+        assert_eq!(
             removed.grants_kept,
             vec![(
-                "unrelated.json".to_owned(),
-                "the account holds no grant on this project".to_owned()
-            )]
+                "payments.json".to_owned(),
+                "the account was removed, so nothing answers for this owner grant any more"
+                    .to_owned()
+            )],
+            "the unnamed grant outlives its account and has to be reported"
+        );
+        assert!(
+            store.user_by_username("viewer").expect("read").is_none(),
+            "the account is gone while the grant it wrote is not"
+        );
+        assert_eq!(
+            store
+                .role_of("payments.json", &seeded.id)
+                .expect("role of the removed account"),
+            Some(Role::Owner)
         );
     }
 
@@ -752,6 +850,10 @@ mod tests {
             ]
         );
         assert_eq!(report.grants_absent, vec!["missing.json".to_owned()]);
+        assert!(
+            report.orphans.is_empty(),
+            "every grant on the volume answers for an account the store holds: {report:?}"
+        );
         assert_eq!(
             report_account(&store, "viewer", &grants).expect("report again"),
             report,
@@ -781,6 +883,36 @@ mod tests {
         assert!(!report.system_admin);
         assert!(report.grants_present.is_empty());
         assert_eq!(report.grants_absent, grants);
+    }
+
+    #[test]
+    fn a_report_names_the_grants_nothing_answers_for() {
+        let (_directory, store) = store();
+        let seeded = seed_account(&store, &spec()).expect("seed");
+        store.remove_user(&seeded.id).expect("forget the account");
+
+        let report =
+            report_account(&store, "viewer", &["checkout.json".to_owned()]).expect("report");
+
+        assert!(!report.present);
+        assert_eq!(report.grants_absent, vec!["checkout.json".to_owned()]);
+        assert_eq!(
+            report.orphans,
+            vec![
+                (
+                    "checkout.json".to_owned(),
+                    seeded.id.clone(),
+                    "owner".to_owned()
+                ),
+                (
+                    "payments.json".to_owned(),
+                    seeded.id.clone(),
+                    "owner".to_owned()
+                ),
+            ],
+            "a grant keyed on an identifier the store no longer holds is the residue a probe \
+             by name cannot see: {report:?}"
+        );
     }
 
     #[test]

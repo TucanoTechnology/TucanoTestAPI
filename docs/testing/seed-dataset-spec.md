@@ -881,7 +881,15 @@ projects, refuses the bootstrap account, and requires at least one `--grant`
 so it can never clear every grant an account holds. It ends with a summary line
 — `unseed-auth: account=removed|absent|kept grants_removed=<n> grants_kept=<n>`
 — which the teardown parses, so an account that was already gone reads as a
-settled teardown rather than as a refusal.
+settled teardown rather than as a refusal. `grants_kept` counts only grants that
+are really on the volume: a named project the account holds no grant on is
+reported in the prose above the summary (`no grant on <project> to remove`) and
+counted as neither removed nor kept, so a second run over an already-cleared
+volume does not report a grant that was never there as one left behind. A grant
+the account does hold on a project this call was *not* pointed at is counted as
+kept, because removing the account does not remove it: the grant file keeps it
+keyed on the identifier, where every lookup that goes through `auth/users.json`
+stops seeing it.
 
 The name it removes is the teardown's, not the seed's: the seed always writes
 `viewer` and `editor`, while `TUCANO_SEED_VIEWER_USERNAME` and
@@ -889,11 +897,20 @@ The name it removes is the teardown's, not the seed's: the seed always writes
 volume whose accounts were created under other names by hand. An `absent`
 outcome is therefore a settled teardown only while the seed's own name holds
 nothing. The subcommand's read-only `--check` mode reports where an account and
-the named grants stand and writes nothing, and the teardown consults it for the
-seed's own name whenever the configured one is missing: an account still found
-there — except a system administrator, which the seed never writes — is reported
-as kept and the run exits `1`, so a name that went astray cannot pass as a clean
-sweep while the seeded account and its grant survive.
+the named grants stand, writes no state, and ends with its own summary line —
+`unseed-auth: check account=… system_admin=… grants_present=… grants_absent=… orphans=…`
+— whose `orphans` count is the grants still recorded, anywhere in the store,
+against an account identifier `auth/users.json` does not hold. Opening the store
+at all creates `auth/`, `auth/projects/` and an empty `.tucano.lock`, even on a
+volume that holds nothing, so a check on a pristine data directory leaves those
+three behind and nothing else. The teardown always runs that check, whichever
+name it was configured with: an orphan it finds is reported as kept and the run
+exits `1`, because a grant keyed on an account that is gone cannot be found by
+looking a name up. When the configured name is not the seed's, the same answer
+also says whether the seed's own account is still there: an account still found
+under it — except a system administrator, which the seed never writes — is
+reported as kept too, so a name that went astray cannot pass as a clean sweep
+while the seeded account and its grant survive.
 
 ## 5. Known gap: auth accounts and role grants
 
@@ -1012,11 +1029,14 @@ Teardown ([§4](#4-teardown-scope)) is implemented by `scripts/teardown.mjs`
 the named projects, refuses the bootstrap account, and reports anything it could
 not resolve instead of guessing. The subcommand ends with a summary line
 (`unseed-auth: account=removed|absent|kept grants_removed=<n> grants_kept=<n>`)
-that the JS half parses, which is what makes a second teardown over an
-already-clean volume exit `0` rather than reporting a false refusal. Since the
-name to remove is the teardown's rather than the seed's, the JS half also drives
-the subcommand's read-only `--check` mode before it accepts a missing account as
-settled ([§4](#4-teardown-scope)).
+that the JS half parses, and counts as kept only the grants that really are on
+the volume — a named project the account holds nothing on is prose, not a kept
+grant — which is what makes a second teardown over an already-clean volume exit
+`0` rather than reporting a false refusal. The JS half also drives the
+subcommand's read-only `--check` mode before it accepts a missing account as
+settled, and reads its `orphans` count for the grants left keyed on an account
+the store no longer holds, whichever name the run was configured with
+([§4](#4-teardown-scope)).
 
 The freshness checks ([§1](#stale-matrix-check)) are implemented by
 `scripts/check-matrix.mjs` (#195), and the two halves of the decision above are
