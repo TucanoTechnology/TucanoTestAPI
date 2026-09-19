@@ -1019,3 +1019,117 @@ async fn a_snapshot_written_before_versioning_lists_without_a_timestamp() {
     assert_eq!(status, StatusCode::OK, "{snapshot}");
     assert_eq!(snapshot, legacy);
 }
+
+/// Deleting a case through a project resolves the project the route names, so
+/// an identifier two projects hold is removed one home at a time and the other
+/// home is left alone.
+#[tokio::test]
+async fn deleting_a_case_through_a_project_resolves_that_project() {
+    let (_directory, app) = test_app();
+
+    let alpha = create_project(&app, "alpha").await;
+    let beta = create_project(&app, "beta").await;
+    for project in [&alpha, &beta] {
+        let created =
+            create_case_in(&app, &format!("/projects/{project}/test_cases"), "TC-001").await;
+        assert_eq!(created, "TC-001");
+    }
+
+    // While two projects hold the identifier, the global route refuses it: a
+    // bare identifier cannot say which occurrence was meant.
+    let (status, body) = send_json(&app, delete("/test_cases/TC-001")).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_error_envelope(&body, "conflict");
+
+    let (status, body) = send_json(
+        &app,
+        delete(&format!("/projects/{alpha}/test_cases/TC-001")),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["message"], "Test case deleted");
+
+    let (status, owned) = send_json(&app, get(&format!("/projects/{alpha}/test_cases"))).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(owned, json!([]), "the named project lost the occurrence");
+    let (status, owned) = send_json(&app, get(&format!("/projects/{beta}/test_cases"))).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(owned, json!(["TC-001"]), "the other home is untouched");
+    let (status, stored) = send_json(&app, get("/test_cases/TC-001")).await;
+    assert_eq!(status, StatusCode::OK, "one home resolves again: {stored}");
+    assert_eq!(stored["title"], "Login");
+
+    // The occurrence this project owned is gone, so a second delete has nothing
+    // left to remove.
+    let (status, body) = send_json(
+        &app,
+        delete(&format!("/projects/{alpha}/test_cases/TC-001")),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+    assert_error_envelope(&body, "not_found");
+}
+
+/// Duplicating a case copies it into the home the source belongs to, so the
+/// copy is addressable under the shared route and the two documents are
+/// independent of each other.
+#[tokio::test]
+async fn duplicating_a_test_case_copies_it_into_the_source_home() {
+    let (_directory, app) = test_app();
+    let project = create_project(&app, "checkout").await;
+    let created = create_case_in(&app, &format!("/projects/{project}/test_cases"), "TC-001").await;
+    assert_eq!(created, "TC-001");
+
+    let (status, duplicated) = send_json(
+        &app,
+        json_request("POST", "/test_cases/TC-001/duplicate", &json!({})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "duplicating: {duplicated}");
+    assert_eq!(duplicated["message"], "Test case duplicated");
+    let copy = duplicated["id"].as_str().expect("copy id");
+    assert!(
+        copy.starts_with("TC-001-copy-"),
+        "unexpected copy id {copy}"
+    );
+    assert!(
+        !copy.ends_with(".json"),
+        "test cases keep bare identifiers: {copy}"
+    );
+
+    let (status, stored) = send_json(&app, get(&format!("/test_cases/{copy}"))).await;
+    assert_eq!(status, StatusCode::OK, "{stored}");
+    assert_eq!(stored["testCaseId"], copy);
+    assert_eq!(stored["title"], "Login");
+    assert_eq!(stored["expectedResult"], "Stored");
+
+    // The copy lands beside the source, so the project lists both.
+    let (status, owned) = send_json(&app, get(&format!("/projects/{project}/test_cases"))).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(owned, json!(["TC-001", copy]));
+
+    let (status, body) = send_json(
+        &app,
+        json_request(
+            "PUT",
+            &format!("/test_cases/{copy}"),
+            &json!({"title": "Logout"}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+
+    let (status, source) = send_json(&app, get("/test_cases/TC-001")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        source["title"], "Login",
+        "editing the copy leaves the source alone"
+    );
+
+    let (status, body) = send_json(&app, delete("/test_cases/TC-001")).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+
+    let (status, survivor) = send_json(&app, get(&format!("/test_cases/{copy}"))).await;
+    assert_eq!(status, StatusCode::OK, "the copy survives: {survivor}");
+    assert_eq!(survivor["title"], "Logout");
+}

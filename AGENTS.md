@@ -110,8 +110,13 @@ Use `cargo search <crate>` inside the pinned Rust environment to confirm the lat
 ```sh
 cargo fmt --all -- --check
 cargo clippy --all-targets --all-features -- -D warnings
-cargo test --all-targets --all-features
+scripts/coverage-check.sh
 ```
+
+`scripts/coverage-check.sh` replaces `cargo test --all-targets --all-features`, which it runs as its
+first pass. The suites record the template of every request the router serves; the script's second
+pass then requires a successful answer for every operation in `openapi.json`. A bare `cargo test`
+only records and asserts nothing about coverage, so use the script when the guarantee matters.
 
 Cover CRUD operations, persistence, attachments, malformed input, traversal, symlinks,
 concurrency, and volume behaviour. Test the production image and Compose configuration for
@@ -124,7 +129,7 @@ startup, health, persistence, and restart behaviour.
 Before committing ANY changes:
 
 1. **Build locally**: `cargo build --release`
-2. **Run all tests**: `cargo test --all-targets --all-features`
+2. **Run all tests**: `scripts/coverage-check.sh`
 3. **Run linters**: `cargo fmt --all -- --check && cargo clippy --all-targets --all-features -- -D warnings`
 4. **Verify locally**: Ensure all tests pass and no warnings exist
 5. **Then commit**: Only after local validation passes

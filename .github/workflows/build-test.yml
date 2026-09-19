@@ -75,7 +75,12 @@ jobs:
           echo "::error::rustup sync failed after 5 attempts"
           exit 1
       - name: Run unit and integration tests
-        run: cargo test --all-targets --all-features
+        # Records every request the router serves and then checks that each
+        # operation in openapi.json was driven to a successful answer; its first
+        # pass is `cargo test --all-targets --all-features`, so this step costs
+        # one suite run, not two. The declaration table in tests/service.rs can
+        # only prove a covering test exists; this proves it reached the route.
+        run: scripts/coverage-check.sh
 
   release:
     name: Build release

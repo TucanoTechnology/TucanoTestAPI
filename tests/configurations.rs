@@ -2,8 +2,8 @@ mod common;
 
 use axum::http::StatusCode;
 use common::{
-    app_at, assert_error_envelope, delete, fixture_home, get, json_request, project_folder,
-    send_json, test_app,
+    app_at, assert_error_envelope, create_project, delete, fixture_home, get, json_request,
+    project_folder, send_json, test_app,
 };
 use serde_json::json;
 use tempfile::TempDir;
@@ -489,4 +489,74 @@ async fn a_partial_update_keeps_the_fields_the_body_leaves_out() {
     assert_eq!(stored["resolution"], "1920x1080");
     assert_eq!(stored["browser"], "Chrome");
     assert_eq!(stored["configId"], "chrome-linux.json");
+}
+
+/// Deleting a configuration through a project resolves the project the route
+/// names, so an identifier two projects hold is removed one home at a time and
+/// the other home is left alone.
+#[tokio::test]
+async fn deleting_a_configuration_through_a_project_resolves_that_project() {
+    let (_directory, app) = test_app();
+
+    let alpha = create_project(&app, "alpha").await;
+    let beta = create_project(&app, "beta").await;
+    for project in [&alpha, &beta] {
+        let (status, created) = send_json(
+            &app,
+            json_request(
+                "POST",
+                &format!("/projects/{project}/configurations"),
+                &json!({"name": "chrome-linux", "browser": "Chrome", "os": "Linux"}),
+            ),
+        )
+        .await;
+        assert_eq!(
+            status,
+            StatusCode::CREATED,
+            "creating in {project}: {created}"
+        );
+        assert_eq!(created["id"], "chrome-linux.json");
+    }
+
+    // While two projects hold the identifier, the global route refuses it: a
+    // bare identifier cannot say which occurrence was meant.
+    let (status, body) = send_json(&app, delete("/configurations/chrome-linux.json")).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_error_envelope(&body, "conflict");
+
+    let (status, body) = send_json(
+        &app,
+        delete(&format!(
+            "/projects/{alpha}/configurations/chrome-linux.json"
+        )),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["message"], "Test configuration deleted");
+
+    let (status, owned) = send_json(&app, get(&format!("/projects/{alpha}/configurations"))).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(owned, json!([]), "the named project lost the occurrence");
+    let (status, owned) = send_json(&app, get(&format!("/projects/{beta}/configurations"))).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        owned,
+        json!(["chrome-linux.json"]),
+        "the other home is untouched"
+    );
+    let (status, stored) = send_json(&app, get("/configurations/chrome-linux.json")).await;
+    assert_eq!(status, StatusCode::OK, "one home resolves again: {stored}");
+    assert_eq!(stored["browser"], "Chrome");
+
+    // The occurrence this project owned is gone, so a second delete has nothing
+    // left to remove.
+    let (status, body) = send_json(
+        &app,
+        delete(&format!(
+            "/projects/{alpha}/configurations/chrome-linux.json"
+        )),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+    assert_error_envelope(&body, "not_found");
 }

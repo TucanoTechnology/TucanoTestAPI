@@ -2,8 +2,8 @@ mod common;
 
 use axum::http::StatusCode;
 use common::{
-    assert_error_envelope, case_body, create_suite, delete, fixture_home, get, json_request,
-    send_json, test_app, xml_request,
+    assert_error_envelope, case_body, create_project, create_suite, delete, fixture_home, get,
+    json_request, send_json, test_app, xml_request,
 };
 use serde_json::{Value, json};
 
@@ -571,4 +571,66 @@ async fn a_partial_update_keeps_the_fields_the_body_leaves_out() {
     assert_eq!(stored["status"], "Completed");
     assert_eq!(stored["name"], "Sprint 42");
     assert_eq!(stored["targetDate"], "2026-09-15");
+}
+
+/// Deleting a milestone through a project resolves the project the route names,
+/// so an identifier two projects hold is removed one home at a time and the
+/// other home is left alone.
+#[tokio::test]
+async fn deleting_a_milestone_through_a_project_resolves_that_project() {
+    let (_directory, app) = test_app();
+
+    let alpha = create_project(&app, "alpha").await;
+    let beta = create_project(&app, "beta").await;
+    for project in [&alpha, &beta] {
+        let (status, created) = send_json(
+            &app,
+            json_request(
+                "POST",
+                &format!("/projects/{project}/milestones"),
+                &json!({"name": "M-1", "status": "Open"}),
+            ),
+        )
+        .await;
+        assert_eq!(
+            status,
+            StatusCode::CREATED,
+            "creating in {project}: {created}"
+        );
+        assert_eq!(created["id"], "M-1.json");
+    }
+
+    // While two projects hold the identifier, the global route refuses it: a
+    // bare identifier cannot say which occurrence was meant.
+    let (status, body) = send_json(&app, delete("/milestones/M-1.json")).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_error_envelope(&body, "conflict");
+
+    let (status, body) = send_json(
+        &app,
+        delete(&format!("/projects/{alpha}/milestones/M-1.json")),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["message"], "Milestone deleted");
+
+    let (status, owned) = send_json(&app, get(&format!("/projects/{alpha}/milestones"))).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(owned, json!([]), "the named project lost the occurrence");
+    let (status, owned) = send_json(&app, get(&format!("/projects/{beta}/milestones"))).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(owned, json!(["M-1.json"]), "the other home is untouched");
+    let (status, stored) = send_json(&app, get("/milestones/M-1.json")).await;
+    assert_eq!(status, StatusCode::OK, "one home resolves again: {stored}");
+    assert_eq!(stored["status"], "Open");
+
+    // The occurrence this project owned is gone, so a second delete has nothing
+    // left to remove.
+    let (status, body) = send_json(
+        &app,
+        delete(&format!("/projects/{alpha}/milestones/M-1.json")),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+    assert_error_envelope(&body, "not_found");
 }

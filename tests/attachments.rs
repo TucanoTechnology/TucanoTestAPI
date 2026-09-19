@@ -681,6 +681,14 @@ async fn a_parent_scoped_attachment_route_reaches_the_occurrence_it_names() {
     let (status, contents) = send(&app, get(&format!("{suite_uri}/{suite_file}"))).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(contents, b"suite copy");
+
+    // The suite-scoped delete is answered the same way, and the file it names is
+    // the only one it removes.
+    let (status, _) = send_json(&app, delete(&format!("{suite_uri}/{suite_file}"))).await;
+    assert_eq!(status, StatusCode::OK);
+
+    let (status, _) = send(&app, get(&format!("{suite_uri}/{suite_file}"))).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
 }
 
 #[tokio::test]
@@ -774,6 +782,15 @@ async fn a_parent_scoped_step_attachment_route_reaches_the_occurrence_it_names()
     let (status, listing) = send_json(&app, get(&suite_uri)).await;
     assert_eq!(status, StatusCode::OK, "the suite's step file survives");
     assert_eq!(listing[0]["filename"], suite_file.as_str());
+
+    // The suite-scoped step delete is answered the same way, and the listing
+    // that reaches the occurrence reports the file gone.
+    let (status, _) = send_json(&app, delete(&format!("{suite_uri}/{suite_file}"))).await;
+    assert_eq!(status, StatusCode::OK);
+
+    let (status, listing) = send_json(&app, get(&suite_uri)).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(listing, json!([]));
 }
 
 #[tokio::test]
