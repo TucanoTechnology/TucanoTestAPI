@@ -4,10 +4,17 @@
 
 use axum::Router;
 use axum::body::Body;
+use axum::extract::MatchedPath;
 use axum::http::{HeaderMap, Request, StatusCode, header};
+use axum::middleware::{self, Next};
+use axum::response::Response;
 use http_body_util::BodyExt;
 use serde_json::{Value, json};
-use std::path::Path;
+use std::collections::BTreeSet;
+use std::fs::OpenOptions;
+use std::io::Write;
+use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 use std::time::Duration;
 use tempfile::TempDir;
 use tower::ServiceExt;
@@ -37,7 +44,10 @@ pub fn app_at(path: &Path) -> Router {
         bootstrap_username: None,
         bootstrap_password: None,
     };
-    api::router(repository, api::auth::AuthState::new(store, config))
+    with_probe(api::router(
+        repository,
+        api::auth::AuthState::new(store, config),
+    ))
 }
 
 /// Like [`app_at`], but with a custom advisory-lock timeout for both the
@@ -58,7 +68,102 @@ pub fn app_at_with_lock_timeout(path: &Path, timeout: Duration) -> Router {
         bootstrap_username: None,
         bootstrap_password: None,
     };
-    api::router(repository, api::auth::AuthState::new(store, config))
+    with_probe(api::router(
+        repository,
+        api::auth::AuthState::new(store, config),
+    ))
+}
+
+/// Wraps a router so every request that reaches a route is recorded.
+///
+/// The extra layer is inert unless a coverage run names a log file with
+/// `TUCANO_ROUTE_LOG`, so the suites pay a branch and nothing else. It is inert
+/// on the checking pass too, which reads the recording rather than adding to it.
+///
+/// It belongs outside the routes, which is why every caller here applies it to
+/// the finished router: axum runs a layer added that way *after* routing, which
+/// is what puts [`MatchedPath`] in the request extensions.
+pub fn with_probe(router: Router) -> Router {
+    router.layer(middleware::from_fn(record_route))
+}
+
+/// Appends `method template status` for the route the request resolved to.
+///
+/// `MatchedPath` holds the *registered* template — `/test_suites/{id}` rather
+/// than the identifier the caller happened to use — which is the same label
+/// [`documented_operations`] reads out of the contract, so a recording can be
+/// compared to the document without guessing at either side.
+async fn record_route(request: Request<Body>, next: Next) -> Response {
+    let observed = request.extensions().get::<MatchedPath>().map(|matched| {
+        format!(
+            "{} {}",
+            request.method().as_str().to_ascii_lowercase(),
+            matched.as_str()
+        )
+    });
+    let response = next.run(request).await;
+    if let (Some(log), Some(observed)) = (route_log(), observed) {
+        let line = format!("{observed} {}\n", response.status().as_u16());
+        // Appending rather than rewriting keeps concurrent test threads — and a
+        // suite run after another — from losing each other's lines.
+        if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(log) {
+            let _ = file.write_all(line.as_bytes());
+        }
+    }
+    response
+}
+
+/// The log [`record_route`] appends to, or `None` when no run asked for one.
+///
+/// The checking pass reads the recording and must not add to it: that pass
+/// fetches the document over the same probed router, and letting that request
+/// land in the file would let a second run supply evidence for `get
+/// /openapi.json` out of the checker itself rather than out of a suite.
+fn route_log() -> Option<&'static Path> {
+    static LOG: OnceLock<Option<PathBuf>> = OnceLock::new();
+    LOG.get_or_init(|| {
+        if std::env::var_os("TUCANO_ROUTE_LOG_ASSERT").is_some() {
+            return None;
+        }
+        std::env::var_os("TUCANO_ROUTE_LOG").map(PathBuf::from)
+    })
+    .as_deref()
+}
+
+/// The `method path` labels the served document describes.
+///
+/// This mirrors the derivation `tests/service.rs` uses to pair each documented
+/// operation with its covering test, so the two agree on what "documented"
+/// means: the paths the document declares, each with the methods it declares
+/// for it.
+pub fn documented_operations(document: &Value) -> BTreeSet<String> {
+    const METHODS: [&str; 4] = ["get", "put", "post", "delete"];
+
+    let mut operations = BTreeSet::new();
+    for (path, item) in document["paths"].as_object().expect("paths object") {
+        let item = dereference(document, item);
+        for method in METHODS {
+            if item.get(method).is_some() {
+                operations.insert(format!("{method} {path}"));
+            }
+        }
+    }
+    operations
+}
+
+/// Follows a local `$ref` one level, so a path item can be read where it is
+/// defined.
+fn dereference<'a>(document: &'a Value, node: &'a Value) -> &'a Value {
+    let Some(pointer) = node.get("$ref").and_then(Value::as_str) else {
+        return node;
+    };
+    let mut target = document;
+    for segment in pointer.trim_start_matches("#/").split('/') {
+        target = target
+            .get(segment)
+            .unwrap_or_else(|| panic!("unresolved reference: {pointer}"));
+    }
+    target
 }
 
 pub async fn send_full(app: &Router, request: Request<Body>) -> (StatusCode, HeaderMap, Vec<u8>) {

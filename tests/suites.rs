@@ -433,3 +433,52 @@ async fn a_partial_update_keeps_the_fields_the_body_leaves_out() {
     assert_eq!(assembled["testSuites"][0]["suiteId"], "S-001");
     assert_eq!(assembled["testSuites"][0]["description"], "nightly");
 }
+
+/// Duplicating a suite copies it into the project that holds the source, so the
+/// copy is addressable under the shared route and the two documents are
+/// independent of each other.
+#[tokio::test]
+async fn duplicating_a_test_suite_copies_it_into_the_source_project() {
+    let (_directory, app) = test_app();
+    let project = create_project(&app, "checkout").await;
+    let suite = create_suite(&app, &project, "smoke").await;
+    assert_eq!(suite, "smoke.json");
+
+    let (status, duplicated) = send_json(
+        &app,
+        json_request(
+            "POST",
+            &format!("/test_suites/{suite}/duplicate"),
+            &json!({"newName": "regression"}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "duplicating: {duplicated}");
+    assert_eq!(duplicated["message"], "Test suite duplicated");
+    let copy = duplicated["id"].as_str().expect("copy id");
+    assert!(copy.starts_with("smoke-copy-"), "unexpected copy id {copy}");
+    assert!(copy.ends_with(".json"), "unexpected copy id {copy}");
+
+    let (status, stored) = send_json(&app, get(&format!("/test_suites/{copy}"))).await;
+    assert_eq!(status, StatusCode::OK, "{stored}");
+    assert_eq!(stored["suiteId"], copy);
+    assert_eq!(stored["name"], "regression");
+
+    // Only the body's `newName` renames the copy; the source keeps its own name.
+    let (status, source) = send_json(&app, get(&format!("/test_suites/{suite}"))).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(source["name"], "smoke");
+
+    // The copy lands beside the source, so the project lists both, in folder
+    // order: the source's folder name is a prefix of the copy's.
+    let (status, owned) = send_json(&app, get(&format!("/projects/{project}/test_suites"))).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(owned, json!([suite, copy]));
+
+    let (status, body) = send_json(&app, delete(&format!("/test_suites/{suite}"))).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+
+    let (status, survivor) = send_json(&app, get(&format!("/test_suites/{copy}"))).await;
+    assert_eq!(status, StatusCode::OK, "the copy survives: {survivor}");
+    assert_eq!(survivor["name"], "regression");
+}

@@ -2026,3 +2026,69 @@ async fn recording_a_result_pins_the_version_of_the_case_the_store_holds() {
     assert_eq!(run["caseVersions"]["TC-001"], json!(2));
     assert_eq!(run["caseVersions"]["TC-404"], json!(1));
 }
+
+/// Deleting a run through a project resolves the project the route names, so an
+/// identifier two projects hold is removed one home at a time and the other
+/// home is left alone.
+#[tokio::test]
+async fn deleting_a_run_through_a_project_resolves_that_project() {
+    let (_directory, app) = test_app();
+
+    let alpha = create_project(&app, "alpha").await;
+    let beta = create_project(&app, "beta").await;
+    for project in [&alpha, &beta] {
+        let (status, created) = send_json(
+            &app,
+            json_request(
+                "POST",
+                &format!("/projects/{project}/test_runs"),
+                &json!({"name": "nightly"}),
+            ),
+        )
+        .await;
+        assert_eq!(
+            status,
+            StatusCode::CREATED,
+            "creating in {project}: {created}"
+        );
+        assert_eq!(created["id"], "nightly.json");
+    }
+
+    // While two projects hold the identifier, the global route refuses it: a
+    // bare identifier cannot say which occurrence was meant.
+    let (status, body) = send_json(&app, delete("/test_runs/nightly.json")).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_error_envelope(&body, "conflict");
+
+    let (status, body) = send_json(
+        &app,
+        delete(&format!("/projects/{alpha}/test_runs/nightly.json")),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["message"], "Test run deleted");
+
+    let (status, owned) = send_json(&app, get(&format!("/projects/{alpha}/test_runs"))).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(owned, json!([]), "the named project lost the occurrence");
+    let (status, owned) = send_json(&app, get(&format!("/projects/{beta}/test_runs"))).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        owned,
+        json!(["nightly.json"]),
+        "the other home is untouched"
+    );
+    let (status, stored) = send_json(&app, get("/test_runs/nightly.json")).await;
+    assert_eq!(status, StatusCode::OK, "one home resolves again: {stored}");
+    assert_eq!(stored["name"], "nightly");
+
+    // The occurrence this project owned is gone, so a second delete has nothing
+    // left to remove.
+    let (status, body) = send_json(
+        &app,
+        delete(&format!("/projects/{alpha}/test_runs/nightly.json")),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+    assert_error_envelope(&body, "not_found");
+}

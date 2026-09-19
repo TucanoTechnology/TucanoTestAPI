@@ -827,6 +827,473 @@ async fn openapi_documents_the_error_contract_of_every_operation() {
     }
 }
 
+/// Every operation the document publishes, paired with the test that proves it
+/// answers successfully.
+///
+/// The table is written out rather than derived, because a covering test is one
+/// whose body drives the operation *and* asserts its success — a property no
+/// scanner reads out of the source with confidence. Writing the pair down keeps
+/// the check honest in both directions: a new operation fails the build until it
+/// names a test, and a table entry whose operation disappeared fails too, since
+/// the check compares the two label sets as sets.
+///
+/// A row may not cite one of `GENERIC_MATRIX_TESTS`. Those tests walk a list of
+/// routes to prove a *shared* refusal — the 4xx every guarded or malformed call
+/// produces — which says nothing about whether an operation answers at all.
+/// Letting them serve as evidence once kept the check green while the success
+/// paths of six operations had no test of their own.
+///
+/// This table is the declaration half of the guarantee: it says which test
+/// *should* drive each operation. `tests/route_coverage.rs`, run through
+/// `scripts/coverage-check.sh`, is the observed half — the router records every
+/// request it served and that check demands a successful answer for each
+/// documented operation, so a route renamed out from under a row fails, as does
+/// an operation nothing reached or one that only ever answered an error.
+///
+/// Neither half subsumes the other. The table names a test but cannot see
+/// whether it reaches the route; the recording sees a success but cannot say
+/// which test produced it, only that one in the run did. Keep both.
+const CONTRACT_COVERAGE: [(&str, &str); 85] = [
+    ("get /health", "health_reports_filesystem_storage"),
+    (
+        "get /openapi.json",
+        "openapi_declares_the_security_posture_of_every_operation",
+    ),
+    (
+        "get /api-docs",
+        "swagger_ui_is_served_with_and_without_trailing_slash",
+    ),
+    (
+        "get /ready",
+        "ready_reports_the_store_behind_a_live_process",
+    ),
+    (
+        "get /diagnostics",
+        "diagnostics_reports_the_probe_and_names_no_path",
+    ),
+    ("get /projects", "projects_support_the_full_crud_lifecycle"),
+    ("post /projects", "projects_support_the_full_crud_lifecycle"),
+    (
+        "get /projects/{id}",
+        "projects_support_the_full_crud_lifecycle",
+    ),
+    (
+        "put /projects/{id}",
+        "projects_support_the_full_crud_lifecycle",
+    ),
+    (
+        "delete /projects/{id}",
+        "projects_support_the_full_crud_lifecycle",
+    ),
+    (
+        "post /projects/{id}/duplicate",
+        "a_duplicate_without_a_new_id_derives_an_addressable_identifier",
+    ),
+    (
+        "get /projects/{id}/test_suites",
+        "test_suites_support_the_full_crud_lifecycle",
+    ),
+    (
+        "post /projects/{id}/test_suites",
+        "a_suite_can_be_placed_into_another_project",
+    ),
+    (
+        "delete /projects/{id}/test_suites/{suite_id}",
+        "deleting_a_suite_through_its_project_removes_it",
+    ),
+    (
+        "get /projects/{id}/test_cases",
+        "deleting_a_case_through_a_project_resolves_that_project",
+    ),
+    (
+        "post /projects/{id}/test_cases",
+        "a_copied_case_carries_the_revision_snapshots_of_its_source",
+    ),
+    (
+        "delete /projects/{id}/test_cases/{case_id}",
+        "deleting_a_case_through_a_project_resolves_that_project",
+    ),
+    (
+        "post /projects/{id}/test_cases/{case_id}/attachments",
+        "a_parent_scoped_attachment_route_reaches_the_occurrence_it_names",
+    ),
+    (
+        "get /projects/{id}/test_cases/{case_id}/attachments/{filename}",
+        "a_parent_scoped_attachment_route_reaches_the_occurrence_it_names",
+    ),
+    (
+        "delete /projects/{id}/test_cases/{case_id}/attachments/{filename}",
+        "a_parent_scoped_attachment_route_reaches_the_occurrence_it_names",
+    ),
+    (
+        "get /projects/{id}/test_cases/{case_id}/steps/{step_index}/attachments",
+        "a_parent_scoped_step_attachment_route_reaches_the_occurrence_it_names",
+    ),
+    (
+        "post /projects/{id}/test_cases/{case_id}/steps/{step_index}/attachments",
+        "a_parent_scoped_step_attachment_route_reaches_the_occurrence_it_names",
+    ),
+    (
+        "delete /projects/{id}/test_cases/{case_id}/steps/{step_index}/attachments/{filename}",
+        "a_parent_scoped_step_attachment_route_reaches_the_occurrence_it_names",
+    ),
+    (
+        "get /projects/{id}/test_runs",
+        "deleting_a_run_through_a_project_resolves_that_project",
+    ),
+    (
+        "post /projects/{id}/test_runs",
+        "deleting_a_run_through_a_project_resolves_that_project",
+    ),
+    (
+        "delete /projects/{id}/test_runs/{run_id}",
+        "deleting_a_run_through_a_project_resolves_that_project",
+    ),
+    (
+        "get /projects/{id}/milestones",
+        "deleting_a_milestone_through_a_project_resolves_that_project",
+    ),
+    (
+        "post /projects/{id}/milestones",
+        "deleting_a_milestone_through_a_project_resolves_that_project",
+    ),
+    (
+        "delete /projects/{id}/milestones/{milestone_id}",
+        "deleting_a_milestone_through_a_project_resolves_that_project",
+    ),
+    (
+        "get /projects/{id}/configurations",
+        "deleting_a_configuration_through_a_project_resolves_that_project",
+    ),
+    (
+        "post /projects/{id}/configurations",
+        "deleting_a_configuration_through_a_project_resolves_that_project",
+    ),
+    (
+        "delete /projects/{id}/configurations/{config_id}",
+        "deleting_a_configuration_through_a_project_resolves_that_project",
+    ),
+    (
+        "get /test_suites/{id}",
+        "duplicating_a_test_suite_copies_it_into_the_source_project",
+    ),
+    (
+        "put /test_suites/{id}",
+        "test_suites_support_the_full_crud_lifecycle",
+    ),
+    (
+        "delete /test_suites/{id}",
+        "duplicating_a_test_suite_copies_it_into_the_source_project",
+    ),
+    (
+        "post /test_suites/{id}/duplicate",
+        "duplicating_a_test_suite_copies_it_into_the_source_project",
+    ),
+    (
+        "get /test_suites/{id}/test_cases",
+        "test_suites_support_incremental_case_composition",
+    ),
+    (
+        "post /test_suites/{id}/test_cases",
+        "test_suites_support_incremental_case_composition",
+    ),
+    (
+        "delete /test_suites/{id}/test_cases/{case_id}",
+        "test_suites_support_incremental_case_composition",
+    ),
+    (
+        "post /test_suites/{id}/test_cases/{case_id}/attachments",
+        "a_parent_scoped_attachment_route_reaches_the_occurrence_it_names",
+    ),
+    (
+        "get /test_suites/{id}/test_cases/{case_id}/attachments/{filename}",
+        "a_parent_scoped_attachment_route_reaches_the_occurrence_it_names",
+    ),
+    (
+        "delete /test_suites/{id}/test_cases/{case_id}/attachments/{filename}",
+        "a_parent_scoped_attachment_route_reaches_the_occurrence_it_names",
+    ),
+    (
+        "get /test_suites/{id}/test_cases/{case_id}/steps/{step_index}/attachments",
+        "a_parent_scoped_step_attachment_route_reaches_the_occurrence_it_names",
+    ),
+    (
+        "post /test_suites/{id}/test_cases/{case_id}/steps/{step_index}/attachments",
+        "a_parent_scoped_step_attachment_route_reaches_the_occurrence_it_names",
+    ),
+    (
+        "delete /test_suites/{id}/test_cases/{case_id}/steps/{step_index}/attachments/{filename}",
+        "a_parent_scoped_step_attachment_route_reaches_the_occurrence_it_names",
+    ),
+    (
+        "get /test_runs/{id}",
+        "a_partial_update_keeps_the_fields_the_body_leaves_out",
+    ),
+    (
+        "put /test_runs/{id}",
+        "test_runs_support_the_full_crud_lifecycle",
+    ),
+    (
+        "delete /test_runs/{id}",
+        "test_runs_support_the_full_crud_lifecycle",
+    ),
+    (
+        "post /test_runs/{id}/duplicate",
+        "duplicating_a_run_preserves_its_configuration_links",
+    ),
+    (
+        "post /test_runs/{id}/test_suites",
+        "test_runs_support_composition_execution_and_isolation",
+    ),
+    (
+        "post /test_runs/{id}/test_cases",
+        "test_runs_support_composition_execution_and_isolation",
+    ),
+    (
+        "post /test_runs/{id}/results",
+        "test_runs_support_composition_execution_and_isolation",
+    ),
+    (
+        "get /test_runs/{id}/results/{case_id}/defects",
+        "listing_defects_returns_the_links_a_result_carries",
+    ),
+    (
+        "post /test_runs/{id}/results/{case_id}/defects",
+        "a_defect_link_can_be_removed_and_is_then_gone",
+    ),
+    (
+        "delete /test_runs/{id}/results/{case_id}/defects/{link_id}",
+        "a_defect_link_can_be_removed_and_is_then_gone",
+    ),
+    (
+        "post /test_runs/{id}/import/junit",
+        "a_junit_report_counts_duplicates_and_leaves_them_alone",
+    ),
+    (
+        "post /test_runs/{id}/import/json",
+        "a_json_import_counts_duplicates_and_leaves_them_alone",
+    ),
+    (
+        "post /test_runs/{id}/configurations",
+        "a_run_links_and_unlinks_a_top_level_configuration",
+    ),
+    (
+        "delete /test_runs/{id}/configurations/{config_id}",
+        "a_run_links_and_unlinks_a_top_level_configuration",
+    ),
+    (
+        "get /test_cases/{id}",
+        "a_new_test_case_is_stamped_with_its_first_version",
+    ),
+    (
+        "put /test_cases/{id}",
+        "duplicating_a_test_case_copies_it_into_the_source_home",
+    ),
+    (
+        "delete /test_cases/{id}",
+        "duplicating_a_test_case_copies_it_into_the_source_home",
+    ),
+    (
+        "post /test_cases/{id}/duplicate",
+        "duplicating_a_test_case_copies_it_into_the_source_home",
+    ),
+    (
+        "post /test_cases/{id}/attachments",
+        "attachments_are_removed_with_their_test_case",
+    ),
+    (
+        "get /test_cases/{id}/attachments/{filename}",
+        "attachment_downloads_are_opaque_and_named_for_the_client",
+    ),
+    (
+        "delete /test_cases/{id}/attachments/{filename}",
+        "attachments_support_upload_download_and_delete",
+    ),
+    (
+        "get /test_cases/{id}/steps/{step_index}/attachments",
+        "a_step_attachment_name_may_not_traverse",
+    ),
+    (
+        "post /test_cases/{id}/steps/{step_index}/attachments",
+        "a_step_attachment_name_may_not_traverse",
+    ),
+    (
+        "delete /test_cases/{id}/steps/{step_index}/attachments/{filename}",
+        "step_attachments_do_not_collide_with_case_attachments",
+    ),
+    (
+        "get /test_cases/{id}/history",
+        "a_case_without_qualifying_updates_has_an_empty_history",
+    ),
+    (
+        "get /test_cases/{id}/history/{version}",
+        "a_recorded_revision_is_returned_verbatim_and_the_live_version_is_not_a_snapshot",
+    ),
+    (
+        "get /milestones/{id}",
+        "a_milestone_created_from_a_name_alone_reads_back_and_reports_progress",
+    ),
+    (
+        "put /milestones/{id}",
+        "duplicating_a_milestone_copies_it_into_an_independent_document",
+    ),
+    (
+        "delete /milestones/{id}",
+        "deleting_a_milestone_through_a_project_resolves_that_project",
+    ),
+    (
+        "post /milestones/{id}/duplicate",
+        "duplicating_a_milestone_copies_it_into_an_independent_document",
+    ),
+    (
+        "get /milestones/{id}/progress",
+        "a_milestone_created_from_a_name_alone_reads_back_and_reports_progress",
+    ),
+    (
+        "get /reports/coverage",
+        "a_global_report_sums_every_project",
+    ),
+    (
+        "get /reports/summary",
+        "an_empty_tree_reports_an_all_zero_summary",
+    ),
+    (
+        "get /configurations/{id}",
+        "a_configuration_created_from_a_name_alone_reads_back_as_its_model",
+    ),
+    (
+        "put /configurations/{id}",
+        "an_update_cannot_move_a_configuration_identity_away_from_its_id",
+    ),
+    (
+        "delete /configurations/{id}",
+        "configurations_support_the_full_crud_lifecycle",
+    ),
+    (
+        "post /auth/login",
+        "signing_in_answers_a_session_the_api_accepts",
+    ),
+    (
+        "post /auth/refresh",
+        "a_refresh_token_is_spent_by_the_exchange_that_uses_it",
+    ),
+    (
+        "post /auth/logout",
+        "signing_out_revokes_the_refresh_token_it_names",
+    ),
+    (
+        "get /auth/me",
+        "signing_in_answers_a_session_the_api_accepts",
+    ),
+];
+
+/// Tests that assert one shared refusal across a matrix of operations.
+///
+/// They are the API's role and malformation sweeps: each drives many routes and
+/// asserts the status they must all refuse with, and none of them asserts that a
+/// route answers correctly. They are listed here so `CONTRACT_COVERAGE` cannot
+/// quietly fall back on one of them for an operation's only evidence.
+const GENERIC_MATRIX_TESTS: [&str; 8] = [
+    "every_guarded_operation_refuses_an_anonymous_caller",
+    "a_viewer_reads_the_projects_it_reaches_and_cannot_write",
+    "an_editor_writes_content_but_not_projects_or_milestones",
+    "a_caller_with_no_grant_sees_nothing",
+    "a_body_the_endpoint_does_not_understand_is_an_invalid_request",
+    "an_unusable_path_identifier_is_answered_with_invalid_id",
+    "a_parent_scoped_attachment_route_requires_the_named_parent_to_hold_the_case",
+    "test_cross_resource_lock_contention",
+];
+
+/// The names of every top-level `#[test]` and `#[tokio::test]` function below
+/// `tests/`.
+///
+/// Only column-zero declarations count, so a test nested in a module — those are
+/// unit-style tests over the storage layer — is not mistaken for an integration
+/// test, and `tests/common/` is skipped because a directory is not a source file
+/// and its helpers are not tests.
+fn declared_tests() -> BTreeSet<String> {
+    let mut names = BTreeSet::new();
+    let directory = concat!(env!("CARGO_MANIFEST_DIR"), "/tests");
+    for entry in std::fs::read_dir(directory).expect("tests/ is readable") {
+        let path = entry.expect("a tests/ entry").path();
+        if path.extension().and_then(std::ffi::OsStr::to_str) != Some("rs") {
+            continue;
+        }
+        let source = std::fs::read_to_string(&path).expect("a test file is readable");
+        let mut annotated = false;
+        for line in source.lines() {
+            if line.starts_with("#[") {
+                annotated =
+                    annotated || line.starts_with("#[test]") || line.starts_with("#[tokio::test");
+                continue;
+            }
+            if let Some(rest) = line
+                .strip_prefix("async fn ")
+                .or_else(|| line.strip_prefix("fn "))
+            {
+                if annotated {
+                    let name = rest.split(['(', ' ', '<']).next().unwrap_or_default();
+                    names.insert(name.to_owned());
+                }
+                annotated = false;
+            } else if !line.trim().is_empty() {
+                annotated = false;
+            }
+        }
+    }
+    names
+}
+
+/// Every operation the API documents is proven by a test of its own.
+///
+/// The document is the contract, so an operation added to `openapi.json` without
+/// a test that asserts its success fails here rather than shipping unverified.
+#[tokio::test]
+async fn every_documented_operation_has_a_covering_test() {
+    let (_directory, app) = test_app();
+    let (status, document) = send_json(&app, get("/openapi.json")).await;
+    assert_eq!(status, StatusCode::OK);
+
+    let documented: BTreeSet<String> = documented_operations(&document)
+        .into_iter()
+        .map(|(label, _)| label)
+        .collect();
+    let covered: BTreeSet<String> = CONTRACT_COVERAGE
+        .iter()
+        .map(|(label, _)| (*label).to_owned())
+        .collect();
+
+    let uncovered: Vec<&String> = documented.difference(&covered).collect();
+    assert!(
+        uncovered.is_empty(),
+        "documented operations with no covering test: {uncovered:?}"
+    );
+
+    let unknown: Vec<&String> = covered.difference(&documented).collect();
+    assert!(
+        unknown.is_empty(),
+        "table entries that name no documented operation: {unknown:?}"
+    );
+
+    let declared = declared_tests();
+    for generic in GENERIC_MATRIX_TESTS {
+        assert!(
+            declared.contains(generic),
+            "{generic} is listed as a shared matrix test but does not exist"
+        );
+    }
+    for (label, test) in CONTRACT_COVERAGE {
+        assert!(
+            declared.contains(test),
+            "{label} is covered by {test}, which is not a test in tests/"
+        );
+        assert!(
+            !GENERIC_MATRIX_TESTS.contains(&test),
+            "{label} is covered only by the shared matrix test {test}"
+        );
+    }
+}
+
 /// The three attachment downloads are the document's only binary answers, and
 /// each is typed as bytes and names the file for the client.
 ///

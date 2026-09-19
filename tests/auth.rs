@@ -170,7 +170,10 @@ fn enforcing_app_for(directory: &Path, system_admin: bool, grants: &[(&str, Role
             .expect("grant the role");
     }
     let repository = FileRepository::new(directory).expect("repository");
-    api::router(repository, api::auth::AuthState::new(store, config()))
+    common::with_probe(api::router(
+        repository,
+        api::auth::AuthState::new(store, config()),
+    ))
 }
 
 fn enforcing_app_with_grants(directory: &Path, grants: &[(&str, Role)]) -> Router {
@@ -507,10 +510,10 @@ fn config_without_enforcement() -> AuthConfig {
 fn seeding_app(directory: &Path) -> Router {
     let store = AuthStore::new(directory).expect("auth store");
     let repository = FileRepository::new(directory).expect("repository");
-    api::router(
+    common::with_probe(api::router(
         repository,
         api::auth::AuthState::new(store, config_without_enforcement()),
-    )
+    ))
 }
 
 fn case_body(id: &str) -> Value {

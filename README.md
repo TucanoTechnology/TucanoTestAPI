@@ -152,8 +152,12 @@ From the container or a host with the pinned toolchain installed:
 ```sh
 cargo fmt --all -- --check
 cargo clippy --all-targets --all-features -- -D warnings
-cargo test --all-targets --all-features
+scripts/coverage-check.sh
 ```
+
+`scripts/coverage-check.sh` runs the full suite and then checks the contract: every operation in
+`openapi.json` must have been driven to a successful answer by the tests that ran. It replaces
+`cargo test --all-targets --all-features`, which it runs as its first pass — see [Testing](#testing).
 
 Validate the workflow files with the same linter CI uses:
 
@@ -177,7 +181,7 @@ Tests are split into two layers and both run in CI on every push and pull reques
 
 | Suite | Covers |
 | --- | --- |
-| `tests/service.rs` | Health, readiness and storage diagnostics, OpenAPI document and its error contract, Swagger UI, malformed bodies, traversal rejection, the identifier and size-limit error answers, the on-disk tree layout, persistence across restarts |
+| `tests/service.rs` | Health, readiness and storage diagnostics, OpenAPI document and its error contract, Swagger UI, malformed bodies, traversal rejection, the identifier and size-limit error answers, the on-disk tree layout, persistence across restarts, and the coverage table that fails when a documented operation has no covering test |
 | `tests/projects.rs` | Project CRUD, validation, conflicts, error envelopes |
 | `tests/suites.rs` | Test suite CRUD, parent-scoped creation, copy/move composition, ambiguity conflicts, missing resources |
 | `tests/runs.rs` | Test run CRUD, validation, conflicts, missing resources, the case-version capture each run records, JUnit XML and JSON result import, and listing, linking and unlinking the defect links a result carries |
@@ -190,10 +194,37 @@ Tests are split into two layers and both run in CI on every push and pull reques
 | `tests/tags.rs` | The `tags` array on projects, suites, cases and runs, the shared `?tags=` OR filter, and the OpenAPI parameter it is published through |
 | `tests/validation.rs` | Scalar type validation: wrong-typed fields rejected on create and update with the field named, valid and omitted fields accepted, and documents persisted before the change still readable |
 | `tests/security_tests.rs` | Path traversal, symlink escape, malformed JSON, repository-level leniency, and concurrent writers |
+| `tests/route_coverage.rs` | What the router actually served: every operation in `openapi.json` must have been driven to a successful answer during the run. Reads the recording the shared harness writes and asserts nothing unless `scripts/coverage-check.sh` turns it on |
 
 Shared request builders and assertions live in `tests/common/mod.rs`. Cargo compiles only top-level
 files in `tests/` as test binaries, so a subdirectory module is shared across suites without running
 as one itself.
+
+`tests/service.rs` also carries a coverage table: one row per operation in `openapi.json`, each
+naming the test that drives it and asserts its success. The `every_documented_operation_has_a_covering_test`
+guard compares that table against the served document in both directions, so an operation added to the
+schema without a covering test fails the build, as does a row left behind by a renamed or removed one.
+A row may not name one of the shared role or malformation sweeps, which drive many routes but assert
+only the status they must refuse with. Because the API's contract is what `openapi.json` declares,
+this is the coverage the project enforces; line coverage is not measured.
+
+The table on its own is a declaration — it proves that the test it names exists, not that the test
+reaches the route. `scripts/coverage-check.sh` adds the observed half: the shared harness records the
+registered template of every request the router serves, and `tests/route_coverage.rs` then requires a
+successful answer for each operation in the document. An operation no test drove, or one that only
+ever answered an error, fails the check by name. It attributes a success to the run as a whole rather
+than to the row's own test — the recording carries no test identity — so the two halves are read
+together. Run it instead of a bare `cargo test` when you want the full guarantee:
+
+```sh
+scripts/coverage-check.sh                  # record, then check (fills target/route-coverage/hits.tsv)
+cargo test --all-targets --all-features    # the same suite run, recording only
+```
+
+A plain `cargo test` stays green while recording: the check reads the recording the suites write, and
+libtest orders the test binaries arbitrarily, so recording and checking cannot be one pass. The script
+truncates its recording first, so a stale file from an earlier run can never stand in for a run that
+covered less.
 
 Run everything, a single layer, or one suite:
 
