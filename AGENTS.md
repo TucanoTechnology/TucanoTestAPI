@@ -151,9 +151,11 @@ docker compose up -d --build
 
 ### Ports
 
-- API: `3000` (host) → `3000` (container)
-- Swagger UI: `http://localhost:3000/api-docs`
-- OpenAPI JSON: `http://localhost:3000/openapi.json`
+- API: `3100` (host) → `3000` (container)
+- Swagger UI: `http://localhost:3100/api-docs`
+- OpenAPI JSON: `http://localhost:3100/openapi.json`
+
+The container listens on `3000`; the host port is what `docker-compose.yml` publishes.
 
 ### Volume mount
 

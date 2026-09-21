@@ -312,13 +312,17 @@ release tag — is in
 `scripts/smoke.sh` exercises a running API with a scratch CRUD round trip — health, create a project
 and a case, read both back, delete both, and confirm each deletion is observable — and exits non-zero
 on the first deviation. It needs `curl` and `python3`, removes its scratch data on exit, and accepts
-a base URL:
+a base URL. With none given it probes `http://localhost:3100`, then `http://localhost:3000`, and uses
+the first that answers `/health`, so a Compose stack is found without arguments:
 
 ```sh
-scripts/smoke.sh                       # defaults to http://localhost:3000
+scripts/smoke.sh                       # 3100 if it answers, else 3000
 scripts/smoke.sh http://localhost:3100 # the Compose api service
 scripts/smoke.sh http://localhost:3101 # any replica, for example a canary
 ```
+
+A base URL that *is* given is used as it stands, so a wrong port is reported rather than quietly
+corrected.
 
 Use it to validate a candidate build before promotion; the surrounding procedure is in
 [docs/deployment/canary-validation-and-rollback.md](../deployment/canary-validation-and-rollback.md).
