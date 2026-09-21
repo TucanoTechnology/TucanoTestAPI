@@ -123,7 +123,14 @@ Three API semantics follow from this concept and apply to every composition requ
   their bare form, and each of them also has a parent-scoped mirror that names the holder, so an
   attachment of an ambiguous case stays reachable. The global document routes
   for runs, milestones and configurations resolve the same way. Listing routes never fail on
-  duplicates; they de-duplicate.
+  duplicates; they de-duplicate. A listing is a sorted set of identifiers, not of placements, so an
+  id two homes hold is named once — `GET /test_runs`, `GET /milestones` and `GET /configurations`
+  answer one entry for it — and the member route for that single name then answers `409 Conflict`.
+  The parent-scoped listings are where the placements stay apart: `GET /projects/{id}/test_runs`
+  names that project's own run, and a case copied into a second suite is listed under each. A caller
+  restricted to some projects sees the set narrowed: an entry is kept only when every project it
+  reaches is in scope, and one that does not resolve — including an id two projects hold — is
+  dropped rather than failing the listing.
 
 This concept is enforced for agent work in [AGENTS.md](../../AGENTS.md); the storage layout it
 describes is recorded in
@@ -186,6 +193,7 @@ names.
 | `PORT` | `3000` | The port the API binds. Environment-only. |
 | `TUCANO_CONFIG_FILE` | — | Path to the optional configuration file described below. Environment-only; unset means no file. |
 | `TUCANO_CONFIG_KEY_FILE` | — | Path to the key ring file for decrypting AEAD-encrypted secrets in the configuration file. Environment-only; unset means no encryption keys. |
+| `TUCANO_LOCK_TIMEOUT_MS` | `5000` | Milliseconds a write waits for the advisory lock before it is refused with `503 lock_timeout`. Environment-only; must be a whole number, and anything else stops startup. |
 | `TUCANO_AUTH_REQUIRED` | `false` | Require and enforce a bearer token on every guarded route. When off, every guard returns and the API is anonymous. |
 | `TUCANO_JWT_SECRET` | — | The HS256 signing secret. Required when auth is on; at least 32 bytes. |
 | `TUCANO_JWT_SECRET_FILE` | — | A file to read the secret from. Set this **or** `TUCANO_JWT_SECRET`, never both. |
@@ -285,10 +293,13 @@ The full reconciliation of the documented error contract and schema strictness i
 
 The API process is stateless: replicas do not keep sessions or in-memory records. Horizontal scaling
 requires a shared persistent POSIX volume mounted at the same `TUCANO_DATA_DIR` for every replica.
-Repository mutations use an advisory lock file and atomic same-directory renames. A local Docker
-volume is suitable for one node; multi-node deployments must provide shared storage with working
-advisory locks. Do not use separate per-replica local volumes, or data will diverge. The filesystem
-is the only storage backend: object storage (S3) was declined as a persistence backend by
+Repository mutations use an advisory lock file and atomic same-directory renames. A write that
+cannot take the lock within `TUCANO_LOCK_TIMEOUT_MS` (default `5000` ms) is refused with
+`503 lock_timeout` and a `Retry-After`, so a busy volume is answered rather than queued behind
+indefinitely. A local Docker volume is suitable for one node; multi-node deployments must provide
+shared storage with working advisory locks. Do not use separate per-replica local volumes, or data
+will diverge. The filesystem is the only storage backend: object storage (S3) was declined as a
+persistence backend by
 [docs/architecture/adr-object-storage.md](../architecture/adr-object-storage.md), which also records
 the terms under which a bucket may be used as an out-of-process mirror. The backend inventory, what
 it guarantees, and the backup, scaling and rollback consequences are in
@@ -308,13 +319,17 @@ release tag — is in
 `scripts/smoke.sh` exercises a running API with a scratch CRUD round trip — health, create a project
 and a case, read both back, delete both, and confirm each deletion is observable — and exits non-zero
 on the first deviation. It needs `curl` and `python3`, removes its scratch data on exit, and accepts
-a base URL:
+a base URL. With none given it probes `http://localhost:3100`, then `http://localhost:3000`, and uses
+the first that answers `/health`, so a Compose stack is found without arguments:
 
 ```sh
-scripts/smoke.sh                       # defaults to http://localhost:3000
+scripts/smoke.sh                       # 3100 if it answers, else 3000
 scripts/smoke.sh http://localhost:3100 # the Compose api service
 scripts/smoke.sh http://localhost:3101 # any replica, for example a canary
 ```
+
+A base URL that *is* given is used as it stands, so a wrong port is reported rather than quietly
+corrected.
 
 Use it to validate a candidate build before promotion; the surrounding procedure is in
 [docs/deployment/canary-validation-and-rollback.md](../deployment/canary-validation-and-rollback.md).

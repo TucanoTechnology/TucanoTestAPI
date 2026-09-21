@@ -3,6 +3,15 @@
 use super::*;
 
 impl FileRepository {
+    /// Every identifier the tree holds for `resource`, sorted, without repeats.
+    ///
+    /// A listing is a set of identifiers, not of placements, because an
+    /// identifier is what a caller addresses a resource by. Two homes holding
+    /// the same identifier — two projects owning a run of the same name, a case
+    /// duplicated into a second suite — are named here once, and that single
+    /// name is what resolution reads: it refuses an identifier two homes hold as
+    /// ambiguous. Listing a parent (`list_children`) is the view that still
+    /// distinguishes the placements.
     pub(super) fn list(&self, resource: Resource) -> io::Result<Vec<String>> {
         let mut ids = match resource {
             Resource::Projects => self
