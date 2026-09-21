@@ -305,7 +305,9 @@ storage:
 - **Multiple nodes.** The volume must be shared POSIX storage reachable from every node at the same
   mount path, with **working advisory locks**. Repository mutations take an advisory lock file and
   write by atomic same-directory rename; if the filesystem does not honour those locks, concurrent
-  writers on different nodes can lose data.
+  writers on different nodes can lose data. A write that cannot take the lock within
+  `TUCANO_LOCK_TIMEOUT_MS` (default `5000` ms) is refused with `503 lock_timeout` and a
+  `Retry-After` rather than waiting indefinitely, so contention surfaces to the client.
 - **Never give each replica its own volume.** Separate per-replica local volumes diverge: each
   replica would serve a different partial view of the data, and a create would be invisible to the
   others. Use platform-provided shared storage (or a single node with one shared volume) instead.

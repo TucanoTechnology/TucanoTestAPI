@@ -15,6 +15,9 @@ services:
       # to run anonymously, which is only safe on a single-user machine that
       # nothing else can reach.
       TUCANO_AUTH_REQUIRED: "${TUCANO_AUTH_REQUIRED:-true}"
+      # The deadline on the data volume's advisory lock, in milliseconds. See
+      # TUCANO_LOCK_TIMEOUT_MS in .env.example.
+      TUCANO_LOCK_TIMEOUT_MS: "${TUCANO_LOCK_TIMEOUT_MS:-5000}"
       TUCANO_JWT_SECRET: "${TUCANO_JWT_SECRET:?TUCANO_JWT_SECRET is required and must be at least 32 bytes; copy .env.example to .env and set it}"
       TUCANO_BOOTSTRAP_USERNAME: "${TUCANO_BOOTSTRAP_USERNAME:-admin}"
       TUCANO_BOOTSTRAP_PASSWORD: "${TUCANO_BOOTSTRAP_PASSWORD:?TUCANO_BOOTSTRAP_PASSWORD is required; copy .env.example to .env and set it}"
