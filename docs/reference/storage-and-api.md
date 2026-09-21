@@ -123,7 +123,14 @@ Three API semantics follow from this concept and apply to every composition requ
   their bare form, and each of them also has a parent-scoped mirror that names the holder, so an
   attachment of an ambiguous case stays reachable. The global document routes
   for runs, milestones and configurations resolve the same way. Listing routes never fail on
-  duplicates; they de-duplicate.
+  duplicates; they de-duplicate. A listing is a sorted set of identifiers, not of placements, so an
+  id two homes hold is named once — `GET /test_runs`, `GET /milestones` and `GET /configurations`
+  answer one entry for it — and the member route for that single name then answers `409 Conflict`.
+  The parent-scoped listings are where the placements stay apart: `GET /projects/{id}/test_runs`
+  names that project's own run, and a case copied into a second suite is listed under each. A caller
+  restricted to some projects sees the set narrowed: an entry is kept only when every project it
+  reaches is in scope, and one that does not resolve — including an id two projects hold — is
+  dropped rather than failing the listing.
 
 This concept is enforced for agent work in [AGENTS.md](../../AGENTS.md); the storage layout it
 describes is recorded in
