@@ -159,18 +159,23 @@ The container listens on `3000`; the host port is what `docker-compose.yml` publ
 
 ### Volume mount
 
-- Compose volume: `tucano-test-data` → Container: `/data`
+- Compose bind mount: host `./data` → Container: `/data` (Docker creates `./data` on first run)
 - Configuration: `TUCANO_DATA_DIR=/data`
 - Data persists across container restarts
-- Files are plain JSON — inspectable and editable on host
+- Files are plain JSON — inspectable and editable on host, and kept out of version control: the
+  `.gitignore` excludes `/data/*`
+- The mount is a bind mount, not a named volume: the checked-in `docker-compose.yml` declares no
+  volume, so there is nothing for `docker volume inspect` to find. A deployment that prefers a
+  managed named volume substitutes one for the bind mount; that variant is written out in
+  [`docs/deployment/deployment-guide.md`](docs/deployment/deployment-guide.md).
 
 ### Scaling
 
 - The application container runs as an unprivileged user with a read-only root filesystem.
 - Replicas share no in-memory application state.
 - Scale only with a shared persistent POSIX volume and advisory-lock support.
-- A local Docker volume is single-node only; use platform-provided shared storage for multi-node
-  deployments.
+- A local bind mount or Docker volume is single-node only; use platform-provided shared storage for
+  multi-node deployments.
 
 ---
 
