@@ -1777,3 +1777,176 @@ async fn deleting_a_suite_through_a_project_resolves_that_project() {
     assert_eq!(status, StatusCode::NOT_FOUND, "{answer}");
     assert_eq!(error_code(&answer), "not_found", "{answer}");
 }
+
+/// Linking a configuration authorizes the project that holds it as well as the
+/// run: a caller that reaches the run but not the configuration's project is
+/// refused, and the run is left exactly as it was.
+#[tokio::test]
+async fn linking_a_configuration_checks_the_project_that_holds_it() {
+    let directory = tempfile::tempdir().expect("temp dir");
+    let seeding = seeding_app(directory.path());
+    let alpha = id_of(
+        &call_ok(
+            &seeding,
+            None,
+            "POST",
+            "/projects",
+            Some(json!({ "name": "alpha" })),
+        )
+        .await,
+    );
+    let beta = id_of(
+        &call_ok(
+            &seeding,
+            None,
+            "POST",
+            "/projects",
+            Some(json!({ "name": "beta" })),
+        )
+        .await,
+    );
+    let run = id_of(
+        &call_ok(
+            &seeding,
+            None,
+            "POST",
+            &format!("/projects/{alpha}/test_runs"),
+            Some(run_body("nightly", &alpha)),
+        )
+        .await,
+    );
+    let own = id_of(
+        &call_ok(
+            &seeding,
+            None,
+            "POST",
+            &format!("/projects/{alpha}/configurations"),
+            Some(json!({ "name": "chrome-linux" })),
+        )
+        .await,
+    );
+    let foreign = id_of(
+        &call_ok(
+            &seeding,
+            None,
+            "POST",
+            &format!("/projects/{beta}/configurations"),
+            Some(json!({ "name": "firefox-windows" })),
+        )
+        .await,
+    );
+    assert_eq!(own, "chrome-linux.json");
+    assert_eq!(foreign, "firefox-windows.json");
+
+    let app = enforcing_app_with_grants(directory.path(), &[(alpha.as_str(), Role::Editor)]);
+    let token = sign_in_token(&app).await;
+    let token = token.as_str();
+
+    let link = format!("/test_runs/{run}/configurations");
+    assert_anonymous_refused(&app, "POST", &link).await;
+
+    // The configuration's project is out of reach, so naming it here is refused
+    // even though the run itself is not.
+    assert_forbidden(
+        &app,
+        token,
+        "POST",
+        &link,
+        Some(json!({ "configId": foreign })),
+    )
+    .await;
+    let document = call_ok(&app, Some(token), "GET", &format!("/test_runs/{run}"), None).await;
+    assert!(
+        document["configurations"]
+            .as_array()
+            .is_none_or(|linked| linked.is_empty()),
+        "a refused link changed the run: {document}"
+    );
+
+    // The run's own project holds this one, so the same caller links it.
+    call_ok(
+        &app,
+        Some(token),
+        "POST",
+        &link,
+        Some(json!({ "configId": own })),
+    )
+    .await;
+    let document = call_ok(&app, Some(token), "GET", &format!("/test_runs/{run}"), None).await;
+    assert_eq!(
+        document["configurations"][0]["configId"],
+        json!(own),
+        "{document}"
+    );
+}
+
+/// A configuration identifier two projects hold is resolved with the run's own
+/// project preferred, the way the service resolves it, rather than answering the
+/// conflict a bare identifier would.
+#[tokio::test]
+async fn an_identifier_two_projects_hold_links_from_the_run_own_project() {
+    let directory = tempfile::tempdir().expect("temp dir");
+    let seeding = seeding_app(directory.path());
+    let alpha = id_of(
+        &call_ok(
+            &seeding,
+            None,
+            "POST",
+            "/projects",
+            Some(json!({ "name": "alpha" })),
+        )
+        .await,
+    );
+    let beta = id_of(
+        &call_ok(
+            &seeding,
+            None,
+            "POST",
+            "/projects",
+            Some(json!({ "name": "beta" })),
+        )
+        .await,
+    );
+    let run = id_of(
+        &call_ok(
+            &seeding,
+            None,
+            "POST",
+            &format!("/projects/{alpha}/test_runs"),
+            Some(run_body("nightly", &alpha)),
+        )
+        .await,
+    );
+    for project in [&alpha, &beta] {
+        let created = id_of(
+            &call_ok(
+                &seeding,
+                None,
+                "POST",
+                &format!("/projects/{project}/configurations"),
+                Some(json!({ "name": "shared" })),
+            )
+            .await,
+        );
+        assert_eq!(created, "shared.json");
+    }
+
+    let app = enforcing_app_with_grants(directory.path(), &[(alpha.as_str(), Role::Editor)]);
+    let token = sign_in_token(&app).await;
+    let token = token.as_str();
+
+    call_ok(
+        &app,
+        Some(token),
+        "POST",
+        &format!("/test_runs/{run}/configurations"),
+        Some(json!({ "configId": "shared.json" })),
+    )
+    .await;
+    let document = call_ok(&app, Some(token), "GET", &format!("/test_runs/{run}"), None).await;
+    assert_eq!(
+        document["configurations"][0]["configId"],
+        json!("shared.json"),
+        "{document}"
+    );
+}

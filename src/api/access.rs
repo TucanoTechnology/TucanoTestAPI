@@ -615,6 +615,54 @@ pub(crate) fn require_run_source<R: Repository>(
     authorize(state.auth(), principal, &project, required)
 }
 
+/// Authorizes a run operation that also names a configuration.
+///
+/// A configuration is not a suite or a case, so it is not resolved like an
+/// unnamed member: it is read from the run's own project when that project holds
+/// it, and only resolved globally otherwise. An identifier two projects hold is
+/// therefore the run's home's copy rather than a conflict, matching how the
+/// service itself resolves the reference.
+///
+/// # Errors
+///
+/// [`DomainError::Forbidden`] when the run or the configuration is out of reach,
+/// and [`DomainError::NotFound`] when either does not exist.
+pub(crate) fn require_run_configuration<R: Repository>(
+    state: &AppState<R>,
+    principal: &Principal,
+    run_id: &str,
+    config_id: Option<&str>,
+    required: Role,
+) -> Result<(), DomainError> {
+    if !state.auth().config.required {
+        return Ok(());
+    }
+    require_run(state, principal, run_id, required)?;
+    let Some(config_id) = config_id else {
+        return Ok(());
+    };
+    let home = state.project_of(Resource::Runs, run_id, missing(Resource::Runs))?;
+    let parent = Parent::Project(home.clone());
+    let project = if state
+        .document_in(
+            Resource::Configurations,
+            &parent,
+            config_id,
+            missing(Resource::Configurations),
+        )
+        .is_ok()
+    {
+        home
+    } else {
+        state.project_of(
+            Resource::Configurations,
+            config_id,
+            missing(Resource::Configurations),
+        )?
+    };
+    authorize(state.auth(), principal, &project, required)
+}
+
 /// Filters a listing to the projects a restricted caller can reach.
 ///
 /// An unrestricted caller (`scope` is `None`) sees the listing unchanged. A
