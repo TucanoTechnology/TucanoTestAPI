@@ -233,13 +233,14 @@ impl<R: Repository> TestService<R> {
         Ok(outcome)
     }
 
-    /// Links the top-level configuration named in `body` to a run by reference,
-    /// refusing one the run already references.
+    /// Links the configuration named in `body` to a run by reference, refusing
+    /// one the run already references.
     ///
     /// A configuration owns its storage, so the run keeps a reference to it
     /// rather than a copy; the referenced configuration is verified to exist.
-    /// A run may link a configuration from any project, and the run's own home
-    /// is preferred, so the reference means that project's configuration first.
+    /// A run may link a configuration from any project the caller reaches, and
+    /// the run's own home is preferred, so the reference means that project's
+    /// configuration first.
     pub fn link_configuration_to_run(&self, run_id: &str, body: &Value) -> Result<(), DomainError> {
         let config_id = required_string(body, "configId")
             .ok_or_else(|| DomainError::invalid_request("Required field configId is missing"))?;
