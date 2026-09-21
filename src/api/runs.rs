@@ -179,7 +179,13 @@ async fn link_run_configuration<R: Repository>(
     Path(id): Path<String>,
     Json(body): Json<Value>,
 ) -> Result<Json<Value>, DomainError> {
-    access::require_run(&service, &principal, &id, Role::Editor)?;
+    access::require_run_configuration(
+        &service,
+        &principal,
+        &id,
+        body.get("configId").and_then(Value::as_str),
+        Role::Editor,
+    )?;
     service.link_configuration_to_run(&id, &body)?;
     Ok(Json(
         json!({ "message": "Test configuration linked to test run" }),
