@@ -27,8 +27,10 @@ cp .env.example .env   # set TUCANO_JWT_SECRET and TUCANO_BOOTSTRAP_PASSWORD
 docker compose up -d --build
 ```
 
-The API listens on port `3000` by default. Swagger UI is at
-<http://localhost:3000/api-docs>.
+The port depends on how the API is started. `cargo run` binds `PORT`, which defaults to `3000`, so
+Swagger UI is at <http://localhost:3000/api-docs>. Compose publishes the container's `3000` on host
+`3100` (see `docker-compose.yml`), so with `docker compose up -d --build` Swagger UI is at
+<http://localhost:3100/api-docs>.
 
 ### Seed demo data
 

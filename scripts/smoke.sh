@@ -4,9 +4,12 @@
 #
 # Usage:
 #   scripts/smoke.sh [BASE_URL]
-#   SMOKE_BASE_URL=http://localhost:3000 scripts/smoke.sh
+#   SMOKE_BASE_URL=http://localhost:3100 scripts/smoke.sh
 #
-# BASE_URL defaults to http://localhost:3000. The script checks the health
+# BASE_URL is the first argument, else SMOKE_BASE_URL, else the first of
+# http://localhost:3100 (the port `docker compose up` publishes) and
+# http://localhost:3000 (the port `cargo run` binds) that answers `/health` —
+# the same survey scripts/clear-data.mjs makes. The script checks the health
 # endpoint, lists projects, creates a uniquely named scratch project with a
 # scratch test case inside it, reads both back, then deletes the case and the
 # project and confirms each deletion is observable. It exits non-zero on the
@@ -26,15 +29,30 @@
 
 set -euo pipefail
 
-BASE_URL="${1:-${SMOKE_BASE_URL:-http://localhost:3000}}"
-BASE_URL="${BASE_URL%/}"
-
 for tool in curl python3; do
   command -v "$tool" >/dev/null 2>&1 || {
     echo "smoke: '$tool' is required but was not found on PATH" >&2
     exit 2
   }
 done
+
+# An explicit base URL is taken as given — probing it would hide a typo behind a
+# silent fallback to a different API. Only the unset case surveys the two ports
+# this repository's two ways of running the API publish.
+BASE_URL="${1:-${SMOKE_BASE_URL:-}}"
+if [ -z "$BASE_URL" ]; then
+  for candidate in http://localhost:3100 http://localhost:3000; do
+    if curl -fsS --max-time 2 "$candidate/health" >/dev/null 2>&1; then
+      BASE_URL="$candidate"
+      break
+    fi
+  done
+  [ -n "$BASE_URL" ] || {
+    echo "smoke: no API answered /health; tried http://localhost:3100 and http://localhost:3000" >&2
+    exit 2
+  }
+fi
+BASE_URL="${BASE_URL%/}"
 
 SUFFIX="$(date +%s)-$$"
 PROJECT_NAME="smoke-${SUFFIX}"
