@@ -186,6 +186,7 @@ names.
 | `PORT` | `3000` | The port the API binds. Environment-only. |
 | `TUCANO_CONFIG_FILE` | — | Path to the optional configuration file described below. Environment-only; unset means no file. |
 | `TUCANO_CONFIG_KEY_FILE` | — | Path to the key ring file for decrypting AEAD-encrypted secrets in the configuration file. Environment-only; unset means no encryption keys. |
+| `TUCANO_LOCK_TIMEOUT_MS` | `5000` | Milliseconds a write waits for the advisory lock before it is refused with `503 lock_timeout`. Environment-only; must be a whole number, and anything else stops startup. |
 | `TUCANO_AUTH_REQUIRED` | `false` | Require and enforce a bearer token on every guarded route. When off, every guard returns and the API is anonymous. |
 | `TUCANO_JWT_SECRET` | — | The HS256 signing secret. Required when auth is on; at least 32 bytes. |
 | `TUCANO_JWT_SECRET_FILE` | — | A file to read the secret from. Set this **or** `TUCANO_JWT_SECRET`, never both. |
@@ -285,10 +286,13 @@ The full reconciliation of the documented error contract and schema strictness i
 
 The API process is stateless: replicas do not keep sessions or in-memory records. Horizontal scaling
 requires a shared persistent POSIX volume mounted at the same `TUCANO_DATA_DIR` for every replica.
-Repository mutations use an advisory lock file and atomic same-directory renames. A local Docker
-volume is suitable for one node; multi-node deployments must provide shared storage with working
-advisory locks. Do not use separate per-replica local volumes, or data will diverge. The filesystem
-is the only storage backend: object storage (S3) was declined as a persistence backend by
+Repository mutations use an advisory lock file and atomic same-directory renames. A write that
+cannot take the lock within `TUCANO_LOCK_TIMEOUT_MS` (default `5000` ms) is refused with
+`503 lock_timeout` and a `Retry-After`, so a busy volume is answered rather than queued behind
+indefinitely. A local Docker volume is suitable for one node; multi-node deployments must provide
+shared storage with working advisory locks. Do not use separate per-replica local volumes, or data
+will diverge. The filesystem is the only storage backend: object storage (S3) was declined as a
+persistence backend by
 [docs/architecture/adr-object-storage.md](../architecture/adr-object-storage.md), which also records
 the terms under which a bucket may be used as an out-of-process mirror. The backend inventory, what
 it guarantees, and the backup, scaling and rollback consequences are in
