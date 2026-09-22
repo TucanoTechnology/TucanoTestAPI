@@ -45,13 +45,15 @@ async fn configurations_support_the_full_crud_lifecycle() {
     assert_eq!(stored["configId"], "chrome-linux.json");
     assert_eq!(stored["browser"], "Chrome");
 
-    let (status, _) = send_json(
+    // The stored identity is the derived id, so a client putting back what it
+    // read restates that identity rather than naming the document by address.
+    let (status, body) = send_json(
         &app,
         json_request(
             "PUT",
             "/configurations/chrome-linux.json",
             &json!({
-                "configId": "CFG-001",
+                "configId": "chrome-linux.json",
                 "name": "chrome-linux",
                 "browser": "Chrome",
                 "os": "Linux",
@@ -60,10 +62,11 @@ async fn configurations_support_the_full_crud_lifecycle() {
         ),
     )
     .await;
-    assert_eq!(status, StatusCode::OK);
+    assert_eq!(status, StatusCode::OK, "updating: {body}");
 
     let (_, updated) = send_json(&app, get("/configurations/chrome-linux.json")).await;
     assert_eq!(updated["resolution"], "1920x1080");
+    assert_eq!(updated["configId"], "chrome-linux.json");
 
     let (status, _) = send_json(&app, delete("/configurations/chrome-linux.json")).await;
     assert_eq!(status, StatusCode::OK);
@@ -164,8 +167,11 @@ async fn a_supplied_config_id_is_ignored_in_favour_of_the_derived_id() {
     assert_eq!(listing, json!(["docprobe.json", "probe.json"]));
 }
 
+/// Issue #300 overturns the update half of #288: a `configId` the body carries
+/// is no longer accepted and ignored. A usable value that names another
+/// document is refused, because an identifier is immutable.
 #[tokio::test]
-async fn an_update_cannot_move_a_configuration_identity_away_from_its_id() {
+async fn an_update_refuses_a_body_identifier_that_names_another_configuration() {
     let (_directory, app) = test_app();
 
     let home = fixture_home(&app).await;
@@ -189,8 +195,16 @@ async fn an_update_cannot_move_a_configuration_identity_away_from_its_id() {
         ),
     )
     .await;
-    assert_eq!(status, StatusCode::OK, "updating: {body}");
+    assert_eq!(status, StatusCode::BAD_REQUEST, "updating: {body}");
+    assert_error_envelope(&body, "invalid_request");
+    assert!(
+        body["error"]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("immutable")),
+        "unexpected message: {body}"
+    );
 
+    // The refusal lands before the write, so the document is untouched.
     let (_, stored) = send_json(&app, get("/configurations/chrome-linux.json")).await;
     assert_eq!(stored["configId"], "chrome-linux.json");
 
@@ -198,6 +212,45 @@ async fn an_update_cannot_move_a_configuration_identity_away_from_its_id() {
     let (status, body) = send_json(&app, get("/configurations/elsewhere.json")).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
     assert_error_envelope(&body, "not_found");
+}
+
+#[tokio::test]
+async fn an_update_refuses_a_body_identifier_the_store_cannot_file() {
+    let (_directory, app) = test_app();
+
+    let home = fixture_home(&app).await;
+    let (status, _) = send_json(
+        &app,
+        json_request(
+            "POST",
+            &format!("/projects/{home}/configurations"),
+            &json!({"name": "chrome-linux"}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    for supplied in ["probe-moved", "team/copy.json", "", ".", ".."] {
+        let (status, body) = send_json(
+            &app,
+            json_request(
+                "PUT",
+                "/configurations/chrome-linux.json",
+                &json!({"configId": supplied}),
+            ),
+        )
+        .await;
+        assert_eq!(
+            status,
+            StatusCode::BAD_REQUEST,
+            "supplying {supplied:?}: {body}"
+        );
+        assert_error_envelope(&body, "invalid_id");
+    }
+
+    let (status, stored) = send_json(&app, get("/configurations/chrome-linux.json")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(stored["configId"], "chrome-linux.json");
 }
 
 #[tokio::test]

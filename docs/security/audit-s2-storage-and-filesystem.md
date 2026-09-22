@@ -1412,6 +1412,21 @@ append `.json` to the *name*, and the initial probe batch of this sub-task was r
 above: `C1` was the fixture case the earlier sub-tasks planted, so the table's "existing identifier"
 column is exercised by cases this checkpoint created, not by import of a pre-existing tree.
 
+    *Amended, Issue #300: the project-create half of this note is closed.* A `projectId` supplied to
+    `POST /projects` must now be a single path segment ending in `.json` — anything else is a `400`
+    `invalid_request` — and when it is usable it becomes the new project's identity **and** its address,
+    instead of being stored beside a name-derived `.json` address that happens to overlap it. The two
+    strings this note measured apart are therefore the same one, and neither the reported-not-accepted
+    form (`S23sym` stored, `S23 symlink fixture.json` listed) nor the silently flattened nested value
+    (`team/copy.json` accepted as `copy.json`) can be produced through that route any more. Two sibling
+    arms stay open and belong here rather than in a finding, because neither is a confinement question:
+    a create body's `testRunId` is still stored verbatim while the run's address is derived from `name`,
+    so a run can still be reported under an identifier no route addresses; and `PUT /test_cases/{id}`
+    still accepts a body `testCaseId` that differs from the identifier in the path, because a case
+    identifier is addressed verbatim and that field is a document field on that route. On every other
+    resource an update now refuses a body identity that names another document, so those routes can no
+    longer widen this divergence from the update side either.
+
 24. **Two replicas on one disk-backed data directory acknowledge fifty concurrent writes and discard
     twenty-three of them; one replica discards one write in every round.** S2-8, re-provisioned onto a
     real volume because the previous checkpoint's row could not be answered from a `tmpfs` fixture —

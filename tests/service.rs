@@ -3,8 +3,9 @@ mod common;
 use axum::body::Body;
 use axum::http::{Request, StatusCode, header};
 use common::{
-    ROLE_CHECKED_WRITE_OPERATIONS, app_at, assert_error_envelope, content_type, get, json_request,
-    raw_json_request, send, send_full, send_json, test_app,
+    ROLE_CHECKED_WRITE_OPERATIONS, app_at, assert_error_envelope, content_type, create_case_in,
+    create_named, create_suite, fixture_home, get, json_request, raw_json_request, send, send_full,
+    send_json, test_app,
 };
 use serde_json::{Value, json};
 use std::collections::BTreeSet;
@@ -581,6 +582,81 @@ async fn duplicate_routes_report_an_unusable_identifier_as_their_own_description
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert_error_envelope(&body, "invalid_id");
+}
+
+#[tokio::test]
+async fn duplicate_routes_refuse_a_body_new_id_the_store_cannot_file() {
+    let (_directory, app) = test_app();
+    let home = fixture_home(&app).await;
+    let suite = create_suite(&app, &home, "smoke").await;
+    let run = create_named(&app, "/test_runs", "nightly").await;
+    let milestone = create_named(&app, "/milestones", "sprint").await;
+    let case = create_case_in(&app, &format!("/projects/{home}/test_cases"), "TC-1").await;
+
+    // Every duplicate route validates the `newId` it is given, so an explicit
+    // identifier the store cannot file is refused rather than silently replaced
+    // by the derived copy name. A project, suite, run and milestone identifier
+    // is a `.json` component, so a bare value is unusable here.
+    for uri in [
+        format!("/projects/{home}/duplicate"),
+        format!("/test_suites/{suite}/duplicate"),
+        format!("/test_runs/{run}/duplicate"),
+        format!("/milestones/{milestone}/duplicate"),
+    ] {
+        for new_id in ["probe-moved", "team/copy.json", "", ".."] {
+            let (status, body) =
+                send_json(&app, json_request("POST", &uri, &json!({"newId": new_id}))).await;
+            assert_eq!(
+                status,
+                StatusCode::BAD_REQUEST,
+                "POST {uri} newId={new_id:?}: {body}"
+            );
+            assert_error_envelope(&body, "invalid_id");
+        }
+    }
+
+    // A case identifier is addressed verbatim and carries no `.json` suffix, so
+    // the same values split: nested, empty and climbing identifiers are refused
+    // while a bare one is usable as it stands.
+    for new_id in ["team/copy", "", ".."] {
+        let (status, body) = send_json(
+            &app,
+            json_request(
+                "POST",
+                &format!("/test_cases/{case}/duplicate"),
+                &json!({"newId": new_id}),
+            ),
+        )
+        .await;
+        assert_eq!(
+            status,
+            StatusCode::BAD_REQUEST,
+            "POST /test_cases/{case}/duplicate newId={new_id:?}: {body}"
+        );
+        assert_error_envelope(&body, "invalid_id");
+    }
+
+    let (status, body) = send_json(
+        &app,
+        json_request(
+            "POST",
+            &format!("/test_cases/{case}/duplicate"),
+            &json!({"newId": "TC-2"}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    assert_eq!(body["id"], "TC-2");
+
+    // The case route addresses the path identifier verbatim, so an unusable one
+    // is a `404` rather than the `invalid_id` the other duplicate routes answer.
+    let (status, body) = send_json(
+        &app,
+        json_request("POST", "/test_cases/nope/duplicate", &json!({})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_error_envelope(&body, "not_found");
 }
 
 #[tokio::test]
@@ -1163,7 +1239,7 @@ const CONTRACT_COVERAGE: [(&str, &str); 85] = [
     ),
     (
         "put /configurations/{id}",
-        "an_update_cannot_move_a_configuration_identity_away_from_its_id",
+        "a_partial_update_keeps_the_fields_the_body_leaves_out",
     ),
     (
         "delete /configurations/{id}",
