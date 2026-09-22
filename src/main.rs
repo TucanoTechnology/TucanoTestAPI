@@ -64,6 +64,10 @@ fn port() -> String {
     std::env::var("PORT").unwrap_or_else(|_| "3000".to_owned())
 }
 
+/// The millisecond count a write waits for the advisory lock by default, so an
+/// unset `TUCANO_LOCK_TIMEOUT_MS` and one declared with no value agree.
+const DEFAULT_LOCK_TIMEOUT_MS: u64 = 5000;
+
 /// How long the advisory lock may be waited on before a write is refused with
 /// a 503. Environment-only like [`data_dir`] and [`port`]: the orchestrator
 /// owns it, and it must be known before anything touches the data directory.
@@ -71,15 +75,25 @@ fn port() -> String {
 /// Defaults to 5 000 ms when `TUCANO_LOCK_TIMEOUT_MS` is unset or empty; a
 /// non-numeric value is a startup error.
 fn lock_timeout() -> Duration {
-    match std::env::var("TUCANO_LOCK_TIMEOUT_MS") {
-        Ok(raw) => {
-            let millis: u64 = raw
-                .parse()
-                .unwrap_or_else(|_| panic!("TUCANO_LOCK_TIMEOUT_MS is not a valid u64: {raw:?}"));
-            Duration::from_millis(millis)
-        }
-        Err(_) => Duration::from_millis(5000),
-    }
+    lock_timeout_from(std::env::var("TUCANO_LOCK_TIMEOUT_MS").ok().as_deref())
+}
+
+/// Reads the timeout from the raw environment value, so the parse is testable
+/// without touching the process environment.
+///
+/// An unset, empty or blank value keeps the default: a variable declared with
+/// no value — an `.env` line or a manifest key left for the operator to fill —
+/// then behaves exactly like an absent one instead of stopping startup with a
+/// message that shows the empty value as if a bad one had been passed (Issue
+/// #309). Anything else must parse as a `u64`.
+fn lock_timeout_from(raw: Option<&str>) -> Duration {
+    let Some(raw) = raw.map(str::trim).filter(|raw| !raw.is_empty()) else {
+        return Duration::from_millis(DEFAULT_LOCK_TIMEOUT_MS);
+    };
+    let millis: u64 = raw
+        .parse()
+        .unwrap_or_else(|_| panic!("TUCANO_LOCK_TIMEOUT_MS is not a valid u64: {raw:?}"));
+    Duration::from_millis(millis)
 }
 
 /// `seed-auth` — creates the demo account and grants of `docs/testing/seed-dataset-spec.md` §5.
@@ -323,4 +337,39 @@ fn now_seconds() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |since_epoch| since_epoch.as_secs())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_lock_timeout_is_read_from_the_value() {
+        assert_eq!(
+            lock_timeout_from(Some("15000")),
+            Duration::from_millis(15000)
+        );
+        assert_eq!(
+            lock_timeout_from(Some(" 250 ")),
+            Duration::from_millis(250),
+            "surrounding whitespace is not part of the number"
+        );
+    }
+
+    #[test]
+    fn an_unset_or_empty_lock_timeout_keeps_the_default() {
+        for raw in [None, Some(""), Some("   ")] {
+            assert_eq!(
+                lock_timeout_from(raw),
+                Duration::from_millis(DEFAULT_LOCK_TIMEOUT_MS),
+                "{raw:?} should keep the default"
+            );
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "TUCANO_LOCK_TIMEOUT_MS is not a valid u64")]
+    fn a_non_numeric_lock_timeout_stops_startup() {
+        lock_timeout_from(Some("soon"));
+    }
 }
