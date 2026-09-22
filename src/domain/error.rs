@@ -121,8 +121,8 @@ impl DomainError {
 
     /// The stable machine-readable code this failure reaches a client under.
     ///
-    /// [`crate::api::error`] renders the envelope from the same variant, and a
-    /// test asserts the two agree for every variant. The audit lines use this
+    /// The API error envelope is rendered from the same variant, and a test
+    /// asserts the two agree for every variant. The audit lines use this
     /// rather than the variant name so a log reader greps for the code an
     /// operator sees in a response.
     pub fn code(&self) -> &'static str {
