@@ -1,0 +1,38 @@
+[package]
+name = "tucano-test-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4.13"
+serde_json = "1"
+
+[dependencies.tucano-test]
+path = ".."
+
+# A workspace of its own. The root manifest declares none, and a nested crate
+# without this table would be pulled into the parent build, where the stable
+# toolchain the project pins cannot build a `#![no_main]` libFuzzer target.
+[workspace]
+members = ["."]
+
+[profile.release]
+debug = 1
+
+[[bin]]
+name = "deserialize_models"
+path = "fuzz_targets/deserialize_models.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "sanitise_identifiers"
+path = "fuzz_targets/sanitise_identifiers.rs"
+test = false
+doc = false
+bench = false
