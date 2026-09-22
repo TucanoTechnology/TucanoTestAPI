@@ -133,8 +133,8 @@ impl<R: Repository> TestService<R> {
     /// last-writer-wins behaviour.
     ///
     /// The write goes back to the addressed identifier, so an identity field
-    /// the body carries is checked rather than obeyed: see
-    /// [`Self::refuse_foreign_identity`].
+    /// the body carries is checked rather than obeyed by
+    /// `refuse_foreign_identity` below.
     pub fn update_with_etag(
         &self,
         resource: Resource,
