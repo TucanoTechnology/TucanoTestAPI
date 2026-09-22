@@ -48,19 +48,27 @@ async fn test_suites_support_the_full_crud_lifecycle() {
         "reading a project assembles the suites it owns"
     );
 
-    let (status, _) = send_json(
+    // The suite stores the `suiteId` the create contract copied from the body,
+    // so a client putting back what it read restates that identity rather than
+    // naming the document by its address.
+    let (status, body) = send_json(
         &app,
         json_request(
             "PUT",
             "/test_suites/regression.json",
-            &json!({"suiteId": "S-002", "name": "regression", "testCases": []}),
+            &json!({"suiteId": "S-001", "name": "regression-v2", "testCases": []}),
         ),
     )
     .await;
-    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "restating the stored identity: {body}"
+    );
 
     let (_, updated) = send_json(&app, get("/test_suites/regression.json")).await;
-    assert_eq!(updated["suiteId"], "S-002");
+    assert_eq!(updated["suiteId"], "S-001");
+    assert_eq!(updated["name"], "regression-v2");
 
     let (status, _) = send_json(&app, delete("/test_suites/regression.json")).await;
     assert_eq!(status, StatusCode::OK);
@@ -481,4 +489,68 @@ async fn duplicating_a_test_suite_copies_it_into_the_source_project() {
     let (status, survivor) = send_json(&app, get(&format!("/test_suites/{copy}"))).await;
     assert_eq!(status, StatusCode::OK, "the copy survives: {survivor}");
     assert_eq!(survivor["name"], "regression");
+}
+
+#[tokio::test]
+async fn an_update_refuses_a_body_identifier_that_names_another_suite() {
+    let (_directory, app) = test_app();
+    let project = create_project(&app, "checkout").await;
+    let suite = create_suite(&app, &project, "smoke").await;
+    assert_eq!(suite, "smoke.json");
+
+    let (status, body) = send_json(
+        &app,
+        json_request(
+            "PUT",
+            &format!("/test_suites/{suite}"),
+            &json!({"suiteId": "other.json", "name": "renamed"}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "renaming a suite: {body}");
+    assert_error_envelope(&body, "invalid_request");
+    assert!(
+        body["error"]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("immutable")),
+        "unexpected message: {body}"
+    );
+
+    // The refusal lands before the write, so the document is untouched.
+    let (status, stored) = send_json(&app, get(&format!("/test_suites/{suite}"))).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(stored["suiteId"], "smoke.json");
+    assert_eq!(stored["name"], "smoke");
+
+    let (status, body) = send_json(&app, get("/test_suites/other.json")).await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "nothing was renamed: {body}");
+}
+
+#[tokio::test]
+async fn an_update_refuses_a_body_identifier_the_store_cannot_file() {
+    let (_directory, app) = test_app();
+    let project = create_project(&app, "checkout").await;
+    let suite = create_suite(&app, &project, "smoke").await;
+
+    for supplied in ["probe-moved", "team/copy.json", "", ".", ".."] {
+        let (status, body) = send_json(
+            &app,
+            json_request(
+                "PUT",
+                &format!("/test_suites/{suite}"),
+                &json!({"suiteId": supplied}),
+            ),
+        )
+        .await;
+        assert_eq!(
+            status,
+            StatusCode::BAD_REQUEST,
+            "supplying {supplied:?}: {body}"
+        );
+        assert_error_envelope(&body, "invalid_id");
+    }
+
+    let (status, stored) = send_json(&app, get(&format!("/test_suites/{suite}"))).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(stored["suiteId"], "smoke.json");
 }

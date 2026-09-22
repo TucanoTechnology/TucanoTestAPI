@@ -15,7 +15,8 @@ use super::required_string;
 ///
 /// Test cases are named by their own `testCaseId` and required to carry a title
 /// and expected result; milestones fall back to their name for the identifier;
-/// everything else is `<name>.json`.
+/// everything else is `<name>.json`, except a project, where a supplied
+/// `projectId` names the new project when it is a usable identifier.
 pub fn derive_create_id(resource: Resource, value: &Value) -> Result<String, DomainError> {
     let missing = || DomainError::invalid_request("Required fields are missing");
 
@@ -38,7 +39,26 @@ pub fn derive_create_id(resource: Resource, value: &Value) -> Result<String, Dom
                 format!("{candidate}.json")
             })
         }
-        Resource::Projects | Resource::Suites | Resource::Runs | Resource::Configurations => {
+        // A project is the one resource a body may name, and the name it gives
+        // has to be an identifier the store can file: anything else is refused
+        // rather than silently replaced by the name-derived one.
+        Resource::Projects => {
+            let name = required_string(value, "name").ok_or_else(missing)?;
+            match value.get("projectId").and_then(Value::as_str) {
+                Some(supplied) => {
+                    crate::storage::validate_document_id(Resource::Projects, supplied).map_err(
+                        |_| {
+                            DomainError::invalid_request(
+                                "Field `projectId` must be a single path segment ending in `.json`",
+                            )
+                        },
+                    )?;
+                    Ok(supplied.to_owned())
+                }
+                None => Ok(format!("{name}.json")),
+            }
+        }
+        Resource::Suites | Resource::Runs | Resource::Configurations => {
             let name = required_string(value, "name").ok_or_else(missing)?;
             Ok(format!("{name}.json"))
         }
@@ -72,6 +92,43 @@ mod tests {
             id(Resource::Configurations, json!({ "name": "chrome" })),
             "chrome.json"
         );
+    }
+
+    #[test]
+    fn a_supplied_project_id_names_the_new_project() {
+        assert_eq!(
+            id(
+                Resource::Projects,
+                json!({ "name": "checkout", "projectId": "custom.json" })
+            ),
+            "custom.json"
+        );
+        assert_eq!(
+            id(Resource::Projects, json!({ "name": "checkout" })),
+            "checkout.json"
+        );
+        assert_eq!(
+            id(
+                Resource::Projects,
+                json!({ "name": "checkout", "projectId": null })
+            ),
+            "checkout.json"
+        );
+    }
+
+    #[test]
+    fn an_unusable_project_id_is_a_bad_request() {
+        for supplied in ["probe-bare", "team/copy.json", "", ".", ".."] {
+            let error = derive_create_id(
+                Resource::Projects,
+                &json!({ "name": "checkout", "projectId": supplied }),
+            )
+            .expect_err("an unusable identifier must be refused");
+            assert!(
+                matches!(error, DomainError::InvalidRequest { .. }),
+                "{supplied:?} should be a bad request, got {error:?}"
+            );
+        }
     }
 
     #[test]

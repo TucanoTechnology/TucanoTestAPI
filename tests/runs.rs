@@ -38,19 +38,27 @@ async fn test_runs_support_the_full_crud_lifecycle() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(stored["testRunId"], "R-001");
 
-    let (status, _) = send_json(
+    // The run stores the `testRunId` the create contract copied from the body,
+    // so a client putting back what it read restates that identity rather than
+    // naming the document by its address.
+    let (status, body) = send_json(
         &app,
         json_request(
             "PUT",
             "/test_runs/nightly.json",
-            &json!({"testRunId": "R-002", "name": "nightly", "timestamp": "2026-09-03T00:00:00Z"}),
+            &json!({"testRunId": "R-001", "name": "nightly", "timestamp": "2026-09-03T00:00:00Z"}),
         ),
     )
     .await;
-    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "restating the stored identity: {body}"
+    );
 
     let (_, updated) = send_json(&app, get("/test_runs/nightly.json")).await;
-    assert_eq!(updated["testRunId"], "R-002");
+    assert_eq!(updated["testRunId"], "R-001");
+    assert_eq!(updated["timestamp"], "2026-09-03T00:00:00Z");
 
     let (status, _) = send_json(&app, delete("/test_runs/nightly.json")).await;
     assert_eq!(status, StatusCode::OK);
@@ -2091,4 +2099,71 @@ async fn deleting_a_run_through_a_project_resolves_that_project() {
     .await;
     assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
     assert_error_envelope(&body, "not_found");
+}
+
+#[tokio::test]
+async fn an_update_refuses_a_body_identifier_that_names_another_run() {
+    let (_directory, app) = test_app();
+    assert_eq!(
+        create_named(&app, "/test_runs", "nightly").await,
+        "nightly.json"
+    );
+
+    let (status, body) = send_json(
+        &app,
+        json_request(
+            "PUT",
+            "/test_runs/nightly.json",
+            &json!({"testRunId": "other.json", "name": "renamed"}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "renaming a run: {body}");
+    assert_error_envelope(&body, "invalid_request");
+    assert!(
+        body["error"]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("immutable")),
+        "unexpected message: {body}"
+    );
+
+    // The refusal lands before the write, so the document is untouched.
+    let (status, stored) = send_json(&app, get("/test_runs/nightly.json")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(stored["testRunId"], "nightly.json");
+    assert_eq!(stored["name"], "nightly");
+
+    let (status, body) = send_json(&app, get("/test_runs/other.json")).await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "nothing was renamed: {body}");
+}
+
+#[tokio::test]
+async fn an_update_refuses_a_body_identifier_the_store_cannot_file() {
+    let (_directory, app) = test_app();
+    assert_eq!(
+        create_named(&app, "/test_runs", "nightly").await,
+        "nightly.json"
+    );
+
+    for supplied in ["probe-moved", "team/copy.json", "", ".", ".."] {
+        let (status, body) = send_json(
+            &app,
+            json_request(
+                "PUT",
+                "/test_runs/nightly.json",
+                &json!({"testRunId": supplied}),
+            ),
+        )
+        .await;
+        assert_eq!(
+            status,
+            StatusCode::BAD_REQUEST,
+            "supplying {supplied:?}: {body}"
+        );
+        assert_error_envelope(&body, "invalid_id");
+    }
+
+    let (status, stored) = send_json(&app, get("/test_runs/nightly.json")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(stored["testRunId"], "nightly.json");
 }

@@ -446,10 +446,12 @@ this plan resolves it.
 
 - Every resource with an identity field records it on write, from the identifier the create body already
   derived: `projectId`, `suiteId`, `testRunId`, `milestoneId`, `configId`. A value the body supplied is kept
-  verbatim; the derived id only fills a field that is absent or not a string. The configuration identity is the
-  one exception, and only since Issue #288: a `configId` is resolved to the file that holds it, so a stored value
-  that disagreed with its own document would name nothing, and `configId` is therefore taken from the name on
-  every write whether the body supplied one or not.
+  verbatim on create for a suite, a run and a milestone; the derived id only fills a field that is absent or not
+  a string. The configuration identity is the one exception, and only since Issue #288: a `configId` is resolved
+  to the file that holds it, so a stored value that disagreed with its own document would name nothing, and
+  `configId` is therefore taken from the name on every write whether the body supplied one or not. Issue #300
+  settles the remaining two readings of this rule — a `projectId` on create names the new project or is refused,
+  and on update the identity field is checked rather than obeyed.
 - A test run stored without a `timestamp` records the moment it was stored — Unix seconds rendered as a string,
   applied by the same rule (`required_string(body, "timestamp").unwrap_or_else(current_timestamp_string)`) the
   run-result route already used. A `timestamp` the body carries is kept.
@@ -492,7 +494,9 @@ the recorded merge decision.
   run still records a `timestamp` when it has none.
 - **Bad input is still reported, never silently overwritten.** The body is validated before anything is read or
   written (unknown key → `400 invalid_request`), a missing document is still `404 not_found`, and an unusable
-  identifier is still `400 invalid_id`. A stored document that is not a JSON object, or that is corrupt JSON, now
+  identifier is still `400 invalid_id`. An identifier the update body carries is checked before the merge rather
+  than part of it, which Issue #300 settled — see its entry under breaking change accounting. A stored document
+  that is not a JSON object, or that is corrupt JSON, now
   answers `500 storage_error` with "Stored JSON is invalid" instead of being replaced with the body. The update
   path translates its read like every other read path rather than probing existence first, which also removes one
   filesystem round-trip and the race between the probe and the write.
@@ -1582,21 +1586,26 @@ the run already holds replaced the whole result, so a partial recording discarde
   `::a_result_body_is_checked_rather_than_read_field_by_field`, and the `src/domain/composition.rs` and
   `src/domain/service/tests.rs` unit tests listed in the plan.
 - **A supplied `configId` is ignored and the configuration identity is always derived** (Issue #288, amending the
-  Issue #78 identity plan above). The change is confined to one field of one document type: a create or update
-  body may still carry `configId` — the field stays in the schema and is accepted, so no request that used to
-  succeed is refused — but the stored value is always the `<name>.json` the document is listed under, because a
+  Issue #78 identity plan above). The change is confined to one field of one document type: a create body may
+  still carry `configId` — the field stays in the schema and is accepted — but the stored value is always the
+  `<name>.json` the document is listed under, because a
   `configId` is resolved to the file that holds it and a value that disagreed with its own document would name
   nothing. A client that supplied a **differing** `configId` used to read it back out of the document and now
   reads the derived one, and the traversal-shaped value that path used to persist beside a safe listing key is
   gone. No field is added or removed, the legacy Draft 2020-12 configuration schema is untouched, every other
   resource keeps the verbatim rule, and a document already on disk that holds a disagreeing `configId` is not
   rewritten by a read — the next write derives it. Deviation recorded with tests in
-  `tests/configurations.rs::a_supplied_config_id_is_ignored_in_favour_of_the_derived_id`,
-  `::an_update_cannot_move_a_configuration_identity_away_from_its_id`, the three existing configuration
-  assertions that now expect the derived id (`::configurations_support_the_full_crud_lifecycle`,
+  `tests/configurations.rs::a_supplied_config_id_is_ignored_in_favour_of_the_derived_id`, the three existing
+  configuration assertions that now expect the derived id (`::configurations_support_the_full_crud_lifecycle`,
   `::configuration_markers_are_plain_json_under_the_data_root`,
   `::a_partial_update_keeps_the_fields_the_body_leaves_out`), and
   `src/domain/service/tests.rs::normalise_marker_configuration_takes_the_id_over_a_supplied_identity`.
+  **Amended by Issue #300 (entry below):** the update half of this is a refusal rather than an acceptance now —
+  a `PUT` body whose `configId` names another document answers `400 invalid_request` and one the store cannot
+  file answers `400 invalid_id`, so a differing `configId` on an update no longer succeeds and is no longer
+  ignored, which overturns `::an_update_cannot_move_a_configuration_identity_away_from_its_id` and is recorded
+  by `::an_update_refuses_a_body_identifier_that_names_another_configuration` and
+  `::an_update_refuses_a_body_identifier_the_store_cannot_file` in its place. The create half stands unchanged.
 - **Parent-scoped attachment routes added** (Issue #290). Twelve operations are added and none is withdrawn:
   the case- and step-attachment families each gain a form addressed through the holding project
   (`/projects/{id}/test_cases/{case_id}/…`) and a form addressed through the holding suite
@@ -1637,6 +1646,47 @@ the run already holds replaced the whole result, so a partial recording discarde
   `::a_step_attachment_records_no_upload_time`,
   `tests/service.rs::openapi_types_and_names_every_binary_download`, and the `src/domain/mod.rs` unit tests for
   `original_name` and `content_disposition`.
+- **An update refuses a body identifier that would move the document** (Issue #300). The `PUT` routes for the
+  project, suite, run, milestone and configuration answered `200 {"message":"Resource updated"}` to a body that
+  supplied an identity field naming something else, and wrote it: for four of the five resources
+  `normalise_marker` takes a supplied identity string as authoritative (Issue #78 above), so the stored
+  `projectId` / `suiteId` / `testRunId` / `milestoneId` could disagree with the folder or file that holds the
+  document, and a value the store could not file at all — bare, nested, empty, `.` or `..` — was accepted and
+  ignored rather than answered with the `400 invalid_id` the document promises (Issue #288 had already recorded
+  the configuration half of this as accepted-and-ignored). All five now answer before anything is written, in
+  four arms: an absent field is normalisation's business as before; a value that restates the addressed
+  identifier or the stored one is accepted; a value the store cannot file answers `400 invalid_id`; and a usable
+  value naming another document answers `400 invalid_request`, with a message that says why — the identifier is
+  the address, so it is immutable and a rename is a delete and a recreate. Refusing is the deliberate choice
+  over performing the rename: the identifier names the folder or `<id>.json` file holding the document, the role
+  grants that authorise the resource are keyed by that name under `auth/projects/`, the parent-scoped routes
+  resolve it, and a run's results are keyed per case id — so a rename performed here would orphan grants and
+  addresses that no other route moves with it. Observable narrowing: a differing `configId` on an update used to
+  succeed and be ignored and now answers `400 invalid_request` (the Issue #288 amendment above), and a project,
+  suite, run or milestone identity naming another document used to be written into the stored document and now
+  answers `400 invalid_request`. Scope is those five routes; `PUT /test_cases/{id}` is unchanged, because a case
+  identifier is addressed verbatim and its body `testCaseId` is a document field rather than an address, which
+  is recorded as a follow-up in `docs/security/audit-s2-storage-and-filesystem.md` (`O-177-14`). The same
+  question on the duplicate routes is consolidated to one answer: a body `newId` the store cannot file answers
+  `400 invalid_id` on every duplicate route, where `POST /test_suites/{id}/duplicate` previously answered
+  `400 invalid_request` for the same value (the API side of TucanoTestGUI #165). Each route's path identifier
+  keeps the code it already answered — `invalid_request` on `POST /projects/{id}/duplicate`, `invalid_id` on the
+  suite, run and milestone routes, and `404 not_found` on `POST /test_cases/{id}/duplicate`, which addresses a
+  case verbatim and needs no `.json` suffix there, so a bare body `newId` on that route stays usable as it
+  stands. Creation gains the rule its shipped schema already claimed: a `projectId` supplied to `POST /projects`
+  must be a single path segment ending in `.json`, anything else answers `400 invalid_request`, and when usable
+  it becomes the new project's identity and address. Before this a bare `projectId` was answered `201` under the
+  derived `<name>.json` address and a nested one was silently flattened to its last segment, which closes the
+  reported-versus-accepted divergence that `O-177-14` records for projects. One create-side asymmetry stands: a
+  create body's `testRunId` is still stored verbatim while the run's address derives from `name`, the other half
+  of `O-177-14`. `openapi.json` records the same rule on the five `PUT` identity fields, on the duplicate
+  `newId` fields and their `400` references, and on `ProjectCreateRequest.projectId`. Deviation recorded with
+  tests in `tests/projects.rs::a_supplied_project_id_names_the_new_project`,
+  `::an_update_refuses_a_body_identifier_that_names_another_project`,
+  `::an_update_accepts_a_body_identifier_that_restates_the_addressed_one`,
+  `::an_update_refuses_a_body_identifier_the_store_cannot_file`, the same refusal pair per resource in
+  `tests/suites.rs`, `tests/runs.rs`, `tests/milestones.rs` and `tests/configurations.rs`, and
+  `tests/service.rs::duplicate_routes_refuse_a_body_new_id_the_store_cannot_file`.
 
 ## Required case matrix
 

@@ -16,11 +16,14 @@ fn list(service: &TestService<FileRepository>, resource: Resource) -> Vec<String
 }
 
 /// Creates `checkout` and returns the parent that owns its children.
+///
+/// The identity the body supplies is the address the project is filed under, so
+/// it names the project the same way [`derive_create_id`] would for the name.
 fn project(service: &TestService<FileRepository>) -> Parent {
     service
         .create(
             Resource::Projects,
-            &json!({ "projectId": "P-1", "name": "checkout" }),
+            &json!({ "projectId": "checkout.json", "name": "checkout" }),
         )
         .expect("project");
     Parent::Project("checkout.json".to_owned())
@@ -570,7 +573,7 @@ fn duplicating_a_project_stores_a_copy_under_a_new_identifier() {
     service
         .create(
             Resource::Projects,
-            &json!({ "projectId": "P-1", "name": "checkout" }),
+            &json!({ "projectId": "checkout.json", "name": "checkout" }),
         )
         .expect("create");
 

@@ -131,6 +131,10 @@ impl<R: Repository> TestService<R> {
     /// [`DomainError::PreconditionFailed`] carrying the current ETag so the
     /// client can re-read and retry. An absent ETag preserves the legacy
     /// last-writer-wins behaviour.
+    ///
+    /// The write goes back to the addressed identifier, so an identity field
+    /// the body carries is checked rather than obeyed: see
+    /// [`Self::refuse_foreign_identity`].
     pub fn update_with_etag(
         &self,
         resource: Resource,
@@ -140,6 +144,7 @@ impl<R: Repository> TestService<R> {
     ) -> Result<(), DomainError> {
         validation::validate_payload(resource, value)?;
         let parent = self.owner_for_write(resource, id, "Resource not found")?;
+        self.refuse_foreign_identity(resource, parent.as_ref(), id, value)?;
         let value = value.clone();
         let etag_ref = expected_etag.as_deref().filter(|s| !s.is_empty());
         self.repository
@@ -165,6 +170,50 @@ impl<R: Repository> TestService<R> {
             })
     }
 
+    /// Refuses an identity field in a `PUT` body that does not name the
+    /// document the request addressed.
+    ///
+    /// The write always lands on the addressed identifier, so obeying a
+    /// differing value would file a document whose identity names something
+    /// else. A value that is not a usable identifier at all is `invalid_id`; a
+    /// usable value that names another document is `invalid_request`, because
+    /// an identifier is immutable and a rename is a delete followed by a
+    /// create.
+    ///
+    /// The identity the stored document already carries is accepted before the
+    /// value is judged usable, so a client that re-sends a document it read
+    /// round-trips unchanged — including a document stored under a legacy
+    /// identity that no longer passes [`crate::storage::validate_document_id`].
+    fn refuse_foreign_identity(
+        &self,
+        resource: Resource,
+        parent: Option<&Parent>,
+        id: &str,
+        value: &Value,
+    ) -> Result<(), DomainError> {
+        let Some(field) = body_identity_field(resource) else {
+            return Ok(());
+        };
+        let Some(supplied) = value.get(field).and_then(Value::as_str) else {
+            return Ok(());
+        };
+        if supplied == id {
+            return Ok(());
+        }
+        let stored = self
+            .repository
+            .read_at(resource, parent, id)
+            .map_err(|error| error::document_error(error, "Resource not found"))?;
+        if stored.get(field).and_then(Value::as_str) == Some(supplied) {
+            return Ok(());
+        }
+        crate::storage::validate_document_id(resource, supplied)
+            .map_err(|_| DomainError::invalid_id())?;
+        Err(DomainError::invalid_request(format!(
+            "Field `{field}` names another document; an identifier is immutable, delete the resource and recreate it to rename it"
+        )))
+    }
+
     /// Removes a document, its folder, and everything it owns.
     pub fn delete(&self, resource: Resource, id: &str) -> Result<(), DomainError> {
         let parent = self.owner_for_write(resource, id, "Resource not found")?;
@@ -184,5 +233,22 @@ impl<R: Repository> TestService<R> {
         self.repository
             .delete_at(resource, Some(parent), id)
             .map_err(error::delete_error)
+    }
+}
+
+/// The identity field a `PUT` body may carry, for the routes that name a
+/// document by a `.json` identifier.
+///
+/// A test case is absent on purpose: its identifier names the case verbatim
+/// and the test-case routes publish `invalid_request` alone, so the case
+/// document routes read an identifier from the path only.
+fn body_identity_field(resource: Resource) -> Option<&'static str> {
+    match resource {
+        Resource::Projects => Some("projectId"),
+        Resource::Suites => Some("suiteId"),
+        Resource::Runs => Some("testRunId"),
+        Resource::Milestones => Some("milestoneId"),
+        Resource::Configurations => Some("configId"),
+        Resource::Cases => None,
     }
 }

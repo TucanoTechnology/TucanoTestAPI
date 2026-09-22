@@ -634,3 +634,90 @@ async fn deleting_a_milestone_through_a_project_resolves_that_project() {
     assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
     assert_error_envelope(&body, "not_found");
 }
+
+#[tokio::test]
+async fn an_update_refuses_a_body_identifier_that_names_another_milestone() {
+    let (_directory, app) = test_app();
+    let home = fixture_home(&app).await;
+
+    let (status, _) = send_json(
+        &app,
+        json_request(
+            "POST",
+            &format!("/projects/{home}/milestones"),
+            &json!({"name": "Sprint-42"}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    let (status, body) = send_json(
+        &app,
+        json_request(
+            "PUT",
+            "/milestones/Sprint-42.json",
+            &json!({"milestoneId": "other.json", "name": "renamed"}),
+        ),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::BAD_REQUEST,
+        "renaming a milestone: {body}"
+    );
+    assert_error_envelope(&body, "invalid_request");
+    assert!(
+        body["error"]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("immutable")),
+        "unexpected message: {body}"
+    );
+
+    // The refusal lands before the write, so the document is untouched.
+    let (status, stored) = send_json(&app, get("/milestones/Sprint-42.json")).await;
+    assert_eq!(status, StatusCode::OK, "{stored}");
+    assert_eq!(stored["milestoneId"], "Sprint-42.json");
+    assert_eq!(stored["name"], "Sprint-42");
+
+    let (status, body) = send_json(&app, get("/milestones/other.json")).await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "nothing was renamed: {body}");
+}
+
+#[tokio::test]
+async fn an_update_refuses_a_body_identifier_the_store_cannot_file() {
+    let (_directory, app) = test_app();
+    let home = fixture_home(&app).await;
+
+    let (status, _) = send_json(
+        &app,
+        json_request(
+            "POST",
+            &format!("/projects/{home}/milestones"),
+            &json!({"milestoneId": "M-1.json", "name": "Sprint 42"}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    for supplied in ["probe-moved", "team/copy.json", "", ".", ".."] {
+        let (status, body) = send_json(
+            &app,
+            json_request(
+                "PUT",
+                "/milestones/M-1.json",
+                &json!({"milestoneId": supplied}),
+            ),
+        )
+        .await;
+        assert_eq!(
+            status,
+            StatusCode::BAD_REQUEST,
+            "supplying {supplied:?}: {body}"
+        );
+        assert_error_envelope(&body, "invalid_id");
+    }
+
+    let (status, stored) = send_json(&app, get("/milestones/M-1.json")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(stored["milestoneId"], "M-1.json");
+}
