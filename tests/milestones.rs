@@ -721,3 +721,42 @@ async fn an_update_refuses_a_body_identifier_the_store_cannot_file() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(stored["milestoneId"], "M-1.json");
 }
+
+#[tokio::test]
+async fn an_update_accepts_a_body_identifier_that_restates_the_addressed_one() {
+    let (_directory, app) = test_app();
+    let home = fixture_home(&app).await;
+
+    let (status, _) = send_json(
+        &app,
+        json_request(
+            "POST",
+            &format!("/projects/{home}/milestones"),
+            &json!({"milestoneId": "M-1.json", "name": "Sprint 42", "status": "Open"}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    // A client putting back what it read supplies the identity the document is
+    // stored under, which is not the refusal the differing value earns.
+    let (status, body) = send_json(
+        &app,
+        json_request(
+            "PUT",
+            "/milestones/M-1.json",
+            &json!({"milestoneId": "M-1.json", "status": "Closed"}),
+        ),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "restating the stored identity: {body}"
+    );
+
+    let (status, stored) = send_json(&app, get("/milestones/M-1.json")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(stored["milestoneId"], "M-1.json");
+    assert_eq!(stored["status"], "Closed");
+}
