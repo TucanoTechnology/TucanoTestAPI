@@ -31,7 +31,7 @@ rest are not part of the file's key map at all.
 | Listener port | `PORT` | `3000` | none | Owned by the orchestrator. |
 | Configuration file path | `TUCANO_CONFIG_FILE` | *(unset — no file)* | none | Names the optional JSON configuration file. Leaving it unset is the documented "no file" case. |
 | Key file path | `TUCANO_CONFIG_KEY_FILE` | *(unset — no keys)* | low | Names the optional key ring file for decrypting AEAD-encrypted secrets in the configuration file. |
-| Advisory lock timeout | `TUCANO_LOCK_TIMEOUT_MS` | `5000` | none | Milliseconds a write waits for the shared volume's advisory lock before it is refused with the `503` `lock_timeout` answer. Must be a `u64`; an unparseable value stops startup. |
+| Advisory lock timeout | `TUCANO_LOCK_TIMEOUT_MS` | `5000` | none | Milliseconds a write waits for the shared volume's advisory lock before it is refused with the `503` `lock_timeout` answer. Must be a `u64`; an unparseable value stops startup, while an empty value keeps the default, exactly as an unset one does. |
 
 ## File and environment settings
 

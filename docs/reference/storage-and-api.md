@@ -193,7 +193,7 @@ names.
 | `PORT` | `3000` | The port the API binds. Environment-only. |
 | `TUCANO_CONFIG_FILE` | — | Path to the optional configuration file described below. Environment-only; unset means no file. |
 | `TUCANO_CONFIG_KEY_FILE` | — | Path to the key ring file for decrypting AEAD-encrypted secrets in the configuration file. Environment-only; unset means no encryption keys. |
-| `TUCANO_LOCK_TIMEOUT_MS` | `5000` | Milliseconds a write waits for the advisory lock before it is refused with `503 lock_timeout`. Environment-only; must be a whole number, and anything else stops startup. |
+| `TUCANO_LOCK_TIMEOUT_MS` | `5000` | Milliseconds a write waits for the advisory lock before it is refused with `503 lock_timeout`. Environment-only; must be a whole number, and anything else stops startup. An empty value is not a number but keeps the default, like an unset one. |
 | `TUCANO_AUTH_REQUIRED` | `false` | Require and enforce a bearer token on every guarded route. When off, every guard returns and the API is anonymous. |
 | `TUCANO_JWT_SECRET` | — | The HS256 signing secret. Required when auth is on; at least 32 bytes. |
 | `TUCANO_JWT_SECRET_FILE` | — | A file to read the secret from. Set this **or** `TUCANO_JWT_SECRET`, never both. |
