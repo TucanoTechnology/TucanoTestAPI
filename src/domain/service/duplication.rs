@@ -39,7 +39,9 @@ impl<R: Repository> TestService<R> {
             ));
         }
 
-        self.write_marker(spec.resource, parent.as_ref(), &new_id, &document)?;
+        audited(resource_noun(spec.resource), "duplicate", &new_id, || {
+            self.write_marker(spec.resource, parent.as_ref(), &new_id, &document)
+        })?;
         Ok(new_id)
     }
 }

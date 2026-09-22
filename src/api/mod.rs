@@ -15,8 +15,10 @@ mod cases;
 mod configurations;
 mod crud;
 mod error;
+mod metrics;
 mod milestones;
 mod projects;
+pub mod redact;
 mod reports;
 mod request_id;
 mod runs;
@@ -37,6 +39,7 @@ use serde_json::{Value, json};
 use tower_http::{limit::RequestBodyLimitLayer, trace::TraceLayer};
 
 use self::auth::AuthState;
+use self::metrics::HttpMetrics;
 use crate::{
     domain::{MAX_ATTACHMENT_BYTES, TestService},
     storage::{Repository, StorageProbe},
@@ -58,6 +61,7 @@ pub const MAX_BODY_BYTES: usize = MAX_ATTACHMENT_BYTES;
 pub struct AppState<R> {
     service: Arc<TestService<R>>,
     auth: AuthState,
+    metrics: Arc<HttpMetrics>,
 }
 
 impl<R> AppState<R> {
@@ -66,12 +70,18 @@ impl<R> AppState<R> {
         Self {
             service: Arc::new(service),
             auth,
+            metrics: Arc::new(HttpMetrics::new()),
         }
     }
 
     /// The authentication material a handler's guard reads.
     pub fn auth(&self) -> &AuthState {
         &self.auth
+    }
+
+    /// The request counters `/metrics` renders.
+    pub fn metrics(&self) -> &HttpMetrics {
+        &self.metrics
     }
 }
 
@@ -90,6 +100,7 @@ impl<R> Clone for AppState<R> {
         Self {
             service: Arc::clone(&self.service),
             auth: self.auth.clone(),
+            metrics: Arc::clone(&self.metrics),
         }
     }
 }
@@ -108,6 +119,7 @@ pub const ROUTES: &[&str] = &[
     "/health",
     "/ready",
     "/diagnostics",
+    "/metrics",
     "/openapi.json",
     "/api-docs",
     "/api-docs/",
@@ -201,6 +213,7 @@ where
         .route("/health", get(health))
         .route("/ready", get(ready::<R>))
         .route("/diagnostics", get(diagnostics::<R>))
+        .route("/metrics", get(request_metrics::<R>))
         .route("/openapi.json", get(openapi))
         .route("/api-docs", get(swagger_ui))
         .route("/api-docs/", get(swagger_ui))
@@ -213,8 +226,16 @@ where
         .merge(configurations::routes::<R>())
         .merge(auth::routes::<R>())
         .layer(RequestBodyLimitLayer::new(MAX_BODY_BYTES))
-        .layer(TraceLayer::new_for_http().make_span_with(request_id::request_span))
+        .layer(
+            TraceLayer::new_for_http()
+                .make_span_with(request_id::request_span)
+                .on_response(self::metrics::record_outcome),
+        )
         .layer(middleware::from_fn(request_id::propagate))
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            self::metrics::track::<R>,
+        ))
         .with_state(state)
 }
 
@@ -263,6 +284,28 @@ where
         "lockHeld": probe.lock_held,
         "lastWriteUnix": probe.last_write_unix,
     }))
+}
+
+/// The counters behind `/metrics`, rendered in the Prometheus text exposition
+/// format.
+///
+/// The endpoint is unguarded for the same reason `/health` is: the caller that
+/// has to ask how the process is doing is often the one that cannot
+/// authenticate. It exposes the routes the deployment serves and how they are
+/// answering, which the published contract already names, and nothing about the
+/// documents behind them.
+async fn request_metrics<R>(State(state): State<AppState<R>>) -> Response
+where
+    R: Repository + 'static,
+{
+    (
+        [(
+            header::CONTENT_TYPE,
+            "text/plain; version=0.0.4; charset=utf-8",
+        )],
+        state.metrics().render(),
+    )
+        .into_response()
 }
 
 /// Which of the three readiness checks failed, in a sentence that names no path

@@ -31,9 +31,16 @@ impl<R: Repository> TestService<R> {
             "size": contents.len(),
             "uploadedAt": current_iso8601_timestamp(),
         });
-        self.repository
-            .save_attachment(parent, id, &filename, &entry, contents)
-            .map_err(attachment_write_error)?;
+        audited(
+            ATTACHMENT_RESOURCE,
+            "attach",
+            &format!("{id}/{filename}"),
+            || {
+                self.repository
+                    .save_attachment(parent, id, &filename, &entry, contents)
+                    .map_err(attachment_write_error)
+            },
+        )?;
 
         Ok(StoredAttachment {
             filename,
@@ -61,9 +68,16 @@ impl<R: Repository> TestService<R> {
         id: &str,
         filename: &str,
     ) -> Result<(), DomainError> {
-        self.repository
-            .delete_attachment(parent, id, filename)
-            .map_err(error::attachment_error)
+        audited(
+            ATTACHMENT_RESOURCE,
+            "detach",
+            &format!("{id}/{filename}"),
+            || {
+                self.repository
+                    .delete_attachment(parent, id, filename)
+                    .map_err(error::attachment_error)
+            },
+        )
     }
 
     /// Stores an uploaded file against one structured step of a test case.
@@ -87,9 +101,16 @@ impl<R: Repository> TestService<R> {
             "mimeType": mime_type(&filename),
             "size": contents.len(),
         });
-        self.repository
-            .save_step_attachment(parent, id, step_index, &filename, &entry, contents)
-            .map_err(attachment_write_error)?;
+        audited(
+            ATTACHMENT_RESOURCE,
+            "attach",
+            &format!("{id}/steps/{step_index}/{filename}"),
+            || {
+                self.repository
+                    .save_step_attachment(parent, id, step_index, &filename, &entry, contents)
+                    .map_err(attachment_write_error)
+            },
+        )?;
 
         Ok(StoredAttachment {
             filename,
@@ -121,9 +142,16 @@ impl<R: Repository> TestService<R> {
         step_index: usize,
         filename: &str,
     ) -> Result<(), DomainError> {
-        self.repository
-            .delete_step_attachment(parent, id, step_index, filename)
-            .map_err(error::attachment_error)
+        audited(
+            ATTACHMENT_RESOURCE,
+            "detach",
+            &format!("{id}/steps/{step_index}/{filename}"),
+            || {
+                self.repository
+                    .delete_step_attachment(parent, id, step_index, filename)
+                    .map_err(error::attachment_error)
+            },
+        )
     }
 
     /// Resolves one structured step of a test case, so a step attachment only

@@ -929,7 +929,7 @@ async fn openapi_documents_the_error_contract_of_every_operation() {
 /// Neither half subsumes the other. The table names a test but cannot see
 /// whether it reaches the route; the recording sees a success but cannot say
 /// which test produced it, only that one in the run did. Keep both.
-const CONTRACT_COVERAGE: [(&str, &str); 85] = [
+const CONTRACT_COVERAGE: [(&str, &str); 86] = [
     ("get /health", "health_reports_filesystem_storage"),
     (
         "get /openapi.json",
@@ -947,6 +947,7 @@ const CONTRACT_COVERAGE: [(&str, &str); 85] = [
         "get /diagnostics",
         "diagnostics_reports_the_probe_and_names_no_path",
     ),
+    ("get /metrics", "metrics_report_what_the_deployment_served"),
     ("get /projects", "projects_support_the_full_crud_lifecycle"),
     ("post /projects", "projects_support_the_full_crud_lifecycle"),
     (
@@ -1458,14 +1459,15 @@ async fn openapi_declares_the_security_posture_of_every_operation() {
 
     // The endpoints that exist before a caller does, and the two it signs in
     // through: none of them names a token, and the sign-in routes answer their
-    // own documented failure instead. The readiness and diagnostics probes are
-    // unguarded by the same argument as `/health`: an orchestrator that cannot
-    // authenticate is exactly the caller that has to ask whether the process is
-    // ready, and neither probe reports anything a caller may not see.
-    const UNGUARDED: [&str; 7] = [
+    // own documented failure instead. The readiness, diagnostics and counters
+    // endpoints are unguarded by the same argument as `/health`: an orchestrator
+    // that cannot authenticate is exactly the caller that has to ask whether the
+    // process is ready, and none of them reports anything a caller may not see.
+    const UNGUARDED: [&str; 8] = [
         "get /health",
         "get /ready",
         "get /diagnostics",
+        "get /metrics",
         "get /openapi.json",
         "get /api-docs",
         "post /auth/login",
@@ -1473,7 +1475,7 @@ async fn openapi_declares_the_security_posture_of_every_operation() {
     ];
 
     let operations = documented_operations(&document);
-    assert_eq!(operations.len(), 85, "the documented surface changed");
+    assert_eq!(operations.len(), 86, "the documented surface changed");
 
     for (label, operation) in &operations {
         let responses = operation["responses"].as_object().expect("responses");
@@ -1741,7 +1743,7 @@ async fn openapi_operations_carry_stable_ids_and_resource_tags() {
             "{label} carries an undeclared tag: {tag}"
         );
     }
-    assert_eq!(ids.len(), 85, "every documented operation is named");
+    assert_eq!(ids.len(), 86, "every documented operation is named");
 }
 
 #[tokio::test]

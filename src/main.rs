@@ -1,5 +1,8 @@
+use std::io::IsTerminal;
 use std::time::Duration;
 
+use tracing_subscriber::EnvFilter;
+use tracing_subscriber::fmt;
 use tucano_test::{api, auth, config, repository};
 
 #[tokio::main]
@@ -21,6 +24,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .into());
     }
+
+    // Installed only when serving. The subcommands write their report to stdout
+    // for `scripts/teardown.mjs` to read, so a log line mixed into it would be
+    // read as a report of its own.
+    install_subscriber();
 
     // The optional file is read once, here, before the listener binds: the ADR
     // puts it in the same class as the environment, resolved at startup into an
@@ -94,6 +102,73 @@ fn lock_timeout_from(raw: Option<&str>) -> Duration {
         .parse()
         .unwrap_or_else(|_| panic!("TUCANO_LOCK_TIMEOUT_MS is not a valid u64: {raw:?}"));
     Duration::from_millis(millis)
+}
+
+/// The directive set an unset, empty or blank `TUCANO_LOG` resolves to.
+///
+/// `info` announces the request spans, the audit lines and the failures without
+/// the per-connection noise `debug` adds, which is the level a deployment that
+/// says nothing wants.
+const DEFAULT_LOG_FILTER: &str = "info";
+
+/// How a log line is rendered.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LogFormat {
+    /// One human-readable line per event, coloured when stdout is a terminal.
+    Compact,
+    /// One JSON object per event, uncoloured, for a log collector to parse.
+    Json,
+}
+
+/// Installs the process-wide subscriber the request log and the audit trail are
+/// written to.
+///
+/// Two environment variables configure it, both resolved once at startup so a
+/// bad one stops the server rather than a request: `TUCANO_LOG` is a
+/// `tracing-subscriber` directive set (defaulting to [`DEFAULT_LOG_FILTER`]),
+/// and `TUCANO_LOG_FORMAT` is `compact` (the default) or `json`. Colour is
+/// enabled on stdout only when stdout is a terminal, so a captured log never
+/// carries escape sequences.
+fn install_subscriber() {
+    let filter = log_filter_from(std::env::var("TUCANO_LOG").ok().as_deref());
+    match log_format_from(std::env::var("TUCANO_LOG_FORMAT").ok().as_deref()) {
+        LogFormat::Compact => fmt()
+            .with_env_filter(filter)
+            .with_ansi(std::io::stdout().is_terminal())
+            .init(),
+        LogFormat::Json => fmt().json().with_env_filter(filter).with_ansi(false).init(),
+    }
+}
+
+/// Reads the directive set from the raw environment value, so the parse is
+/// testable without touching the process environment.
+///
+/// An unset, empty or blank value keeps [`DEFAULT_LOG_FILTER`], the way
+/// [`lock_timeout_from`] keeps its default; anything else must be a directive
+/// set `tracing-subscriber` accepts.
+fn log_filter_from(raw: Option<&str>) -> EnvFilter {
+    let directives = raw
+        .map(str::trim)
+        .filter(|raw| !raw.is_empty())
+        .unwrap_or(DEFAULT_LOG_FILTER);
+    EnvFilter::try_new(directives).unwrap_or_else(|error| {
+        panic!("TUCANO_LOG is not a valid filter directive set: {directives:?} ({error})")
+    })
+}
+
+/// Reads the rendering from the raw environment value, the same way
+/// [`log_filter_from`] reads the directive set.
+///
+/// An unset, empty or blank value means [`LogFormat::Compact`], and a value that
+/// is neither format stops startup rather than being quietly treated as one.
+fn log_format_from(raw: Option<&str>) -> LogFormat {
+    match raw.map(str::trim).filter(|raw| !raw.is_empty()) {
+        None | Some("compact") => LogFormat::Compact,
+        Some("json") => LogFormat::Json,
+        Some(other) => {
+            panic!("TUCANO_LOG_FORMAT is neither `compact` nor `json`: {other:?}")
+        }
+    }
 }
 
 /// `seed-auth` — creates the demo account and grants of `docs/testing/seed-dataset-spec.md` §5.
@@ -371,5 +446,50 @@ mod tests {
     #[should_panic(expected = "TUCANO_LOCK_TIMEOUT_MS is not a valid u64")]
     fn a_non_numeric_lock_timeout_stops_startup() {
         lock_timeout_from(Some("soon"));
+    }
+
+    #[test]
+    fn a_log_filter_is_read_from_the_value() {
+        assert_eq!(log_filter_from(Some("warn")).to_string(), "warn");
+        assert_eq!(
+            log_filter_from(Some("tucano_test=debug,tower_http=warn")).to_string(),
+            "tucano_test=debug,tower_http=warn"
+        );
+    }
+
+    #[test]
+    fn an_unset_or_empty_log_filter_keeps_the_default() {
+        for raw in [None, Some(""), Some("   ")] {
+            assert_eq!(
+                log_filter_from(raw).to_string(),
+                DEFAULT_LOG_FILTER,
+                "{raw:?} should keep the default"
+            );
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "TUCANO_LOG is not a valid filter directive set")]
+    fn an_unparseable_log_filter_stops_startup() {
+        log_filter_from(Some("info=debug=oops"));
+    }
+
+    #[test]
+    fn a_log_format_is_read_from_the_value() {
+        assert_eq!(log_format_from(Some("json")), LogFormat::Json);
+        assert_eq!(log_format_from(Some(" compact ")), LogFormat::Compact);
+    }
+
+    #[test]
+    fn an_unset_or_empty_log_format_is_compact() {
+        for raw in [None, Some(""), Some("   ")] {
+            assert_eq!(log_format_from(raw), LogFormat::Compact, "{raw:?}");
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "TUCANO_LOG_FORMAT is neither `compact` nor `json`")]
+    fn an_unknown_log_format_stops_startup() {
+        log_format_from(Some("yaml"));
     }
 }

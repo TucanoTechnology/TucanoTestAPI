@@ -778,7 +778,13 @@ async fn the_public_endpoints_need_no_caller() {
     let directory = tempfile::tempdir().expect("temp dir");
     let app = enforcing_app(directory.path());
 
-    for uri in ["/health", "/openapi.json", "/api-docs", "/api-docs/"] {
+    for uri in [
+        "/health",
+        "/metrics",
+        "/openapi.json",
+        "/api-docs",
+        "/api-docs/",
+    ] {
         let (status, _, answer) = send(&app, request("GET", uri, None, None)).await;
         assert_eq!(status, StatusCode::OK, "GET {uri}: {answer}");
     }

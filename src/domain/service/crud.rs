@@ -147,27 +147,29 @@ impl<R: Repository> TestService<R> {
         self.refuse_foreign_identity(resource, parent.as_ref(), id, value)?;
         let value = value.clone();
         let etag_ref = expected_etag.as_deref().filter(|s| !s.is_empty());
-        self.repository
-            .transform_at(resource, parent.as_ref(), id, etag_ref, |stored| {
-                let mut merged = merged_document(&stored, &value)
-                    .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e.to_string()))?;
-                if resource == Resource::Cases {
-                    self.revise_case(parent.as_ref(), id, &stored, &mut merged)
-                        .map_err(|e| io::Error::other(e.to_string()))?;
-                }
-                let mut document = merged;
-                super::normalise_marker(resource, id, &mut document);
-                Ok(document)
-            })
-            .map_err(|e| {
-                if e.kind() == io::ErrorKind::WouldBlock {
-                    DomainError::PreconditionFailed {
-                        current_etag: e.to_string(),
+        audited(resource_noun(resource), "update", id, || {
+            self.repository
+                .transform_at(resource, parent.as_ref(), id, etag_ref, |stored| {
+                    let mut merged = merged_document(&stored, &value)
+                        .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e.to_string()))?;
+                    if resource == Resource::Cases {
+                        self.revise_case(parent.as_ref(), id, &stored, &mut merged)
+                            .map_err(|e| io::Error::other(e.to_string()))?;
                     }
-                } else {
-                    error::document_error(e, "Resource not found")
-                }
-            })
+                    let mut document = merged;
+                    super::normalise_marker(resource, id, &mut document);
+                    Ok(document)
+                })
+                .map_err(|e| {
+                    if e.kind() == io::ErrorKind::WouldBlock {
+                        DomainError::PreconditionFailed {
+                            current_etag: e.to_string(),
+                        }
+                    } else {
+                        error::document_error(e, "Resource not found")
+                    }
+                })
+        })
     }
 
     /// Refuses an identity field in a `PUT` body that does not name the
@@ -217,9 +219,11 @@ impl<R: Repository> TestService<R> {
     /// Removes a document, its folder, and everything it owns.
     pub fn delete(&self, resource: Resource, id: &str) -> Result<(), DomainError> {
         let parent = self.owner_for_write(resource, id, "Resource not found")?;
-        self.repository
-            .delete_at(resource, parent.as_ref(), id)
-            .map_err(error::delete_error)
+        audited(resource_noun(resource), "delete", id, || {
+            self.repository
+                .delete_at(resource, parent.as_ref(), id)
+                .map_err(error::delete_error)
+        })
     }
 
     /// Removes one occurrence of a child from a parent the caller named.
@@ -230,9 +234,11 @@ impl<R: Repository> TestService<R> {
         id: &str,
     ) -> Result<(), DomainError> {
         self.require_parent(parent)?;
-        self.repository
-            .delete_at(resource, Some(parent), id)
-            .map_err(error::delete_error)
+        audited(resource_noun(resource), "delete", id, || {
+            self.repository
+                .delete_at(resource, Some(parent), id)
+                .map_err(error::delete_error)
+        })
     }
 }
 
