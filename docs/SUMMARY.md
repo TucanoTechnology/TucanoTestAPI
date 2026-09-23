@@ -53,6 +53,7 @@
 - [Configuration decision](security/configuration-decision.md)
 - [Scanning policy](security/scanning-policy.md)
 - [Audit scope](security/audit-scope.md)
+- [Audit: HTTP surface (S1)](security/audit-s1-http-surface.md)
 - [Audit: storage and filesystem (S2)](security/audit-s2-storage-and-filesystem.md)
 - [Audit: container and deployment (S3)](security/audit-s3-container-and-deployment.md)
 - [Audit: dependencies and supply chain (S4)](security/audit-s4-dependencies-and-supply-chain.md)
