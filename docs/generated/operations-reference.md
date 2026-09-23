@@ -10,7 +10,7 @@ operation index — method, path, `operationId` and summary. Schemas, parameters
 and status codes are the contract itself: read them in [`openapi.json`](../../openapi.json) or in
 the Swagger UI at `/api-docs`, which is rendered from the same document.
 
-The contract currently registers **85** operations.
+The contract currently registers **86** operations.
 
 | Method | Path | Operation | Summary |
 | --- | --- | --- | --- |
@@ -24,6 +24,7 @@ The contract currently registers **85** operations.
 | `DELETE` | `/configurations/{id}` | `deleteConfiguration` | Delete a configuration |
 | `GET` | `/diagnostics` | `getDiagnostics` | Storage diagnostics |
 | `GET` | `/health` | `getHealth` | Health check |
+| `GET` | `/metrics` | `getMetrics` | Request counters |
 | `GET` | `/milestones/{id}` | `getMilestone` | Read a milestone |
 | `PUT` | `/milestones/{id}` | `updateMilestone` | Update a milestone |
 | `DELETE` | `/milestones/{id}` | `deleteMilestone` | Delete a milestone |

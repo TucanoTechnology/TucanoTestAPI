@@ -45,15 +45,16 @@ error names the counts it found and points at the deployment guide. The full lay
 
 ## Health, readiness, and diagnostics
 
-Three unauthenticated endpoints answer the operational questions. They need no token by design — an
-orchestrator probes a container before any credential could be presented — and none of them reveals
-a path, a filesystem error or any stored content.
+Four unauthenticated endpoints answer the operational questions. They need no token by design — an
+orchestrator probes a container before any credential could be presented, and a scraper has none at
+all — and none of them reveals a path, a filesystem error or any stored content.
 
 | Endpoint | Answers | Status |
 | --- | --- | --- |
 | `GET /health` | *Is the process serving?* Liveness only. | Always `200` while the process is up |
 | `GET /ready` | *Can the store take writes?* Also checks the data directory and the advisory lock. | `200` ready, `503` not ready |
 | `GET /diagnostics` | The same checks, reported individually, for an operator. | Always `200` — the report is not an error |
+| `GET /metrics` | *How much has this deployment served?* Prometheus counters by method, resource and status class. | Always `200` — only counters, no stored content |
 
 ```sh
 curl -s http://localhost:3100/health

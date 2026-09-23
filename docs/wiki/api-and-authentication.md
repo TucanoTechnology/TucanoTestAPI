@@ -86,7 +86,7 @@ The bootstrap pair creates the first `systemAdmin` account, but **only when the 
 accounts at all** — it is a one-time step, and leaving the variables in place afterwards is
 harmless. Change the password, or remove them.
 
-Seven operations need no caller even when authentication is on. In `openapi.json` these are the
+Eight operations need no caller even when authentication is on. In `openapi.json` these are the
 operations marked `security: []` while the document's global requirement is `bearerAuth`:
 
 | Public operation | Why it is public |
@@ -94,6 +94,7 @@ operations marked `security: []` while the document's global requirement is `bea
 | `GET /health` | A load balancer has no credentials |
 | `GET /ready` (`getReady`) | The orchestrator that gates traffic on readiness is the same caller that has no credentials, and the answer names no path |
 | `GET /diagnostics` (`getDiagnostics`) | Its caller is an operator with a shell on the host, not a client with a token; it reports booleans and a timestamp, never a path |
+| `GET /metrics` (`getMetrics`) | A Prometheus scraper has no credentials either, and the counters name no stored content |
 | `POST /auth/login` (`login`) | It is how you obtain credentials |
 | `POST /auth/refresh` (`refreshSession`) | Its whole job is to renew an expired access token |
 | `GET /openapi.json`, `GET /api-docs` | The contract, so clients can read it unauthenticated |
@@ -309,7 +310,7 @@ Both carry the challenge header, and both name their specific code in the envelo
 ---
 
 *Sources of truth: [`openapi.json`](../../openapi.json) for every route, operation id, schema and
-status code named here — including the global `bearerAuth` requirement, the five `security: []`
+status code named here — including the global `bearerAuth` requirement, the eight `security: []`
 operations, the `Error` envelope and its code enum, and the plain-text `413`; the
 [README: Authentication](../../README.md#authentication) and
 [README: Errors and request limits](../../README.md#errors-and-request-limits) for the variables and

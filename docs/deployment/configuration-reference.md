@@ -32,6 +32,8 @@ rest are not part of the file's key map at all.
 | Configuration file path | `TUCANO_CONFIG_FILE` | *(unset — no file)* | none | Names the optional JSON configuration file. Leaving it unset is the documented "no file" case. |
 | Key file path | `TUCANO_CONFIG_KEY_FILE` | *(unset — no keys)* | low | Names the optional key ring file for decrypting AEAD-encrypted secrets in the configuration file. |
 | Advisory lock timeout | `TUCANO_LOCK_TIMEOUT_MS` | `5000` | none | Milliseconds a write waits for the shared volume's advisory lock before it is refused with the `503` `lock_timeout` answer. Must be a `u64`; an unparseable value stops startup, while an empty value keeps the default, exactly as an unset one does. |
+| Log filter | `TUCANO_LOG` | `info` | none | The `tracing-subscriber` directive set the process subscriber is built from. An unset, empty or blank value keeps `info` — the request spans, the audit lines and the failures, without the per-connection noise `debug` adds. A directive set `tracing-subscriber` rejects stops startup rather than a request. |
+| Log format | `TUCANO_LOG_FORMAT` | `compact` | none | `compact` renders one human-readable line per event, coloured only when stdout is a terminal so a captured log never carries escape sequences; `json` renders one object per event, uncoloured, for a log collector. Any other value stops startup. |
 
 ## File and environment settings
 

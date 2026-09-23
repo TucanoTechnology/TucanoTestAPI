@@ -100,7 +100,8 @@ that needs to stay reachable should either keep authentication on or restrict th
 loopback by changing the port mapping to `127.0.0.1:3100:3000`.
 
 Interactive Swagger UI is available at `http://localhost:3100/api-docs`; the raw OpenAPI document is
-at `http://localhost:3100/openapi.json`.
+at `http://localhost:3100/openapi.json`; the request counters are at
+`http://localhost:3100/metrics`.
 
 The API runs as an unprivileged user (`uid 10001`) with a read-only root filesystem, a `/tmp` tmpfs,
 and `no-new-privileges`; only `/data` and `/tmp` are writable. It stores inspectable JSON and
@@ -110,6 +111,25 @@ attachments in the data directory that Compose bind-mounts from the host `./data
 
 The full deployment model — container hardening, the optional configuration file, scaling, and
 rollback — is in the [deployment guide](docs/deployment/deployment-guide.md).
+
+## Logging and metrics
+
+Every request opens one `http.request` span carrying the method, the path, the query string (every
+secret query parameter redacted), the status and the latency. Every mutating operation writes one
+`tucano.audit` event naming the action, the resource, the identifier and the outcome, alongside the
+error code when it was refused. No request body and no attachment's contents are ever logged.
+
+`TUCANO_LOG` is the `tracing-subscriber` directive set, defaulting to `info` — the request spans, the
+audit lines and the failures, without the per-connection noise `debug` adds. `TUCANO_LOG_FORMAT` is
+`compact` (the default, one human-readable line per event, coloured only when stdout is a terminal)
+or `json` (one object per event, uncoloured, for a collector to parse). Both are read once at
+startup, so an unparseable directive set or an unknown format stops the server rather than a
+request.
+
+`GET /metrics` serves Prometheus counters in the text exposition format the API renders itself — no
+new endpoint dependency and no token, since the route sits with the other unguarded ones. Each
+series counts requests by method, by the first segment of the matched route template, and by status
+class.
 
 ## Module layout
 
@@ -176,6 +196,7 @@ Tests are split into two layers and both run in CI on every push and pull reques
 | `tests/configurations.rs` | Configuration CRUD, validation, conflicts, missing resources, restart persistence, and use by a run |
 | `tests/reports.rs` | The reports: the coverage report (per-suite and total case counts, the project scope filter, the global scope) and the run summary (the status buckets, the pass rate, the summed durations, the intersecting project/milestone/configuration and date filters), with the error answers for an unknown and an unusable identifier |
 | `tests/request_id.rs` | The request id: the minted `X-Request-Id` on a request that sends none, the verbatim echo of an inbound one, the replacement of an empty header, distinct ids per request, the `requestId` the error envelope carries, the header a plain-text rejection still carries, and the id the request span is given |
+| `tests/observability.rs` | The request span every request opens (method, path, status, latency), the `/metrics` counters in the Prometheus text format, the audit line a mutation writes and the failure line a refused one writes, and the credentials, bodies and attachment contents the whole-process log capture never holds |
 | `tests/attachments.rs` | Upload, download, delete, content types, removal with the parent test case |
 | `tests/tags.rs` | The `tags` array on projects, suites, cases and runs, the shared `?tags=` OR filter, and the OpenAPI parameter it is published through |
 | `tests/validation.rs` | Scalar type validation: wrong-typed fields rejected on create and update with the field named, valid and omitted fields accepted, and documents persisted before the change still readable |

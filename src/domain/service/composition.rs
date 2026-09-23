@@ -59,7 +59,9 @@ impl<R: Repository> TestService<R> {
             self.load::<TestRun>(Resource::Runs, run_id, Some(&home), "Test run not found")?;
         let suite = self.load_entity::<TestSuite>(Resource::Suites, &suite_id)?;
         composition::attach_suite_to_run(&mut run, &suite, &suite_id)?;
-        self.save(Resource::Runs, run_id, Some(&home), &run)
+        audited(resource_noun(Resource::Runs), "add_suite", run_id, || {
+            self.save(Resource::Runs, run_id, Some(&home), &run)
+        })
     }
 
     /// Adds the case named in `body` to a run, embedding a snapshot copy.
@@ -73,7 +75,9 @@ impl<R: Repository> TestService<R> {
         let test_case = self.load_entity::<TestCase>(Resource::Cases, &test_case_id)?;
         composition::attach_case_to_run(&mut run, &test_case, &test_case_id)?;
         composition::capture_case_version(&mut run, &test_case.test_case_id, test_case.version);
-        self.save(Resource::Runs, run_id, Some(&home), &run)
+        audited(resource_noun(Resource::Runs), "add_case", run_id, || {
+            self.save(Resource::Runs, run_id, Some(&home), &run)
+        })
     }
 
     /// Records, or updates, the result of a case within a run.
@@ -105,7 +109,12 @@ impl<R: Repository> TestService<R> {
             held.as_ref().and_then(|case| case.version),
         );
         composition::upsert_result(&mut run, update);
-        self.save(Resource::Runs, run_id, Some(&home), &run)
+        audited(
+            resource_noun(Resource::Runs),
+            "record_result",
+            run_id,
+            || self.save(Resource::Runs, run_id, Some(&home), &run),
+        )
     }
 
     /// Lists the defects linked to one case's result in a run.
@@ -229,7 +238,9 @@ impl<R: Repository> TestService<R> {
             duplicates,
             summary,
         };
-        self.save(Resource::Runs, run_id, Some(&home), &run)?;
+        audited(resource_noun(Resource::Runs), "import", run_id, || {
+            self.save(Resource::Runs, run_id, Some(&home), &run)
+        })?;
         Ok(outcome)
     }
 
@@ -255,7 +266,12 @@ impl<R: Repository> TestService<R> {
             entity_missing_message(Resource::Configurations),
         )?;
         composition::attach_configuration_to_run(&mut run, &configuration, &config_id)?;
-        self.save(Resource::Runs, run_id, Some(&home), &run)
+        audited(
+            resource_noun(Resource::Runs),
+            "link_configuration",
+            run_id,
+            || self.save(Resource::Runs, run_id, Some(&home), &run),
+        )
     }
 
     /// Removes a configuration reference from a run.
@@ -278,7 +294,12 @@ impl<R: Repository> TestService<R> {
             entity_missing_message(Resource::Configurations),
         )?;
         composition::detach_configuration_from_run(&mut run, config_id)?;
-        self.save(Resource::Runs, run_id, Some(&home), &run)
+        audited(
+            resource_noun(Resource::Runs),
+            "unlink_configuration",
+            run_id,
+            || self.save(Resource::Runs, run_id, Some(&home), &run),
+        )
     }
 
     /// Links a defect to the result a run records for `case_id`.
@@ -308,7 +329,9 @@ impl<R: Repository> TestService<R> {
         let mut run =
             self.load::<TestRun>(Resource::Runs, run_id, Some(&home), "Test run not found")?;
         composition::attach_defect_to_result(&mut run, case_id, link.clone())?;
-        self.save(Resource::Runs, run_id, Some(&home), &run)?;
+        audited(resource_noun(Resource::Runs), "link_defect", run_id, || {
+            self.save(Resource::Runs, run_id, Some(&home), &run)
+        })?;
         Ok(link)
     }
 
@@ -324,7 +347,12 @@ impl<R: Repository> TestService<R> {
         let mut run =
             self.load::<TestRun>(Resource::Runs, run_id, Some(&home), "Test run not found")?;
         composition::detach_defect_from_result(&mut run, case_id, link_id)?;
-        self.save(Resource::Runs, run_id, Some(&home), &run)
+        audited(
+            resource_noun(Resource::Runs),
+            "unlink_defect",
+            run_id,
+            || self.save(Resource::Runs, run_id, Some(&home), &run),
+        )
     }
 }
 

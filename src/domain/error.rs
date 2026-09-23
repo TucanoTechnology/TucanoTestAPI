@@ -118,6 +118,27 @@ impl DomainError {
     pub fn forbidden(message: impl Into<String>) -> Self {
         Self::Forbidden(message.into())
     }
+
+    /// The stable machine-readable code this failure reaches a client under.
+    ///
+    /// The API error envelope is rendered from the same variant, and a test
+    /// asserts the two agree for every variant. The audit lines use this
+    /// rather than the variant name so a log reader greps for the code an
+    /// operator sees in a response.
+    pub fn code(&self) -> &'static str {
+        match self {
+            Self::NotFound(_) => "not_found",
+            Self::InvalidRequest { code, .. } => code,
+            Self::Conflict(_) => "conflict",
+            Self::PreconditionFailed { .. } => "conflict",
+            Self::PayloadTooLarge => "payload_too_large",
+            Self::Internal(_) => "storage_error",
+            Self::Storage => "storage_error",
+            Self::LockTimeout => "lock_timeout",
+            Self::Unauthenticated { code, .. } => code,
+            Self::Forbidden(_) => "forbidden",
+        }
+    }
 }
 
 impl Display for DomainError {
