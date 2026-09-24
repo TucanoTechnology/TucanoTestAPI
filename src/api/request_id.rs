@@ -17,6 +17,8 @@ use axum::{
     response::Response,
 };
 
+use super::redact;
+
 /// The header the API reads an inbound id from and echoes it back on.
 pub const REQUEST_ID_HEADER: &str = "x-request-id";
 
@@ -84,18 +86,37 @@ pub fn current() -> Option<String> {
         .ok()
 }
 
-/// Names the request span and stamps the id on it.
+/// Names the request span, stamps the id on it, and redacts its query string.
+///
+/// The span carries the path rather than the whole URI, because a client can
+/// put a credential in a query string — `?token=…`, `?api_key=…` — and a span
+/// is copied to every sink the deployment configures. The query is recorded
+/// separately, through [`redact::query`], so an operator still sees which
+/// parameters a request carried without seeing what they held. Headers are
+/// never logged at all.
+///
+/// `status` and `duration_ms` are declared empty here because neither is known
+/// until the response exists; [`super::metrics::record_outcome`] fills them in
+/// when the response is produced, which keeps one line per request rather than
+/// two.
 pub fn request_span(request: &Request) -> tracing::Span {
     let id = request
         .extensions()
         .get::<RequestId>()
         .map_or("-", RequestId::as_str);
-    tracing::info_span!(
+    let span = tracing::info_span!(
         "http.request",
         method = %request.method(),
-        uri = %request.uri(),
+        path = %request.uri().path(),
+        query = tracing::field::Empty,
         request_id = %id,
-    )
+        status = tracing::field::Empty,
+        duration_ms = tracing::field::Empty,
+    );
+    if let Some(query) = request.uri().query() {
+        span.record("query", tracing::field::display(redact::query(query)));
+    }
+    span
 }
 
 #[cfg(test)]

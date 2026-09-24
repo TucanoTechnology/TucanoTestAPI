@@ -69,7 +69,7 @@ example is a gap, not a deferral.
 | 27 | Role grants per project | `viewer` holds `owner` on `checkout.json` and `editor` holds `editor` on the same project; both hold **no grant at all** on `payments.json`. `admin` holds **no grant at all** — a system administrator is authorized without one (see [§5](#5-known-gap-auth-accounts-and-role-grants)) | written through the `AuthStore` grant path; verified by `GET /auth/me` as `viewer` and as `editor`, and for `admin` by an authorized write and by `systemAdmin: true` | `auth/projects/checkout.json` holding both grants (and no `auth/projects/payments.json`) |
 | 28 | Authorization enforcement | an `editor` token writes the content inside its project — `POST /projects/{id}/test_suites` is accepted — while `PUT /projects/{id}` on the same project is refused with `forbidden`, because the project document needs `owner`. The `viewer`-scoped token proves reads succeed and a write needing a grant it does not hold is refused | any guarded write with the scoped token | n/a (the acceptance and the refusal are the evidence) |
 | 29 | Sessions | sign in, refresh (rotating the refresh token once), sign out, `GET /auth/me` | `POST /auth/login`, `POST /auth/refresh`, `POST /auth/logout`, `GET /auth/me` | n/a (`auth/users.json` carries the revocable refresh tokens) |
-| 30 | Service surface | `GET /health`, `GET /ready`, `GET /diagnostics`, `GET /openapi.json` | the service routes | n/a (read-only) |
+| 30 | Service surface | `GET /health`, `GET /ready`, `GET /diagnostics`, `GET /openapi.json`, `GET /metrics` | the service routes | n/a (read-only) |
 
 Rows 23, 24, 28, 29 and 30 are coverage of behaviour rather than of stored
 documents: their evidence is the response the call returns, and they exist so
@@ -738,6 +738,8 @@ The generator's validation step asserts, at minimum:
 - `GET /ready` answers `{"status":"ready","storage":"filesystem"}`, and
   `GET /diagnostics` reports the same store as `"ready": true` without naming
   its path.
+- `GET /metrics` answers the Prometheus text exposition, and the series for a
+  request the validation just served appears in it.
 - Every document in the target tree above is present and readable back through a
   `GET` route that resolves it — its document route, or the listing of the
   parent that holds it for the cases and the suite row 22 gave a second home.

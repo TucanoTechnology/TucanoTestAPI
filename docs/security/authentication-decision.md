@@ -70,7 +70,8 @@ Implementation landed on `feat/p2-130-auth`. What it publishes:
   `bearerFormat` — as a global `security` requirement, and marks the operations that need no caller with
   `security: []`: `GET /health`, `GET /openapi.json`, `GET /api-docs`, `POST /auth/login` and
   `POST /auth/refresh` as published here, with `GET /ready` and `GET /diagnostics` added later by
-  [#104](https://github.com/TucanoTechnology/TucanoTestAPI/issues/104).
+  [#104](https://github.com/TucanoTechnology/TucanoTestAPI/issues/104) and `GET /metrics` added later by
+  [#102](https://github.com/TucanoTechnology/TucanoTestAPI/issues/102).
 - Four session endpoints exist: `POST /auth/login`, `POST /auth/refresh`, `POST /auth/logout`, and
   `GET /auth/me`. Success answers `SessionResponse` (access token, refresh token, token type, and the access
   token's lifetime in seconds) or `MeResponse` (the caller's identity plus its per-project roles). Failure

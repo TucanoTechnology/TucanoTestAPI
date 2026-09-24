@@ -145,7 +145,7 @@ surface is:
 
 | Area | Routes |
 | --- | --- |
-| Health, readiness and contract | `GET /health`, `GET /ready`, `GET /diagnostics`, `GET /openapi.json`, `GET /api-docs` |
+| Health, readiness, contract and counters | `GET /health`, `GET /ready`, `GET /diagnostics`, `GET /metrics`, `GET /openapi.json`, `GET /api-docs` |
 | Authentication | `POST /auth/login`, `POST /auth/refresh`, `POST /auth/logout`, `GET /auth/me` |
 | Projects | `GET`/`POST /projects`, `GET`/`PUT`/`DELETE /projects/{id}`, `POST /projects/{id}/duplicate`, and the project's own children: suite and case creation (`POST /projects/{id}/test_suites`, `POST /projects/{id}/test_cases`), run, milestone and configuration creation (`POST /projects/{id}/test_runs`, `POST /projects/{id}/milestones`, `POST /projects/{id}/configurations`) with their parent-scoped lists and deletes (`GET`/`DELETE` on `/projects/{id}/test_runs`, `/projects/{id}/milestones`, `/projects/{id}/configurations`, and each `/{child_id}`) |
 | Suites | `GET /test_suites`, `GET`/`PUT`/`DELETE /test_suites/{id}`, `POST /test_suites/{id}/duplicate`, parent-scoped case creation (`POST /test_suites/{id}/test_cases`) |
@@ -175,7 +175,7 @@ configurations is the parent-scoped route.
 ## Authentication
 
 With `TUCANO_AUTH_REQUIRED` turned on, every operation but `GET /health`, `GET /ready`,
-`GET /diagnostics`, `GET /openapi.json`, `GET /api-docs`, `POST /auth/login`, and
+`GET /diagnostics`, `GET /metrics`, `GET /openapi.json`, `GET /api-docs`, `POST /auth/login`, and
 `POST /auth/refresh` requires a bearer access token and is
 authorized against **project-scoped RBAC**: a role (`viewer`, `editor`, `owner`) granted per project,
 plus a `systemAdmin` account that reaches everything. A caller reaches only the projects it was

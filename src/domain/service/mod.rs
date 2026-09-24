@@ -32,10 +32,14 @@ use super::{
     current_timestamp_string, defect, mime_type, progress, reports, required_string, resources,
     validation,
 };
+use audit::{ATTACHMENT_RESOURCE, audited, placement_action, resource_noun};
+
+pub use audit::AUDIT_TARGET;
 
 // The `TestService` implementation is grouped by responsibility; each sub-module
 // holds one cohesive slice of the inherent methods and nothing else.
 mod attachments;
+mod audit;
 mod composition;
 mod crud;
 mod duplication;
@@ -189,15 +193,17 @@ impl<R: Repository> TestService<R> {
     ) -> Result<Created, DomainError> {
         validation::validate_payload(resource, value)?;
         let id = resources::derive_create_id(resource, value)?;
-        if self.repository.exists_at(resource, parent, &id)? {
-            return Err(DomainError::Conflict("Resource already exists".to_owned()));
-        }
-        let mut document = value.clone();
-        if resource == Resource::Cases {
-            stamp_case_creation(&mut document);
-        }
-        self.write_marker(resource, parent, &id, &document)?;
-        Ok(Created { id })
+        audited(resource_noun(resource), "create", &id, || {
+            if self.repository.exists_at(resource, parent, &id)? {
+                return Err(DomainError::Conflict("Resource already exists".to_owned()));
+            }
+            let mut document = value.clone();
+            if resource == Resource::Cases {
+                stamp_case_creation(&mut document);
+            }
+            self.write_marker(resource, parent, &id, &document)?;
+            Ok(Created { id: id.clone() })
+        })
     }
 
     /// Applies the test-case version rules to a merged `PUT` document.
@@ -299,9 +305,11 @@ impl<R: Repository> TestService<R> {
             ));
         }
         self.require_parent(target)?;
-        self.repository
-            .place(resource, &source, &id, target, mode)
-            .map_err(placement_error)?;
+        audited(resource_noun(resource), placement_action(mode), &id, || {
+            self.repository
+                .place(resource, &source, &id, target, mode)
+                .map_err(placement_error)
+        })?;
 
         Ok(Composed::Placed { id, mode })
     }

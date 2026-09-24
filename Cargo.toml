@@ -11,6 +11,7 @@ axum = { version = "0.8.9", features = ["multipart"] }
 tokio = { version = "1.53.1", features = ["full"] }
 tower-http = { version = "0.7.1", features = ["limit", "trace"] }
 tracing = { version = "0.1", default-features = false, features = ["std"] }
+tracing-subscriber = { version = "0.3.23", features = ["env-filter", "json"] }
 fs2 = "0.4.3"
 roxmltree = "0.21.1"
 aes-gcm = "0.11"
@@ -25,6 +26,7 @@ sha2 = "0.10"
 tower = { version = "0.5.3", features = ["util"] }
 http-body-util = "0.1.5"
 tempfile = "3.27.0"
+proptest = "1.11.0"
 criterion = { version = "0.8.2", features = ["html_reports"] }
 
 [[bench]]

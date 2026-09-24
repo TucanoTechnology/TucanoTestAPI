@@ -63,3 +63,4 @@
 
 - [Seed dataset specification](testing/seed-dataset-spec.md)
 - [Test-data generator guide](testing/test-data-generator-guide.md)
+- [Fuzz and property tests](testing/fuzz-and-property-tests.md)

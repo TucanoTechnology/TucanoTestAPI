@@ -19,7 +19,7 @@ pub mod service;
 pub mod validation;
 
 pub use error::DomainError;
-pub use service::{Composed, TestService};
+pub use service::{AUDIT_TARGET, Composed, TestService};
 
 use serde::Deserialize;
 use serde_json::Value;
