@@ -10,7 +10,7 @@ operation index — method, path, `operationId` and summary. Schemas, parameters
 and status codes are the contract itself: read them in [`openapi.json`](../../openapi.json) or in
 the Swagger UI at `/api-docs`, which is rendered from the same document.
 
-The contract currently registers **87** operations.
+The contract currently registers **89** operations.
 
 | Method | Path | Operation | Summary |
 | --- | --- | --- | --- |
@@ -23,6 +23,7 @@ The contract currently registers **87** operations.
 | `PUT` | `/configurations/{id}` | `updateConfiguration` | Update a configuration |
 | `DELETE` | `/configurations/{id}` | `deleteConfiguration` | Delete a configuration |
 | `GET` | `/diagnostics` | `getDiagnostics` | Storage diagnostics |
+| `GET` | `/environments` | `listEnvironments` | List the environments available to the caller |
 | `GET` | `/health` | `getHealth` | Health check |
 | `GET` | `/metrics` | `getMetrics` | Request counters |
 | `GET` | `/milestones/{id}` | `getMilestone` | Read a milestone |
@@ -59,6 +60,7 @@ The contract currently registers **87** operations.
 | `POST` | `/projects/{id}/test_suites` | `addProjectTestSuite` | Create a test suite in a project, or place an existing one |
 | `DELETE` | `/projects/{id}/test_suites/{suite_id}` | `removeProjectTestSuite` | Delete a test suite a project owns |
 | `GET` | `/ready` | `getReady` | Readiness check |
+| `GET` | `/releases` | `listReleases` | List the releases available to the caller |
 | `GET` | `/reports/coverage` | `getCoverageReport` | Get the coverage report |
 | `GET` | `/reports/summary` | `getSummaryReport` | Get the summary report |
 | `GET` | `/test_cases/{id}` | `getTestCase` | Read a test case |
