@@ -44,7 +44,8 @@ impl FileRepository {
         case: &str,
         filename: &str,
     ) -> io::Result<Vec<u8>> {
-        fs::read(attachment_path(&self.root, parent, case, filename)?)
+        let path = attachment_path(&self.root, parent, case, filename)?;
+        read_confined(&self.root, &path)
     }
 
     pub(super) fn delete_attachment(
@@ -108,9 +109,8 @@ impl FileRepository {
         step_index: usize,
         filename: &str,
     ) -> io::Result<Vec<u8>> {
-        fs::read(step_attachment_path(
-            &self.root, parent, case, step_index, filename,
-        )?)
+        let path = step_attachment_path(&self.root, parent, case, step_index, filename)?;
+        read_confined(&self.root, &path)
     }
 
     pub(super) fn delete_step_attachment(

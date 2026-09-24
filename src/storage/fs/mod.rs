@@ -8,9 +8,9 @@ use std::time::{Duration, Instant, UNIX_EPOCH};
 use super::layout::{
     PRIVATE_FILE_MODE, Parent, Placement, RESERVED_PROJECT_CHILDREN, attachment_path, case_dir,
     case_marker, create_private_dir_all, folder_wire_id, node_folder, parent_dir,
-    project_collection_dir, project_dir, project_document_path, project_marker, revision_dir,
-    revision_marker, root_dir, set_private_permissions, step_attachment_path, suite_dir,
-    suite_marker, unique_suffix, validate_document_id,
+    project_collection_dir, project_dir, project_document_path, project_marker, read_confined,
+    revision_dir, revision_marker, root_dir, set_private_permissions, step_attachment_path,
+    suite_dir, suite_marker, unique_suffix, validate_document_id,
 };
 use super::{Repository, Resource, StorageProbe};
 

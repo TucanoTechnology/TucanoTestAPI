@@ -987,6 +987,133 @@ fn attachments_need_an_existing_case() {
     assert_eq!(error.kind(), io::ErrorKind::NotFound);
 }
 
+#[cfg(unix)]
+#[test]
+fn a_hardlinked_attachment_is_refused() {
+    let (directory, repository) = repository();
+    create_project(&repository, "checkout.json");
+    let parent = project("checkout.json");
+    repository
+        .write_at(
+            Resource::Cases,
+            Some(&parent),
+            "TC-001",
+            &json!({"testCaseId": "TC-001"}),
+        )
+        .expect("case");
+    repository
+        .save_attachment(
+            &parent,
+            "TC-001",
+            "notes.txt",
+            &json!({"filename": "notes.txt"}),
+            b"evidence",
+        )
+        .expect("seed attachment");
+
+    // A real hardlink planted inside the seeded attachment folder, naming an
+    // inode that lives outside the data root: the in-tree path passes every
+    // path check, so only the opened file can betray the second link.
+    let outside = directory
+        .path()
+        .parent()
+        .expect("parent dir")
+        .join(format!("outside-{}", unique_suffix()));
+    fs::write(&outside, b"outside content").expect("outside file");
+    let case_dir = directory.path().join("projects/checkout/TC-001");
+    fs::hard_link(&outside, case_dir.join("outside-hard.txt")).expect("hard link");
+
+    let error = repository
+        .read_attachment(&parent, "TC-001", "outside-hard.txt")
+        .expect_err("hardlinked attachment must be refused");
+    assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+    assert_eq!(
+        fs::read(&outside).expect("outside file intact"),
+        b"outside content"
+    );
+    // The seeded attachment itself keeps working exactly as before.
+    assert_eq!(
+        repository
+            .read_attachment(&parent, "TC-001", "notes.txt")
+            .expect("ordinary attachment"),
+        b"evidence"
+    );
+
+    fs::remove_file(&outside).expect("cleanup");
+}
+
+#[cfg(unix)]
+#[test]
+fn a_hardlinked_step_attachment_is_refused() {
+    let (directory, repository) = repository();
+    create_project(&repository, "checkout.json");
+    let parent = project("checkout.json");
+    repository
+        .write_at(
+            Resource::Cases,
+            Some(&parent),
+            "TC-001",
+            &json!({"testCaseId": "TC-001"}),
+        )
+        .expect("case");
+
+    let outside = directory
+        .path()
+        .parent()
+        .expect("parent dir")
+        .join(format!("outside-{}", unique_suffix()));
+    fs::write(&outside, b"outside content").expect("outside file");
+    let step_dir = directory
+        .path()
+        .join("projects/checkout/TC-001")
+        .join("steps/0");
+    fs::create_dir_all(&step_dir).expect("step dir");
+    fs::hard_link(&outside, step_dir.join("outside-hard.png")).expect("hard link");
+
+    let error = repository
+        .read_step_attachment(&parent, "TC-001", 0, "outside-hard.png")
+        .expect_err("hardlinked step attachment must be refused");
+    assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+
+    fs::remove_file(&outside).expect("cleanup");
+}
+
+#[cfg(unix)]
+#[test]
+fn a_symlinked_attachment_is_still_refused() {
+    use std::os::unix::fs::symlink;
+
+    let (directory, repository) = repository();
+    create_project(&repository, "checkout.json");
+    let parent = project("checkout.json");
+    repository
+        .write_at(
+            Resource::Cases,
+            Some(&parent),
+            "TC-001",
+            &json!({"testCaseId": "TC-001"}),
+        )
+        .expect("case");
+
+    // Symlinks keep the behaviour they always had: the path confinement
+    // refuses the escape before the reader ever opens anything.
+    let outside = directory
+        .path()
+        .parent()
+        .expect("parent dir")
+        .join(format!("outside-{}", unique_suffix()));
+    fs::write(&outside, b"outside content").expect("outside file");
+    let case_dir = directory.path().join("projects/checkout/TC-001");
+    symlink(&outside, case_dir.join("link.txt")).expect("symlink");
+
+    let error = repository
+        .read_attachment(&parent, "TC-001", "link.txt")
+        .expect_err("symlinked attachment must be refused");
+    assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+
+    fs::remove_file(&outside).expect("cleanup");
+}
+
 #[test]
 fn revision_snapshots_are_listed_ascending_and_read_back_by_version() {
     let (directory, repository) = repository();

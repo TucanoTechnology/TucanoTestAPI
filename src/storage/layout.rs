@@ -439,6 +439,75 @@ fn resolve_existing_prefix(candidate: &Path) -> io::Result<PathBuf> {
     Ok(resolved)
 }
 
+/// Reads a stored file through a handle that is confined to the data root.
+///
+/// [`ensure_within`] confines by *path*, and a hardlink defeats that check: the
+/// in-tree name is an ordinary component with nothing to canonicalise, while
+/// the inode it names also lives outside the tree. This reader therefore looks
+/// at the file it opened rather than at a path it re-resolves: it walks
+/// `path` from `root` one `openat` step at a time with `O_NOFOLLOW`, so a
+/// symlinked component is refused at open, and then inspects the opened
+/// descriptor — a link count above one means the file has another name
+/// elsewhere, and a device that differs from the root's means its bytes live
+/// on another filesystem. Both are refused before anything is read. Every
+/// check runs on the descriptor that is read from, so there is no window
+/// between checking and reading.
+pub fn read_confined(root: &Path, path: &Path) -> io::Result<Vec<u8>> {
+    #[cfg(unix)]
+    {
+        use rustix::fs::{CWD, Mode, OFlags, fstat, openat};
+        use std::io::Read;
+        use std::os::fd::OwnedFd;
+
+        fn escape(what: &str) -> io::Error {
+            io::Error::new(io::ErrorKind::PermissionDenied, what)
+        }
+
+        let relative = path
+            .strip_prefix(root)
+            .map_err(|_| escape("path escapes data root"))?;
+        let filename = relative
+            .file_name()
+            .ok_or_else(|| escape("path escapes data root"))?;
+
+        // The root itself is trusted configuration, so it is opened with
+        // following; every component below it is not.
+        let mut dir: OwnedFd = openat(
+            CWD,
+            root,
+            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC,
+            Mode::empty(),
+        )?;
+        let root_stat = fstat(&dir)?;
+        let nofollow_dir = OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC;
+        for component in relative.parent().unwrap_or(Path::new("")).components() {
+            dir = openat(&dir, component.as_os_str(), nofollow_dir, Mode::empty())?;
+        }
+        let opened = openat(
+            &dir,
+            filename,
+            OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            Mode::empty(),
+        )?;
+        let stat = fstat(&opened)?;
+        if stat.st_nlink > 1 {
+            return Err(escape("file is linked from outside the data root"));
+        }
+        if stat.st_dev != root_stat.st_dev {
+            return Err(escape("file lives outside the data root"));
+        }
+        let mut file = File::from(opened);
+        let mut contents = Vec::new();
+        file.read_to_end(&mut contents)?;
+        Ok(contents)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = root;
+        fs::read(path)
+    }
+}
+
 /// Collision-free suffix used for temporary files and derived identifiers.
 pub fn unique_suffix() -> u128 {
     SystemTime::now()
@@ -897,6 +966,75 @@ mod tests {
         symlink("/etc", projects.join("evil")).expect("symlink");
 
         let error = project_dir(root, "evil.json").expect_err("escape");
+        assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+    }
+
+    #[test]
+    fn the_confined_reader_serves_an_ordinary_file() {
+        let directory = TempDir::new().expect("temp dir");
+        let root = directory.path();
+        let nested = root.join("projects/checkout/TC-001");
+        fs::create_dir_all(&nested).expect("case dir");
+        fs::write(nested.join("notes.txt"), b"evidence").expect("write");
+
+        assert_eq!(
+            read_confined(root, &nested.join("notes.txt")).expect("read"),
+            b"evidence"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_confined_reader_refuses_a_hardlink_to_a_file_outside_the_root() {
+        let directory = TempDir::new().expect("temp dir");
+        let root = directory.path();
+        let outside = root
+            .parent()
+            .expect("parent dir")
+            .join(format!("outside-{}", unique_suffix()));
+        fs::write(&outside, b"outside content").expect("outside file");
+        fs::hard_link(&outside, root.join("linked.txt")).expect("hard link");
+
+        let error = read_confined(root, &root.join("linked.txt")).expect_err("refused");
+        assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+        assert_eq!(
+            fs::read(&outside).expect("outside file intact"),
+            b"outside content"
+        );
+
+        fs::remove_file(&outside).expect("cleanup");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_confined_reader_refuses_a_symlinked_component() {
+        use std::os::unix::fs::symlink;
+
+        let directory = TempDir::new().expect("temp dir");
+        let root = directory.path();
+        let outside = root
+            .parent()
+            .expect("parent dir")
+            .join(format!("outside-{}", unique_suffix()));
+        fs::write(&outside, b"outside content").expect("outside file");
+        symlink(&outside, root.join("link.txt")).expect("symlink");
+
+        let error = read_confined(root, &root.join("link.txt")).expect_err("refused");
+        assert!(
+            error.kind() != io::ErrorKind::NotFound,
+            "a symlinked component must be refused at open (ELOOP), got {error:?}"
+        );
+
+        fs::remove_file(&outside).expect("cleanup");
+    }
+
+    #[test]
+    fn the_confined_reader_refuses_a_path_outside_the_root() {
+        let directory = TempDir::new().expect("temp dir");
+        let root = directory.path();
+        fs::create_dir_all(root.join("projects")).expect("projects dir");
+
+        let error = read_confined(root, Path::new("/etc/passwd")).expect_err("refused");
         assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
     }
 }

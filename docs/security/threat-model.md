@@ -19,7 +19,7 @@ The service now exposes CRUD and attachment endpoints, so the controls below are
 | --- | --- | --- |
 | HTTP client to service | Anonymous or authenticated request | Authentication, authorization, body limits, timeouts, request IDs |
 | JSON payload to domain model | Malformed, oversized, or unknown fields | Draft 2020-12 validation, bounded parsing, explicit schema policy |
-| Resource ID or filename to filesystem | Traversal, absolute paths, separators, symlinks | Allow-list validation, canonical confinement, symlink checks |
+| Resource ID or filename to filesystem | Traversal, absolute paths, separators, symlinks, hardlinks | Allow-list validation, canonical confinement, symlink checks, open-handle confinement for attachment reads |
 | Service to stored JSON | Corruption, partial writes, concurrent writers | Same-directory temp file, flush, atomic rename, locking policy |
 | Attachment upload to storage | Oversized or unexpected file | Streaming limits, type/size validation, safe permissions |
 | Configuration file to service startup | Malformed, unknown-keyed, tampered, or wrongly-encrypted file; a stray file on an implicit path | Strict schema with unknown keys refused, explicit path only, no plaintext fallback, fail-closed startup errors that name the setting and never the value |
@@ -34,6 +34,7 @@ The service now exposes CRUD and attachment endpoints, so the controls below are
 | Malicious JSON | Reject malformed, oversized, deeply nested, or schema-invalid input with a stable safe error | Negative parser and schema tests |
 | Path traversal | Reject `..`, absolute paths, forbidden separators, and any path escaping the configured root | Unit and integration path tests |
 | Symlink escape | Refuse symlink-based escape from the configured root and unexpected file types | Symlink fixture tests |
+| Hardlink read-through | Refuse an attachment whose opened descriptor has a link count above one or a device other than the data root's — a path check cannot see a second name for the same inode (#327) | Hardlink fixture tests |
 | Oversized upload | Enforce request, JSON, attachment, and concurrency limits before unbounded allocation | Limit and streaming tests |
 | Corrupted file | Return a safe storage error and preserve the original file | Corruption and recovery tests |
 | Concurrent write | Define lock and overwrite behavior; never publish a partial JSON document | Concurrent writer and atomicity tests |

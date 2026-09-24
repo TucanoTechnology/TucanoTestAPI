@@ -207,7 +207,7 @@ Tests are split into two layers and both run in CI on every push and pull reques
 | `tests/attachments.rs` | Upload, download, delete, content types, removal with the parent test case |
 | `tests/tags.rs` | The `tags` array on projects, suites, cases and runs, the shared `?tags=` OR filter, and the OpenAPI parameter it is published through |
 | `tests/validation.rs` | Scalar type validation: wrong-typed fields rejected on create and update with the field named, valid and omitted fields accepted, and documents persisted before the change still readable |
-| `tests/security_tests.rs` | Path traversal, symlink escape, malformed JSON, repository-level leniency, and concurrent writers |
+| `tests/security_tests.rs` | Path traversal, symlink escape, hardlink escape, malformed JSON, repository-level leniency, and concurrent writers |
 | `tests/route_coverage.rs` | What the router actually served: every operation in `openapi.json` must have been driven to a successful answer during the run. Reads the recording the shared harness writes and asserts nothing unless `scripts/coverage-check.sh` turns it on |
 
 Shared request builders and assertions live in `tests/common/mod.rs`. Cargo compiles only top-level
