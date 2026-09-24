@@ -143,6 +143,8 @@ services:
       - /tmp
     security_opt:
       - no-new-privileges:true
+    cap_drop:
+      - ALL
     restart: unless-stopped
     deploy:
       replicas: 1
@@ -284,6 +286,7 @@ same hardened shape, matching what the Dockerfile already does:
 | `read_only: true` / `--read-only` | Root filesystem is immutable; only the data volume and `/tmp` are writable. |
 | `tmpfs: /tmp` / `--tmpfs /tmp` | A writable scratch area for the few temporary files the process needs. |
 | `security_opt: no-new-privileges:true` | A process can never gain more privilege than the container started with. |
+| `cap_drop: ALL` / `--cap-drop=ALL` | The container runs with no Linux capability at all. The service needs none: it binds a port above 1024, and reads and writes only paths it owns. |
 | `USER tucano` (uid `10001`) | The runtime image creates a system user `tucano` with no login shell and runs the service as it. |
 | `ca-certificates` only | The only package the runtime image installs is `ca-certificates`; the Rust toolchain stays in the build stage. |
 | `deploy.resources.limits` | Per-replica CPU (`1.0`) and memory (`512M`) ceilings. |
@@ -398,7 +401,7 @@ layout, the refusal and the operator recipe are recorded in
       `configurations/` directory — the service refuses to start when there are (see *Storage layout
       v3 and legacy volumes*).
 - [ ] Container started with the hardened shape: read-only root filesystem, `/tmp` tmpfs,
-      `no-new-privileges`, unprivileged user, resource limits.
+      `no-new-privileges`, all Linux capabilities dropped, unprivileged user, resource limits.
 - [ ] `GET /health` answers; the Swagger UI at `/api-docs` and `openapi.json` respond if the
       deployment exposes them.
 - [ ] Health probes wired to the two questions separately: `GET /health` for liveness (the process

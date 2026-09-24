@@ -104,10 +104,10 @@ at `http://localhost:3100/openapi.json`; the request counters are at
 `http://localhost:3100/metrics`.
 
 The API runs as an unprivileged user (`uid 10001`) with a read-only root filesystem, a `/tmp` tmpfs,
-and `no-new-privileges`; only `/data` and `/tmp` are writable. It stores inspectable JSON and
-attachments in the data directory that Compose bind-mounts from the host `./data` folder at `/data`
-(Docker creates the folder on first run). Keep test data and secrets out of version control — the
-`.gitignore` excludes `/data/*`, so test data is never committed.
+all Linux capabilities dropped, and `no-new-privileges`; only `/data` and `/tmp` are writable. It
+stores inspectable JSON and attachments in the data directory that Compose bind-mounts from the host
+`./data` folder at `/data` (Docker creates the folder on first run). Keep test data and secrets out
+of version control — the `.gitignore` excludes `/data/*`, so test data is never committed.
 
 The full deployment model — container hardening, the optional configuration file, scaling, and
 rollback — is in the [deployment guide](docs/deployment/deployment-guide.md).
