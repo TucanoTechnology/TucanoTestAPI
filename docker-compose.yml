@@ -35,6 +35,14 @@ services:
       - /tmp
     security_opt:
       - no-new-privileges:true
+    # The service binds a port above 1024, reads and writes a data directory it
+    # owns, and writes to its own tmpfs, so it needs no Linux capability at all
+    # (audit finding F-178-3 in
+    # docs/security/audit-s3-container-and-deployment.md). Drop the default set
+    # rather than inherit it; a feature that genuinely needs one adds it back
+    # explicitly here.
+    cap_drop:
+      - ALL
     restart: unless-stopped
     deploy:
       replicas: 1

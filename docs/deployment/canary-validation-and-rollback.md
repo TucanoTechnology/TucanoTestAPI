@@ -30,8 +30,8 @@ It is an operations document: it adds no route, no field and no stored-document 
 - **Stateless replicas.** The process keeps no sessions or in-memory records, so a second replica can
   start beside the first without coordination. Mutations take an advisory lock file and write by
   atomic same-directory rename.
-- **Hardened container.** Read-only root filesystem, `--tmpfs /tmp`, `no-new-privileges`, unprivileged
-  user (uid 10001), `TUCANO_DATA_DIR=/data`, `PORT=3000`.
+- **Hardened container.** Read-only root filesystem, `--tmpfs /tmp`, `no-new-privileges`, all Linux
+  capabilities dropped, unprivileged user (uid 10001), `TUCANO_DATA_DIR=/data`, `PORT=3000`.
 
 ## Why canary, not shadow
 
@@ -92,7 +92,7 @@ stable replica does not publish:
 ```sh
 docker run --detach --name tucano-api-canary \
   --read-only --tmpfs /tmp \
-  --security-opt no-new-privileges:true \
+  --security-opt no-new-privileges:true --cap-drop=ALL \
   --env TUCANO_DATA_DIR=/data --env PORT=3000 \
   --volume "$DATA_DIR":/data \
   --publish 3101:3000 \
@@ -196,7 +196,7 @@ If it **was promoted**, redeploy the recorded previous tag:
 docker stop tucano-api && docker rm tucano-api
 docker run --detach --name tucano-api \
   --read-only --tmpfs /tmp \
-  --security-opt no-new-privileges:true \
+  --security-opt no-new-privileges:true --cap-drop=ALL \
   --env TUCANO_DATA_DIR=/data --env PORT=3000 \
   --volume "$DATA_DIR":/data \
   --publish 3000:3000 \
