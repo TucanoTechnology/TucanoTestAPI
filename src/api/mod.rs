@@ -176,6 +176,8 @@ pub const ROUTES: &[&str] = &[
     "/milestones/{id}/progress",
     "/reports/coverage",
     "/reports/summary",
+    "/releases",
+    "/environments",
     "/configurations",
     "/configurations/{id}",
     "/auth/login",

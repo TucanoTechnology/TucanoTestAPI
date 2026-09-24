@@ -66,6 +66,21 @@ async fn delete_project_configuration<R: Repository>(
     Ok(Json(json!({ "message": "Test configuration deleted" })))
 }
 
+/// The environments the caller can execute a run against: the distinct names of
+/// every configuration it reaches, sorted so the GUI can render them as they
+/// arrive.
+///
+/// A listing, not a dereference, so a project outside the caller's grants is
+/// filtered out of the result rather than refusing the request.
+async fn list_environments<R: Repository>(
+    State(service): State<AppState<R>>,
+    principal: Principal,
+) -> Result<Json<Vec<String>>, DomainError> {
+    let reachable = access::scope(service.auth(), &principal)?;
+    let reachable: Option<Vec<String>> = reachable.map(|set| set.into_iter().collect());
+    Ok(Json(service.environment_names(reachable.as_deref())?))
+}
+
 pub(crate) fn routes<R: Repository + 'static>() -> Router<AppState<R>> {
     Router::new()
         // Retired: a configuration is created inside a project. The handler
@@ -80,6 +95,7 @@ pub(crate) fn routes<R: Repository + 'static>() -> Router<AppState<R>> {
                 .put(update_configuration::<R>)
                 .delete(delete_configuration::<R>),
         )
+        .route("/environments", get(list_environments::<R>))
         .route(
             "/projects/{id}/configurations",
             get(list_project_configurations::<R>).post(create_project_configuration::<R>),

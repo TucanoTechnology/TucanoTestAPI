@@ -77,6 +77,20 @@ async fn get_milestone_progress<R: Repository>(
     Ok(Json(service.milestone_progress(&id)?))
 }
 
+/// The releases the caller can file a run under: the distinct names of every
+/// milestone it reaches, sorted so the GUI can render them as they arrive.
+///
+/// A listing, not a dereference, so a project outside the caller's grants is
+/// filtered out of the result rather than refusing the request.
+async fn list_releases<R: Repository>(
+    State(service): State<AppState<R>>,
+    principal: Principal,
+) -> Result<Json<Vec<String>>, DomainError> {
+    let reachable = access::scope(service.auth(), &principal)?;
+    let reachable: Option<Vec<String>> = reachable.map(|set| set.into_iter().collect());
+    Ok(Json(service.release_names(reachable.as_deref())?))
+}
+
 pub(crate) fn routes<R: Repository + 'static>() -> Router<AppState<R>> {
     Router::new()
         // Retired: a milestone is created inside a project. The handler answers
@@ -96,6 +110,7 @@ pub(crate) fn routes<R: Repository + 'static>() -> Router<AppState<R>> {
             "/milestones/{id}/progress",
             get(get_milestone_progress::<R>),
         )
+        .route("/releases", get(list_releases::<R>))
         .route(
             "/projects/{id}/milestones",
             get(list_project_milestones::<R>).post(create_project_milestone::<R>),

@@ -44,6 +44,7 @@ mod composition;
 mod crud;
 mod duplication;
 mod history;
+mod metadata;
 mod reporting;
 
 /// Result statuses a test run accepts.
