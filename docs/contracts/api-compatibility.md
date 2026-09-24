@@ -1379,6 +1379,65 @@ the run already holds replaced the whole result, so a partial recording discarde
   `::a_result_body_is_rejected_rather_than_read_field_by_field`,
   `::a_re_recorded_result_keeps_what_the_request_leaves_out`).
 
+## Stored Component Length Bound Plan (Issue #324)
+
+Issue: [#324](https://github.com/TucanoTechnology/TucanoTestAPI/issues/324) — `validate_component` and
+`validate_document_id` in `src/storage/layout.rs` refused a hostile component but imposed no length bound, so an
+identifier or name longer than the filesystem's per-name limit was accepted at the API layer and failed only
+when the store wrote it, reaching the client as `500 storage_error` (audit findings F-176-3 and F-177-4, one
+root cause merged by the #180 triage; CWE-20).
+
+- **One bound, beside the other component rules.** `MAX_COMPONENT_BYTES` (`255`, the filesystem's `NAME_MAX`)
+  is checked in `validate_component`, where the empty, `.`, `..`, separator and NUL rules already live, and it
+  refuses with the `InvalidInput` those rules already raise. Everything that composes a path —
+  `validate_document_id`, `folder_name`, `node_folder`, `project_dir`, `attachment_path`,
+  `step_attachment_path` — therefore inherits it, and the answer is decided before any syscall rather than by
+  how the platform maps `ENAMETOOLONG`. On the read paths `InvalidInput` becomes `400 invalid_id`; on a create
+  it becomes `400 invalid_request`.
+- **The bound counts the stored component, never the wire identifier.** A project, a suite and a case are
+  stored as a folder holding a fixed marker (`project.json`, `suite.json`, `test-case.json`), so the `.json`
+  suffix their identifier carries is wire-only and the folder is what has to fit: a 255-byte name is stored, a
+  256-byte name is `400 invalid_request`, and a `GET /projects/{255-byte folder}.json` is a legal address that
+  answers `404` rather than `400`. Bounding the whole identifier instead would have made a project or suite the
+  API had just created under a 251–255-byte folder unreachable, since the suffix is required to address it.
+- **A run, a milestone and a configuration are documents, so their name has five bytes less room.** Each is
+  stored as the file `{name}.json` in its project's collection, so the file name is the wire id verbatim: a
+  250-byte name is stored (a 255-byte component) and reads back, and a 251-byte name — a 256-byte component —
+  is refused `400 invalid_request`.
+- **A 256-byte path identifier is `400 invalid_id`, not `500` and not `404`.** A test case is addressed by its
+  identifier verbatim, so a 255-byte one answers `404` (nothing is stored under it) and a 256-byte one is
+  refused on read and on delete alike. A project addressed by a 256-byte folder name in its `.json`
+  identifier, and a run, a milestone or a configuration addressed by a 256-byte identifier, hit the same bound
+  and draw the same answer.
+- **Attachment filenames are bounded too.** An upload is stored as `{suffix}-{original name}`, so the component
+  the store writes is longer than the client's filename; the case-level and the step-level upload route both
+  refuse a name that would push that component past the limit with `400 invalid_request`, and nothing is
+  recorded or written for it. Reading or deleting a filename longer than the limit keeps the `404 not_found` it
+  always answered: the component rules have always read an unusable attachment name as not-found, and this
+  change does not alter that.
+- **The auth store's grant paths validate both halves.** `grant_path` composes `{folder}.json` from a project
+  identifier, so it checks the folder and the composed document name; an over-long identifier in a role-grant
+  request is answered as a client error through `require_role` rather than as a storage failure.
+- **What this changes for a client.** No request that used to succeed is refused and nothing that was storable
+  becomes unstorable: a name or identifier that composes an over-long component and used to fail the write as
+  `500 storage_error` is now `400 invalid_request` or `400 invalid_id`. Two answers for requests that already
+  failed still move. An over-long identifier in a path used to be addressed past the store — the walk's
+  `is_file()` saw nothing under a name the platform refused to resolve — and answered `404 not_found`; it is
+  now `400 invalid_id` before the walk, so `GET /test_cases/{256-byte id}`,
+  `GET /projects/{256-byte folder}.json` and `GET /test_runs/{251-byte name}.json` moved from `404` to `400`.
+  A `PUT` body carrying a *differing* over-long identity is now `400 invalid_id` where it was
+  `400 invalid_request`, because the value is judged unusable before it is judged foreign. Both remain client
+  errors, and these error-code changes for requests that already failed are the deviation, recorded in the
+  accounting below and in `openapi.json`.
+- Deviation recorded with tests in
+  `tests/service.rs::an_over_long_name_is_a_client_error_not_a_storage_failure`,
+  `::an_over_long_identifier_in_a_path_is_a_client_error_not_a_storage_failure`,
+  `tests/attachments.rs::an_over_long_attachment_name_is_a_client_error_not_a_storage_failure`, and the unit
+  tests beside the rules in `src/storage/layout.rs`
+  (`::an_over_long_component_is_refused_at_the_name_limit`,
+  `::an_over_long_identifier_is_refused_before_any_path_is_built`) and `src/auth/store.rs`
+  (`::an_over_long_project_identifier_is_refused_as_a_client_error`).
+
 ## Breaking change accounting
 
 - **Request id propagated, echoed and published in the error envelope** (Issue #106, plan above). `X-Request-Id`
@@ -1771,6 +1830,16 @@ the run already holds replaced the whole result, so a partial recording discarde
   `tests/auth.rs::every_guarded_operation_refuses_an_anonymous_caller`, and the
   `identifiers_cannot_escape_the_storage_root` and `a_test_case_identifier_is_addressed_verbatim` matrices in
   `tests/service.rs`, which carry the new path.
+- **An over-long stored component is a client error rather than a storage failure** (Issue #324, plan above).
+  `MAX_COMPONENT_BYTES` (`255`) is now enforced in `validate_component`, so a name or identifier that composes
+  a longer component — including the `{suffix}-{original name}` an attachment is stored under — is answered
+  `400 invalid_request`, or `400 invalid_id` when it arrives in a path, instead of the `500 storage_error` the
+  filesystem's `ENAMETOOLONG` produced. An over-long identifier in a path also moves from the `404 not_found`
+  the walk answered for a name the platform could not resolve to `400 invalid_id`, and a `PUT` body carrying a
+  differing over-long identity moves from `400 invalid_request` to `400 invalid_id`. No request that used to
+  succeed is refused and no stored document changes shape; the deviation is the error code a request that
+  already failed now receives. Deviation recorded with tests in `tests/service.rs`, `tests/attachments.rs`,
+  `src/storage/layout.rs` and `src/auth/store.rs` as listed in the plan.
 
 ## Required case matrix
 
