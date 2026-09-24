@@ -4,8 +4,8 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode, header};
 use common::{
     ROLE_CHECKED_WRITE_OPERATIONS, app_at, assert_error_envelope, content_type, create_case_in,
-    create_named, create_suite, fixture_home, get, json_request, raw_json_request, send, send_full,
-    send_json, test_app,
+    create_named, create_suite, delete, fixture_home, get, json_request, raw_json_request, send,
+    send_full, send_json, test_app,
 };
 use serde_json::{Value, json};
 use std::collections::BTreeSet;
@@ -219,6 +219,117 @@ async fn identifiers_cannot_escape_the_storage_root() {
             "traversal attempt should be rejected: {uri} returned {status}"
         );
     }
+}
+
+#[tokio::test]
+async fn an_over_long_name_is_a_client_error_not_a_storage_failure() {
+    let (_directory, app) = test_app();
+
+    // A run, a milestone and a configuration are stored as `{name}.json`, so
+    // the longest name the filesystem can hold as one name is five bytes
+    // shorter than the limit. One byte more composes a 256-byte name the
+    // filesystem refuses with `ENAMETOOLONG`, and that refusal has to reach the
+    // client as a bad request rather than as a storage failure.
+    let longest = "n".repeat(255 - ".json".len());
+    let refused = format!("{longest}n");
+    assert_eq!(format!("{longest}.json").len(), 255);
+    assert_eq!(format!("{refused}.json").len(), 256);
+
+    for collection in ["/test_runs", "/milestones", "/configurations"] {
+        let id = create_named(&app, collection, &longest).await;
+        assert_eq!(
+            id,
+            format!("{longest}.json"),
+            "a name at the limit is stored: {collection}"
+        );
+
+        let path = common::scoped(&app, collection).await;
+        let (status, body) =
+            send_json(&app, json_request("POST", &path, &json!({"name": refused}))).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "POST {path}: {body}");
+        assert_error_envelope(&body, "invalid_request");
+    }
+
+    // A suite is created inside a project, so it is addressed by the route that
+    // names its home rather than by a flat collection. Like a project and a case
+    // it is stored as a folder, so its own name is the component that has to
+    // fit: one at the limit is stored, one byte more is refused.
+    let home = fixture_home(&app).await;
+    let suites = format!("/projects/{home}/test_suites");
+    let (status, body) = send_json(
+        &app,
+        json_request("POST", &suites, &json!({"name": "n".repeat(255)})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "a suite at the limit: {body}");
+
+    let (status, body) = send_json(
+        &app,
+        json_request("POST", &suites, &json!({"name": "n".repeat(256)})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_error_envelope(&body, "invalid_request");
+
+    // A project is stored as a folder rather than as a document, so its own
+    // name is the component that has to fit: one at the limit is stored and
+    // read back, one byte more is refused.
+    let project_name = "n".repeat(255);
+    let id = create_named(&app, "/projects", &project_name).await;
+    assert_eq!(id, format!("{project_name}.json"));
+
+    let (status, _) = send(&app, get(&format!("/projects/{id}"))).await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "a project name at the limit is stored and read back"
+    );
+
+    let (status, body) = send_json(
+        &app,
+        json_request("POST", "/projects", &json!({"name": "n".repeat(256)})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_error_envelope(&body, "invalid_request");
+}
+
+#[tokio::test]
+async fn an_over_long_identifier_in_a_path_is_a_client_error_not_a_storage_failure() {
+    let (_directory, app) = test_app();
+
+    // A test case names its identifier verbatim, so the boundary is the full
+    // name limit: one identifier at the limit addresses nothing, and one byte
+    // more is refused before any path is built. Refusing it is what keeps the
+    // answer a decision of the rules rather than of the platform: before the
+    // bound a read of such a name resolved nothing and answered `404`, and a
+    // write under it failed the store as `500`; a client error is the answer
+    // for both now.
+    let case_at_limit = "n".repeat(255);
+    let case_refused = "n".repeat(256);
+
+    let (status, _) = send(&app, get(&format!("/test_cases/{case_at_limit}"))).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+
+    let (status, body) = send_json(&app, get(&format!("/test_cases/{case_refused}"))).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_error_envelope(&body, "invalid_id");
+
+    // A project addresses a folder, so the same boundary counts the identifier
+    // without the document suffix it carries.
+    let folder_at_limit = format!("{}.json", "n".repeat(255));
+    let folder_refused = format!("{}.json", "n".repeat(256));
+
+    let (status, _) = send(&app, get(&format!("/projects/{folder_at_limit}"))).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+
+    let (status, body) = send_json(&app, get(&format!("/projects/{folder_refused}"))).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_error_envelope(&body, "invalid_id");
+
+    let (status, body) = send_json(&app, delete(&format!("/test_cases/{case_refused}"))).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_error_envelope(&body, "invalid_id");
 }
 
 #[tokio::test]
