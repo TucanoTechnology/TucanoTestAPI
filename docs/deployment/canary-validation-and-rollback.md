@@ -58,8 +58,9 @@ Record `PREVIOUS` before touching anything; it is the rollback target.
 
 For the shipped Compose local build (`image: tucano-test-api:local` with `build: .`) the local name
 is a build output, not a release tag: the `--build` that produces the candidate retags it, so the
-previous image id must be recorded **and pinned under a rollback-only tag before that build**. Read
-the id from the **running container**, never from the tag — the two can already have diverged:
+previous image id must be recorded **and pinned under a rollback-only tag before that build** — the
+candidate is then `tucano-test-api:local` itself, and `$CANDIDATE` names it. Read the id from the
+**running container**, never from the tag — the two can already have diverged:
 
 ```sh
 PREVIOUS_ID="$(docker inspect --format '{{.Image}}' "$(docker compose ps -q api)")"
