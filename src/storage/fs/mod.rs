@@ -461,6 +461,15 @@ impl Repository for FileRepository {
     ) -> io::Result<()> {
         FileRepository::write_at(self, resource, parent, id, value)
     }
+    fn create_at(
+        &self,
+        resource: Resource,
+        parent: Option<&Parent>,
+        id: &str,
+        value: &Value,
+    ) -> io::Result<()> {
+        FileRepository::create_at(self, resource, parent, id, value)
+    }
     fn delete_at(&self, resource: Resource, parent: Option<&Parent>, id: &str) -> io::Result<()> {
         FileRepository::delete_at(self, resource, parent, id)
     }

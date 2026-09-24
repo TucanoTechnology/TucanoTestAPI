@@ -237,25 +237,64 @@ impl FileRepository {
         value: &Value,
     ) -> io::Result<()> {
         let lock = self.acquire_lock()?;
+        let result = self.write_at_locked(resource, parent, id, value);
+        lock.unlock()?;
+        result
+    }
+
+    /// Persists a document only where nothing is stored yet.
+    ///
+    /// The existence check reads the same location `write_at_locked` writes, so
+    /// both happen inside one lock acquisition: two creates of the same
+    /// identifier are serialised and the second one finds the first one's
+    /// document rather than a location it can take. The check is the folder's
+    /// own marker file, the same thing [`Self::exists_at`] reports, so a create
+    /// answers exactly what a preceding `exists_at` would have answered.
+    pub(super) fn create_at(
+        &self,
+        resource: Resource,
+        parent: Option<&Parent>,
+        id: &str,
+        value: &Value,
+    ) -> io::Result<()> {
+        let lock = self.acquire_lock()?;
         let result = (|| {
-            // Both guards are about a folder a child would occupy, so only the
-            // resources stored as folders inside a parent are checked.
-            if matches!(resource, Resource::Suites | Resource::Cases)
-                && let Some(parent) = parent
-            {
-                let folder = self.folder(resource, Some(parent), id)?;
-                if folder.file_name().and_then(|name| name.to_str()) == Some(parent.marker_name()) {
-                    return Err(io::Error::new(
-                        io::ErrorKind::AlreadyExists,
-                        "child name shadows the parent marker",
-                    ));
-                }
-                self.ensure_kind_available(resource, Some(parent), id)?;
+            if self.document(resource, parent, id)?.is_file() {
+                return Err(io::Error::new(
+                    io::ErrorKind::AlreadyExists,
+                    "Resource already exists",
+                ));
             }
-            self.write_json(&self.document(resource, parent, id)?, value)
+            self.write_at_locked(resource, parent, id, value)
         })();
         lock.unlock()?;
         result
+    }
+
+    /// Writes a document, applying the guards the location imposes. The caller
+    /// holds the advisory lock.
+    fn write_at_locked(
+        &self,
+        resource: Resource,
+        parent: Option<&Parent>,
+        id: &str,
+        value: &Value,
+    ) -> io::Result<()> {
+        // Both guards are about a folder a child would occupy, so only the
+        // resources stored as folders inside a parent are checked.
+        if matches!(resource, Resource::Suites | Resource::Cases)
+            && let Some(parent) = parent
+        {
+            let folder = self.folder(resource, Some(parent), id)?;
+            if folder.file_name().and_then(|name| name.to_str()) == Some(parent.marker_name()) {
+                return Err(io::Error::new(
+                    io::ErrorKind::AlreadyExists,
+                    "child name shadows the parent marker",
+                ));
+            }
+            self.ensure_kind_available(resource, Some(parent), id)?;
+        }
+        self.write_json(&self.document(resource, parent, id)?, value)
     }
 
     pub(super) fn delete_at(
