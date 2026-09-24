@@ -750,6 +750,8 @@ async fn every_guarded_operation_refuses_an_anonymous_caller() {
         ("DELETE", "/milestones/missing.json"),
         ("POST", "/milestones/missing.json/duplicate"),
         ("GET", "/milestones/missing.json/progress"),
+        ("GET", "/releases"),
+        ("GET", "/environments"),
         ("GET", "/configurations"),
         ("POST", "/configurations"),
         ("GET", "/configurations/missing.json"),
@@ -762,7 +764,7 @@ async fn every_guarded_operation_refuses_an_anonymous_caller() {
     ];
     assert_eq!(
         operations.len(),
-        68,
+        70,
         "the guarded surface changed; update this matrix with it"
     );
 
@@ -941,6 +943,14 @@ async fn a_viewer_reads_the_projects_it_reaches_and_cannot_write() {
         None,
     )
     .await;
+
+    // The context-bar listings are derived reads over the viewer's own project,
+    // so they follow the same rule as the listings above: the project it
+    // reaches and nothing else.
+    let releases = call_ok(&app, Some(token), "GET", "/releases", None).await;
+    assert_eq!(releases, json!(["sprint-42"]));
+    let environments = call_ok(&app, Some(token), "GET", "/environments", None).await;
+    assert_eq!(environments, json!(["chrome-linux"]));
 
     // A configuration belongs to the project that stores it, so a viewer of that
     // project reads it and its listing is no longer installation-wide.
@@ -1514,6 +1524,8 @@ async fn a_caller_with_no_grant_sees_nothing() {
         "/test_cases",
         "/test_runs",
         "/milestones",
+        "/releases",
+        "/environments",
         "/configurations",
     ] {
         let listed = call_ok(&app, Some(token), "GET", uri, None).await;

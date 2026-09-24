@@ -126,11 +126,13 @@ the check.
 | `GET /configurations/{id}` | read companion of row 10, and the global document route [§3 step 12](#step-12--validation-of-the-seeded-environment) reads each seeded configuration back through |
 | `PUT /configurations/{id}` | replace companion of row 10 |
 | `DELETE /configurations/{id}` | delete companion of row 10; teardown removes a seeded configuration through its project's own delete instead ([§4](#4-teardown-scope)) |
+| `GET /environments` | derived listing of the configurations row 10 seeds: the distinct names across the projects the caller reaches, filtered like every other listing and with no document or creating call of its own |
 | `GET /milestones` | list companion of `POST /projects/{id}/milestones` (row 20); each seeded milestone is read back through its project's own listing |
 | `GET /milestones/{id}` | read companion of row 20 |
 | `PUT /milestones/{id}` | replace companion of row 20 |
 | `DELETE /milestones/{id}` | teardown-scope call ([§4](#4-teardown-scope)) |
 | `POST /milestones/{id}/duplicate` | duplication is seeded for a suite (row 21); the same route shape for milestones is not |
+| `GET /releases` | derived listing of the milestones row 20 seeds: the distinct names across the projects the caller reaches, filtered like every other listing and with no document or creating call of its own |
 | `GET /projects` | list companion of `POST /projects` (row 1) |
 | `GET /projects/{id}` | read companion of row 1 |
 | `PUT /projects/{id}` | replace companion of row 1 |

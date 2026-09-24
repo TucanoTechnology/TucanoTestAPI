@@ -1820,6 +1820,21 @@ contract, and this section records them.
   `identifiers_cannot_escape_the_storage_root` and `a_test_case_identifier_is_addressed_verbatim` matrices in
   `tests/service.rs`, which carry the new path.
 
+- **Release and environment listings added** (Issue #262). `GET /releases` and `GET /environments` are new
+  guarded read operations answering `200` with a JSON array of strings — the distinct, byte-wise sorted `name`
+  of every milestone, respectively test configuration, held by the projects the caller reaches. The change is
+  additive: no route, method, parameter, response shape or stored document changed, and no field was added to a
+  schema, so the legacy Draft 2020-12 shapes with `additionalProperties: false` are untouched and the addition
+  needs no versioning plan. Two semantics are recorded here. One, the listings filter rather than refuse: a
+  project outside the caller's grants contributes nothing, exactly as the other global and project-scoped
+  listings behave, and the `403` the document publishes alongside `401` is the guard's own refusal rather than
+  a consequence of partial reachability. Two, a name is read from the project that stores the document alone —
+  `filter_list`'s configuration rule, and the home half of its milestone rule — not from the projects a
+  milestone's `testSuiteIds` / `testRunIds` additionally reach, so a name two projects repeat is reported once
+  and a name only an unreachable project holds is not reported at all. An installation holding no milestone,
+  respectively no configuration, answers `[]` at `200` — the degrade path the GUI's context bar reads — never
+  `404`. Deviation recorded with tests in `tests/metadata.rs`.
+
 ## Required case matrix
 
 | Case | Expected evidence |
