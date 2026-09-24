@@ -15,6 +15,14 @@ It is an operations document: it adds no route, no field and no stored-document 
   with the immutable build tag `build-<run number>` and, for SemVer releases, `vMAJOR.MINOR.PATCH`
   (see *Release numbering* in `AGENTS.md`). Validation uses an existing immutable tag — a tag is
   never moved or reused.
+- **One image, and — on the local build — one mutable name.** The published tag above is a release
+  artifact. The shipped `docker-compose.yml` instead composes `image: tucano-test-api:local` with
+  `build: .`, so that local name is a build output: **every `docker compose up --build api` retags
+  it**, and the image the previous container was running loses its only name — with the containerd
+  image store the engine then collects it. On that path `PREVIOUS` is the image **id** the running
+  container reports, pinned under a rollback-only tag before the rebuild (Step 0). This is audit
+  finding F-178-2 in
+  [`docs/security/audit-s3-container-and-deployment.md`](../security/audit-s3-container-and-deployment.md).
 - **A shared, writable data volume.** Every replica mounts the same persistent POSIX volume at
   `TUCANO_DATA_DIR` (the container default is `/data`); `docker-compose.yml` maps `./data:/data` on
   port `3100:3000`. A local Docker volume serves a single node; multi-node deployments must supply
@@ -22,8 +30,8 @@ It is an operations document: it adds no route, no field and no stored-document 
 - **Stateless replicas.** The process keeps no sessions or in-memory records, so a second replica can
   start beside the first without coordination. Mutations take an advisory lock file and write by
   atomic same-directory rename.
-- **Hardened container.** Read-only root filesystem, `--tmpfs /tmp`, `no-new-privileges`, unprivileged
-  user (uid 10001), `TUCANO_DATA_DIR=/data`, `PORT=3000`.
+- **Hardened container.** Read-only root filesystem, `--tmpfs /tmp`, `no-new-privileges`, all Linux
+  capabilities dropped, unprivileged user (uid 10001), `TUCANO_DATA_DIR=/data`, `PORT=3000`.
 
 ## Why canary, not shadow
 
@@ -48,6 +56,21 @@ CANDIDATE="$IMAGE:build-4711"       # the build under test
 
 Record `PREVIOUS` before touching anything; it is the rollback target.
 
+For the shipped Compose local build (`image: tucano-test-api:local` with `build: .`) the local name
+is a build output, not a release tag: the `--build` that produces the candidate retags it, so the
+previous image id must be recorded **and pinned under a rollback-only tag before that build** — the
+candidate is then `tucano-test-api:local` itself, and `$CANDIDATE` names it. Read the id from the
+**running container**, never from the tag — the two can already have diverged:
+
+```sh
+PREVIOUS_ID="$(docker inspect --format '{{.Image}}' "$(docker compose ps -q api)")"
+docker tag "$PREVIOUS_ID" tucano-test-api:rollback
+```
+
+`PREVIOUS_ID` is the rollback target on this path. The `docker tag` is what keeps it: the id alone
+does not hold the image — once the rebuild retags `tucano-test-api:local`, an image with no tag left
+can be collected by the engine, and it is then unrecoverable from the local cache.
+
 If the candidate changes the shape, strictness or validation of any stored document — or **where**
 documents live, as the storage layout v3 change ([#215](https://github.com/TucanoTechnology/TucanoTestAPI/issues/215))
 did — snapshot the volume first. Documents are plain JSON and inspectable on the host, so a
@@ -69,7 +92,7 @@ stable replica does not publish:
 ```sh
 docker run --detach --name tucano-api-canary \
   --read-only --tmpfs /tmp \
-  --security-opt no-new-privileges:true \
+  --security-opt no-new-privileges:true --cap-drop=ALL \
   --env TUCANO_DATA_DIR=/data --env PORT=3000 \
   --volume "$DATA_DIR":/data \
   --publish 3101:3000 \
@@ -144,8 +167,11 @@ recorded:
   the old replica.
 - **Standalone `docker run`:** stop the previous container and start the same way with `$CANDIDATE` on
   the production port (`--publish 3000:3000` or the host mapping in use).
-- **Compose:** pin the image tag in the deployment manifest and recreate the `api` service, then
-  remove the standalone canary container:
+- **Compose:** for a registry tag, pin the new image tag in the deployment manifest and recreate the
+  `api` service. For the shipped local build the promotion *is* the build —
+  `docker compose up --detach --build api` retags `tucano-test-api:local` to the candidate, which is
+  why Step 0 pinned the previous image id before it. Either way, remove the standalone canary
+  container once the promoted replica is serving:
 
   ```sh
   docker stop tucano-api-canary && docker rm tucano-api-canary
@@ -153,7 +179,10 @@ recorded:
 
 ## Rollback
 
-Rollback re-deploys `PREVIOUS` and re-runs the checks; it never moves a tag.
+Rollback re-deploys `PREVIOUS` and re-runs the checks. It never moves or reuses an immutable release
+tag; on the shipped local build, where `PREVIOUS` is an image id rather than a tag, it instead
+retags the mutable local build name — a build output — back to that id, and records the id under a
+rollback-only tag (Step 0) precisely so it is still there to retag.
 
 If the candidate was **never promoted** (it is still the standalone canary), remove it:
 
@@ -167,7 +196,7 @@ If it **was promoted**, redeploy the recorded previous tag:
 docker stop tucano-api && docker rm tucano-api
 docker run --detach --name tucano-api \
   --read-only --tmpfs /tmp \
-  --security-opt no-new-privileges:true \
+  --security-opt no-new-privileges:true --cap-drop=ALL \
   --env TUCANO_DATA_DIR=/data --env PORT=3000 \
   --volume "$DATA_DIR":/data \
   --publish 3000:3000 \
@@ -177,10 +206,26 @@ curl --fail --silent --show-error http://localhost:3000/health
 scripts/smoke.sh http://localhost:3000
 ```
 
-With Compose, restore the previously pinned image tag and recreate only the `api` service:
+With Compose, recreate only the `api` service against `PREVIOUS`. Which command that is depends on
+how `PREVIOUS` is held:
+
+**Registry tag.** Restore the previously pinned image tag in the manifest and recreate the service;
+there is nothing to rebuild.
 
 ```sh
 docker compose up --detach --no-deps --force-recreate api
+```
+
+**Shipped local build.** Put the recorded image id back under the mutable name the Compose file uses,
+then recreate the service **without building** — `--no-build` is load-bearing, because a `--build`
+here would retag `tucano-test-api:local` to a freshly built candidate and roll the candidate back in.
+The `docker tag` cannot succeed if Step 0 never ran, and that is the signal that the previous image
+was collected and is not recoverable from the local cache:
+
+```sh
+docker tag tucano-test-api:rollback tucano-test-api:local
+docker compose up --detach --no-deps --no-build --force-recreate api
+docker inspect --format '{{.Image}}' "$(docker compose ps -q api)"   # must equal "$PREVIOUS_ID"
 ```
 
 After a rollback, confirm `/health` and re-run `scripts/smoke.sh` against the restored port before
@@ -243,7 +288,9 @@ the operator recipe for converting one are recorded in
 
 ## Evidence to record per validation
 
-- `PREVIOUS` and `CANDIDATE` — the exact immutable tags.
+- `PREVIOUS` and `CANDIDATE` — the exact immutable tags; on the shipped local build, instead the
+  running container's image id (`docker inspect --format '{{.Image}}' …`) and the rollback-only tag
+  it was pinned under.
 - Whether a volume snapshot was taken, and where.
 - The `/health` response from the canary.
 - The full `scripts/smoke.sh` output against the canary.
