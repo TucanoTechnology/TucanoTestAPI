@@ -101,6 +101,18 @@ impl FileRepository {
         result
     }
 
+    pub(super) fn read_step_attachment(
+        &self,
+        parent: &Parent,
+        case: &str,
+        step_index: usize,
+        filename: &str,
+    ) -> io::Result<Vec<u8>> {
+        fs::read(step_attachment_path(
+            &self.root, parent, case, step_index, filename,
+        )?)
+    }
+
     pub(super) fn delete_step_attachment(
         &self,
         parent: &Parent,

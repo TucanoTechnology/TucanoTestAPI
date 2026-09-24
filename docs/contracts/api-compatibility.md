@@ -181,13 +181,32 @@ configurations with it, so a run is no longer guaranteed to outlive the project 
   directly and never resolve globally, so an attachment of a case id shared by two parents stays reachable
   instead of answering `409 Conflict`. No bare path, method, parameter or response shape changed, no field was
   added to a schema, and no pre-existing route was retired; the twelve new operations are purely additional
-  surface. Step attachments still have no download route in any form.
+  surface. Step attachments still have no download route in any form. **Amended by Issue #289 (entry below):**
+  the bare step download route now exists; the parent-scoped step forms still have none.
 - **Issue #291 — downloads answer opaquely and name the file.** The three case-attachment downloads answer
   `Content-Type: application/octet-stream` whatever the stored file is — the media type the document already
   declared — and add `Content-Disposition: attachment` carrying an ASCII-safe `filename` plus, when the name is
   not plain ASCII, an RFC 5987 `filename*`. `Attachment.mimeType` keeps its meaning: it is the description of
   the stored file recorded in the case document, and it never becomes a response content type. The case upload
-  route also records `uploadedAt` on the attachment it stores.
+  route also records `uploadedAt` on the attachment it stores. **Amended by Issue #289 (entry below):** the
+  step download is a fourth binary answer declaring the same media type and header, so `ContentDisposition` is
+  now referenced from four `200`s.
+- **Issue #289 — the bare step attachment downloads.** `GET /test_cases/{id}/steps/{step_index}/attachments/{filename}`
+  is added, taking the documented count from 86 to 87. Where the case-level route has always answered bytes,
+  this one previously answered `405 Method Not Allowed` with `allow: DELETE`, so the operation is purely
+  additional: no bare path, method, parameter or response shape changed, no schema gained or lost a field, no
+  stored document changed, and no request that used to succeed is refused. It mirrors the case download exactly,
+  so the body is always `application/octet-stream` — the media type the document already declared — plus
+  `Content-Disposition: attachment` naming the uploaded file (Issue #291 behaviour above). The stored
+  `StepAttachment.mimeType` stays the description recorded in the document and never becomes a response content
+  type; the entry keeps the narrow `StepAttachment` shape and gains no `uploadedAt`, because that key belongs
+  only to the case-level `Attachment` recorded by Issue #291 and adding it to a step attachment would be a
+  schema change no issue asks for. An unattached filename answers `404`, and so does a `{step_index}` that names
+  no structured step — the byte route reads the file the index constructs rather than validating the index
+  against the case, so a `{step_index}` that is not a non-negative integer is the only bad-request case
+  (`400 invalid_request`), while an index that simply names no step is not found. The parent-scoped step
+  families added by Issue #290 still have no download form in either direction, which is the one remaining
+  asymmetry in the attachment surface.
 
 ### Storage security invariants
 
@@ -538,7 +557,8 @@ operations the fix adds, recorded before the implementation commits.
   **no download route**: the ticket's endpoint list and its definition of done name upload, list and delete only,
   and the GUI flow that would consume a preview is paused. This is recorded as an intentional scope decision, so
   a client that needs the bytes reads the stored file through the documented filesystem layout rather than the
-  API, and a download route would be a separate additive change.
+  API, and a download route would be a separate additive change. **Amended by Issue #289 (entry below):** that
+  separate additive change arrived, in the bare form only — see its entry under breaking change accounting.
 - **The index is validated like the identifiers are.** `step_index` must be a non-negative integer, so a
   non-numeric or negative value is `400 invalid_request` — not `invalid_id`, which stays reserved for a path
   identifier, and not a new code, so the published set of error codes does not grow. An index that is an integer
@@ -1406,6 +1426,8 @@ the run already holds replaced the whole result, so a partial recording discarde
   `/test_cases/{id}/steps/{step_index}/attachments` (GET, POST) and `.../attachments/{filename}` (DELETE) are
   added. The field is written only when a step owns attachments, so existing cases sign on disk and on the wire
   unchanged, and a new key inside a step that used to be refused becomes accepted. No download route is added.
+  **Amended by Issue #289 (entry below):** the download route this ticket ruled out arrived later as its own
+  additive change, and only in the bare form — see its entry under breaking change accounting.
   Deviation recorded with tests in `tests/cases.rs`, `tests/attachments.rs` and `tests/service.rs` as listed in
   the plan.
 - **New optional `testCases` on assembled project responses** (Issue #65). Legacy Draft 2020-12 `Project`
@@ -1622,7 +1644,9 @@ the run already holds replaced the whole result, so a partial recording discarde
   where the bare ones cannot, namely a case id that copy-on-include placed under two parents, which the bare
   routes still refuse with `409 conflict`. The one recorded asymmetry is deliberate: a step attachment has no
   download route in any form, bare or parent-scoped, so the new step routes are four upload/list/delete
-  operations. One existing message does change wording: the `409 conflict` an ambiguous identifier raises now
+  operations. **Amended by Issue #289 (entry below):** the bare step download route has since been added, a
+  fifth operation in the step family; the parent-scoped step forms still have no download. One existing message
+  does change wording: the `409 conflict` an ambiguous identifier raises now
   labels each home (`project billing.json`, `suite smoke.checkout.json in project payments.json`) instead of
   printing a bare path, so the list it prints agrees with the count it opens with — the second defect the issue
   reports — and, for a case id, it names the parent-scoped attachment routes among the ways to address one
@@ -1641,7 +1665,7 @@ the run already holds replaced the whole result, so a partial recording discarde
   started, and non-UTF-8 bytes were corrupted by the text decode. All three now answer
   `application/octet-stream` and add `Content-Disposition: attachment` naming the file the uploader supplied, so
   bytes and filename reach every client in one shape. `openapi.json` gains the `ContentDisposition` header
-  component, references it from the three `200`s, and describes the `Attachment` members — including that
+  component, references it from the three `200`s (four after #289), and describes the `Attachment` members — including that
   `mimeType` is metadata that never becomes a response content type. The case upload route additionally records
   `uploadedAt` (ISO-8601 UTC) on the entry it stores. Observable departures: a client that read the response
   content type now always sees `application/octet-stream` and must take the stored type from the case document's
@@ -1722,6 +1746,31 @@ the run already holds replaced the whole result, so a partial recording discarde
   for an unnamed tag, compose with `?filter=`, the run listing composes with `?configuration=`, one project's
   tag filter judges that project's occurrence rather than the global first one, and the document assertion pins
   `?tags=` to the four list operations whose resource can store one.
+- **The bare step attachment downloads** (Issue #289, note above). One operation is added and none is
+  withdrawn: `GET /test_cases/{id}/steps/{step_index}/attachments/{filename}` answers the stored bytes where the
+  path previously answered `405 Method Not Allowed` with `allow: DELETE`, taking the documented count from 86
+  to 87. Purely additive: no bare path, method, parameter or response shape changed, no schema gained or lost a
+  field, no stored document shape changed, and no request that used to succeed is refused. The response mirrors
+  the case-level download exactly — `Content-Type: application/octet-stream` whatever the stored file is, plus
+  `Content-Disposition: attachment` naming the uploaded file (Issue #291 above) — so a client that decodes by
+  response content type still receives bytes. `StepAttachment.mimeType` stays the description recorded in the
+  step document and never becomes a response content type, and the entry gains no `uploadedAt`: that key belongs
+  only to the case-level `Attachment` the Issue #291 upload records, and adding it to a step attachment would be
+  a schema change no issue asks for under the `additionalProperties: false` rule. Two asymmetries with the
+  collection route are recorded deliberately. A `{step_index}` that is not a non-negative integer answers
+  `400 invalid_request` on every form of this path; a `{step_index}` that names no structured step answers
+  `404 not_found` here, because the byte route reads the file the index constructs rather than validating the
+  index against the case, while the list and upload routes on the same path answer `400`. And, as Issue #290
+  above records, the parent-scoped step families still have no download form in either direction — this ticket
+  adds only the bare route. Deviation recorded with tests in `tests/attachments.rs`, including
+  `::a_step_attachment_downloads_opaquely_and_named_for_the_client`,
+  `::a_missing_step_attachment_download_returns_not_found`, `::a_step_attachment_download_name_may_not_traverse`
+  and `::step_attachments_reject_an_unusable_step_index`, plus
+  `tests/service.rs::openapi_types_and_names_every_binary_download`, which holds the document to exactly four
+  binary downloads, `::openapi_declares_the_security_posture_of_every_operation`,
+  `tests/auth.rs::every_guarded_operation_refuses_an_anonymous_caller`, and the
+  `identifiers_cannot_escape_the_storage_root` and `a_test_case_identifier_is_addressed_verbatim` matrices in
+  `tests/service.rs`, which carry the new path.
 
 ## Required case matrix
 

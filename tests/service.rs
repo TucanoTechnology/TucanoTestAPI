@@ -211,6 +211,7 @@ async fn identifiers_cannot_escape_the_storage_root() {
         "/projects/nested%2Fchild.json",
         "/test_cases/..%2Fescape",
         "/test_cases/TC-001/attachments/..%2F..%2Fescape.txt",
+        "/test_cases/TC-001/steps/0/attachments/..%2F..%2Fescape.txt",
     ] {
         let (status, _) = send(&app, get(uri)).await;
         assert!(
@@ -462,6 +463,7 @@ async fn a_test_case_identifier_is_addressed_verbatim() {
         ("GET", "/test_cases/nope/attachments/missing.txt"),
         ("DELETE", "/test_cases/nope/attachments/missing.txt"),
         ("GET", "/test_cases/nope/steps/0/attachments"),
+        ("GET", "/test_cases/nope/steps/0/attachments/missing.txt"),
         ("DELETE", "/test_cases/nope/steps/0/attachments/missing.txt"),
     ] {
         let (status, body) = send_json(&app, json_request(method, uri, &json!({}))).await;
@@ -929,7 +931,7 @@ async fn openapi_documents_the_error_contract_of_every_operation() {
 /// Neither half subsumes the other. The table names a test but cannot see
 /// whether it reaches the route; the recording sees a success but cannot say
 /// which test produced it, only that one in the run did. Keep both.
-const CONTRACT_COVERAGE: [(&str, &str); 86] = [
+const CONTRACT_COVERAGE: [(&str, &str); 87] = [
     ("get /health", "health_reports_filesystem_storage"),
     (
         "get /openapi.json",
@@ -1195,6 +1197,10 @@ const CONTRACT_COVERAGE: [(&str, &str); 86] = [
         "a_step_attachment_name_may_not_traverse",
     ),
     (
+        "get /test_cases/{id}/steps/{step_index}/attachments/{filename}",
+        "a_step_attachment_downloads_opaquely_and_named_for_the_client",
+    ),
+    (
         "delete /test_cases/{id}/steps/{step_index}/attachments/{filename}",
         "step_attachments_do_not_collide_with_case_attachments",
     ),
@@ -1371,7 +1377,7 @@ async fn every_documented_operation_has_a_covering_test() {
     }
 }
 
-/// The three attachment downloads are the document's only binary answers, and
+/// The four attachment downloads are the document's only binary answers, and
 /// each is typed as bytes and names the file for the client.
 ///
 /// The route used to declare `application/octet-stream` while answering with a
@@ -1433,9 +1439,10 @@ async fn openapi_types_and_names_every_binary_download() {
         [
             "get /projects/{id}/test_cases/{case_id}/attachments/{filename}",
             "get /test_cases/{id}/attachments/{filename}",
+            "get /test_cases/{id}/steps/{step_index}/attachments/{filename}",
             "get /test_suites/{id}/test_cases/{case_id}/attachments/{filename}",
         ],
-        "the binary downloads are exactly these three"
+        "the binary downloads are exactly these four"
     );
 }
 
@@ -1475,7 +1482,7 @@ async fn openapi_declares_the_security_posture_of_every_operation() {
     ];
 
     let operations = documented_operations(&document);
-    assert_eq!(operations.len(), 86, "the documented surface changed");
+    assert_eq!(operations.len(), 87, "the documented surface changed");
 
     for (label, operation) in &operations {
         let responses = operation["responses"].as_object().expect("responses");
@@ -1533,7 +1540,7 @@ async fn openapi_declares_the_security_posture_of_every_operation() {
         .filter(|(_, operation)| operation["responses"].get("403").is_some())
         .count();
     assert_eq!(
-        refuses, 75,
+        refuses, 76,
         "the 403 surface changed; update this count with it"
     );
 }
@@ -1743,7 +1750,7 @@ async fn openapi_operations_carry_stable_ids_and_resource_tags() {
             "{label} carries an undeclared tag: {tag}"
         );
     }
-    assert_eq!(ids.len(), 86, "every documented operation is named");
+    assert_eq!(ids.len(), 87, "every documented operation is named");
 }
 
 #[tokio::test]

@@ -210,6 +210,15 @@ pub trait Repository: Send + Sync {
         contents: &[u8],
     ) -> io::Result<()>;
 
+    /// Read a supplementary file stored against one structured step of a case.
+    fn read_step_attachment(
+        &self,
+        parent: &Parent,
+        case: &str,
+        step_index: usize,
+        filename: &str,
+    ) -> io::Result<Vec<u8>>;
+
     /// Remove a supplementary file of one structured step of a case and its
     /// stored metadata.
     fn delete_step_attachment(

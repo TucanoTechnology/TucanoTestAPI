@@ -10,7 +10,7 @@ operation index — method, path, `operationId` and summary. Schemas, parameters
 and status codes are the contract itself: read them in [`openapi.json`](../../openapi.json) or in
 the Swagger UI at `/api-docs`, which is rendered from the same document.
 
-The contract currently registers **86** operations.
+The contract currently registers **87** operations.
 
 | Method | Path | Operation | Summary |
 | --- | --- | --- | --- |
@@ -72,6 +72,7 @@ The contract currently registers **86** operations.
 | `GET` | `/test_cases/{id}/history/{version}` | `getTestCaseVersion` | Read a test-case revision |
 | `GET` | `/test_cases/{id}/steps/{step_index}/attachments` | `listStepAttachments` | List step attachments |
 | `POST` | `/test_cases/{id}/steps/{step_index}/attachments` | `uploadStepAttachment` | Upload step attachment |
+| `GET` | `/test_cases/{id}/steps/{step_index}/attachments/{filename}` | `downloadStepAttachment` | Download step attachment |
 | `DELETE` | `/test_cases/{id}/steps/{step_index}/attachments/{filename}` | `deleteStepAttachment` | Delete step attachment |
 | `GET` | `/test_runs/{id}` | `getTestRun` | Read a test run |
 | `PUT` | `/test_runs/{id}` | `updateTestRun` | Update a test run |

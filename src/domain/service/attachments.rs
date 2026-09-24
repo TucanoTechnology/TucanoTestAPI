@@ -134,6 +134,19 @@ impl<R: Repository> TestService<R> {
             .unwrap_or_default())
     }
 
+    /// Reads a stored attachment of one structured step.
+    pub fn read_step_attachment(
+        &self,
+        parent: &Parent,
+        id: &str,
+        step_index: usize,
+        filename: &str,
+    ) -> Result<Vec<u8>, DomainError> {
+        self.repository
+            .read_step_attachment(parent, id, step_index, filename)
+            .map_err(error::attachment_error)
+    }
+
     /// Deletes a stored attachment of one structured step.
     pub fn delete_step_attachment(
         &self,
