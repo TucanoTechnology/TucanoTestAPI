@@ -18,6 +18,12 @@ the TucanoTestGUI repository:
 | API | `ghcr.io/tucanotechnology/tucanotestapi` (released); `tucano-test-api:local` (Compose build) | [`Dockerfile`](../../Dockerfile) | `3100` → container `3000` |
 | GUI | `tucano-test-gui:local` | `../Tucano-Test-GUI/Dockerfile` | `8080` → container `8080` |
 
+The two `…:local` names are **local build outputs, not release tags**: `docker compose up --build`
+retags them on every build, so whatever ran before loses the name. A rollback that targets one of
+them records the running container's image id and pins it under a rollback-only tag *before* the
+candidate is built — see [*Rollback*](#rollback) below and the
+[runbook's Rollback section](canary-validation-and-rollback.md#rollback).
+
 The API is the system of record and the only process that touches storage. The GUI is a client of
 the same HTTP contract and never accesses the data directory directly
 ([`docs/architecture/gui-client-boundary.md`](../architecture/gui-client-boundary.md)).
@@ -126,6 +132,11 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+    # A local build name, not a release tag: every `up --build` retags it, so the
+    # image the previous container ran loses this name and can be collected. A
+    # rollback therefore records the running container's image id and pins it
+    # under a rollback-only tag *before* rebuilding — see "Rollback" in
+    # docs/deployment/canary-validation-and-rollback.md (audit finding F-178-2).
     image: tucano-test-api:local
     environment:
       TUCANO_DATA_DIR: /data
@@ -143,6 +154,8 @@ services:
       - /tmp
     security_opt:
       - no-new-privileges:true
+    cap_drop:
+      - ALL
     restart: unless-stopped
     deploy:
       replicas: 1
@@ -152,8 +165,8 @@ services:
           memory: 512M
 ```
 
-(The checked-in file carries a short explanatory comment above the four authentication variables;
-the values are reproduced above verbatim.)
+(The checked-in file carries short explanatory comments above the image name and the four
+authentication variables; the values are reproduced above verbatim.)
 
 `TUCANO_DATA_DIR=/data` and the `./data:/data` mount together are the whole persistence story: the
 host directory `./data` is the state (Docker creates it on first run), and `.gitignore` excludes
@@ -284,6 +297,7 @@ same hardened shape, matching what the Dockerfile already does:
 | `read_only: true` / `--read-only` | Root filesystem is immutable; only the data volume and `/tmp` are writable. |
 | `tmpfs: /tmp` / `--tmpfs /tmp` | A writable scratch area for the few temporary files the process needs. |
 | `security_opt: no-new-privileges:true` | A process can never gain more privilege than the container started with. |
+| `cap_drop: ALL` / `--cap-drop=ALL` | The container runs with no Linux capability at all. The service needs none: it binds a port above 1024, and reads and writes only paths it owns. |
 | `USER tucano` (uid `10001`) | The runtime image creates a system user `tucano` with no login shell and runs the service as it. |
 | `ca-certificates` only | The only package the runtime image installs is `ca-certificates`; the Rust toolchain stays in the build stage. |
 | `deploy.resources.limits` | Per-replica CPU (`1.0`) and memory (`512M`) ceilings. |
@@ -340,10 +354,30 @@ PREVIOUS="$IMAGE:build-4700"    # the tag currently deployed, or a vMAJOR.MINOR.
 CANDIDATE="$IMAGE:build-4711"   # the tag under test
 ```
 
+The Compose build is the one path with no immutable tag to fall back to. The shipped
+`docker-compose.yml` composes `image: tucano-test-api:local` with `build: .`, so `--build` **retags
+that mutable name** and the image the previous container was running loses it — the engine may then
+collect it. Record the previous **image id**, and pin it under a rollback-only tag *before* building
+the candidate (reading the id from the container, not from the tag, which can already have diverged):
+
+```sh
+PREVIOUS_ID="$(docker inspect --format '{{.Image}}' "$(docker compose ps -q api)")"
+docker tag "$PREVIOUS_ID" tucano-test-api:rollback
+```
+
 To roll back:
 
 1. Stop and remove the failing container (or point the Compose service back at the previously pinned
-   tag) and start `$PREVIOUS` against the **same** `TUCANO_DATA_DIR`.
+   tag) and start `$PREVIOUS` against the **same** `TUCANO_DATA_DIR`. For the Compose build, put the
+   recorded id back under the mutable name and recreate the service **without building** —
+   `--no-build` is load-bearing, since a build here would retag the name to a fresh candidate:
+
+   ```sh
+   docker tag tucano-test-api:rollback tucano-test-api:local
+   docker compose up --detach --no-deps --no-build --force-recreate api
+   docker inspect --format '{{.Image}}' "$(docker compose ps -q api)"   # must equal "$PREVIOUS_ID"
+   ```
+
 2. Confirm `GET /health` and `GET /ready` answer and run
    [`scripts/smoke.sh`](../../scripts/smoke.sh) against the restored port.
 3. If the release changed a stored document's shape, strictness or validation, follow the versioning
@@ -398,7 +432,7 @@ layout, the refusal and the operator recipe are recorded in
       `configurations/` directory — the service refuses to start when there are (see *Storage layout
       v3 and legacy volumes*).
 - [ ] Container started with the hardened shape: read-only root filesystem, `/tmp` tmpfs,
-      `no-new-privileges`, unprivileged user, resource limits.
+      `no-new-privileges`, all Linux capabilities dropped, unprivileged user, resource limits.
 - [ ] `GET /health` answers; the Swagger UI at `/api-docs` and `openapi.json` respond if the
       deployment exposes them.
 - [ ] Health probes wired to the two questions separately: `GET /health` for liveness (the process
@@ -412,8 +446,10 @@ layout, the refusal and the operator recipe are recorded in
       keeps the historic anonymous shape and must be reachable only from a trusted network.
 - [ ] Configuration decided: environment-only (no `TUCANO_CONFIG_FILE`), or a `version: 1` file
       mounted read-only, with every secret it names also reachable from the environment.
-- [ ] Rollback target (`PREVIOUS` tag) recorded, and a volume snapshot taken if the release changes a
-      stored document's shape, strictness or validation.
+- [ ] Rollback target recorded — an immutable release tag, or, for the shipped Compose local build,
+      the running container's image id pinned under a rollback-only tag *before* the candidate is
+      built — and a volume snapshot taken if the release changes a stored document's shape,
+      strictness or validation.
 
 | File | Role |
 | --- | --- |
