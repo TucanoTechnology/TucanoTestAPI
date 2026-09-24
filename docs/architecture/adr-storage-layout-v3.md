@@ -376,7 +376,11 @@ stay global, and a retired flat creation route stays registered to explain itsel
   deletes, so the route its own conflict message recommends can actually delete one home at a time.)
 - The parent-scoped lists publish **no query parameters** and answer a bare sorted id array, exactly
   like `GET /projects/{id}/test_suites`. `?filter=`, `?tags=` and `?configuration=` remain on the
-  global scans only.
+  global scans only. *Amended by [Issue #293](https://github.com/TucanoTechnology/TucanoTestAPI/issues/293):*
+  the project-scoped suite, case and run listings now serve the same `?filter=` and `?tags=` (and,
+  for runs, `?configuration=`) the global scans do, so a listing is narrowed where it is read; the
+  parent-scoped milestone and configuration listings and `GET /test_suites/{id}/test_cases` are
+  unchanged.
 
 **Kept routes, unchanged paths and shapes:** `GET /test_runs/{id}`, `PUT`, `DELETE`,
 `POST /test_runs/{id}/duplicate`, every run sub-route (`/test_suites`, `/test_cases`, `/results`,

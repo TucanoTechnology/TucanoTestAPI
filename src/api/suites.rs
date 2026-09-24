@@ -37,9 +37,10 @@ async fn list_project_suites<R: Repository>(
     State(service): State<AppState<R>>,
     principal: Principal,
     Path(id): Path<String>,
+    Query(query): Query<ListQuery>,
 ) -> Result<Json<Value>, DomainError> {
     access::require(&service, &principal, &id, Role::Viewer)?;
-    let items = service.list_children(&Parent::Project(id), Resource::Suites)?;
+    let items = service.list_children_matching(&Parent::Project(id), Resource::Suites, &query)?;
     Ok(Json(json!(items)))
 }
 
@@ -81,6 +82,8 @@ async fn list_suite_cases<R: Repository>(
 ) -> Result<Json<Value>, DomainError> {
     let parent = service.suite_parent(&id)?;
     access::require(&service, &principal, parent.project(), Role::Viewer)?;
+    // Deliberately unfiltered: a suite's cases are answered exhaustively.
+    // Issue #293 adds the query to the project-scoped listings only.
     let items = service.list_children(&parent, Resource::Cases)?;
     Ok(Json(json!(items)))
 }

@@ -590,11 +590,18 @@ suite pins is written down rather than inferred from it.
   `GET /test_runs`, the list operations whose resource can actually store a tag. This is documentation only: the
   routes still accept and ignore the query parameter, and no response shape changed. `GET /test_suites` and
   `GET /test_cases` also filter by tags but are retired from the document as a whole
-  (`api::UNDOCUMENTED_ROUTES`), as recorded under Issue #66.
+  (`api::UNDOCUMENTED_ROUTES`), as recorded under Issue #66. **Amended by Issue #293 (entry below):** the
+  parameter is now also published on the three project-scoped listings, which accept and honour it —
+  `GET /projects/{id}/test_suites`, `GET /projects/{id}/test_cases` and `GET /projects/{id}/test_runs`. The
+  `GET /test_runs` named above is the retired flat route, no longer in the document since Issue #215; the run
+  listing that carries the parameter is `GET /projects/{id}/test_runs`.
 - **Nested and parent-scoped listings take no query filter.** `GET /projects/{id}/test_suites`,
   `GET /projects/{id}/test_cases` and `GET /test_suites/{id}/test_cases` return the complete child set; only the
   four top-level list operations read `ListQuery`. A client that needs a filtered view of a project's suites
-  filters the ids it receives.
+  filters the ids it receives. **Amended by Issue #293 (entry below):** the three *project-scoped* lists
+  `GET /projects/{id}/test_suites`, `GET /projects/{id}/test_cases` and `GET /projects/{id}/test_runs` now read
+  `ListQuery` and honour `?filter=`, `?tags=` and — on the run listing — `?configuration=`.
+  `GET /test_suites/{id}/test_cases` keeps the exhaustive behaviour this bullet describes.
 - Deviation recorded with tests in `tests/tags.rs` — create/read/update round trips including an explicit
   empty array, case-insensitive and whitespace-trimmed matching, the any-of semantics, the untagged-never-matches
   rule, the filter on suites, cases and runs, the unknown-key rejection that keeps `deny_unknown_fields` intact,
@@ -1687,6 +1694,34 @@ the run already holds replaced the whole result, so a partial recording discarde
   `::an_update_refuses_a_body_identifier_the_store_cannot_file`, the same refusal pair per resource in
   `tests/suites.rs`, `tests/runs.rs`, `tests/milestones.rs` and `tests/configurations.rs`, and
   `tests/service.rs::duplicate_routes_refuse_a_body_new_id_the_store_cannot_file`.
+- **The project-scoped suite, case and run listings filter by tag** (Issue #293). `GET
+  /projects/{id}/test_suites`, `GET /projects/{id}/test_cases` and `GET /projects/{id}/test_runs` answered the
+  complete child set and ignored the query string, so the GUI's project-scoped listings (TucanoTestGUI #119)
+  could not use the `?tags=` filter the contract documents, even though `TestSuite`, `TestCase` and `TestRun`
+  all carry `tags`; the gap is the deliberate #49/#122 case only for `milestones` and `configurations`, whose
+  models define no `tags` field. All three listings now read `ListQuery` and honour the parameters their
+  resource can answer: `?filter=` and `?tags=` on each, and the runs-only `?configuration=` on the run listing.
+  This is additive. Without a parameter the listing is the same sorted id array it answered before, no request
+  that succeeded now fails, no document changed shape, and a filter that matches nothing answers `[]` with
+  `200` rather than `400`. The matcher is the one the global `GET /projects` scan has always used — a single
+  shared implementation, not a second one — so `?tags=` keeps its documented semantics (comma-separated, each
+  element trimmed, compared case-insensitively, keeping a resource that carries *at least one* of the requested
+  tags and never matching a resource without a `tags` array) and composes with `?filter=` and `?configuration=`
+  in the documented order, all conjunction. Two consequences are deliberate. One, a child is judged on the
+  document the addressed parent holds rather than the first occurrence a global lookup resolves, so a suite or
+  case identifier two projects hold is filtered as the occurrence that project owns — the occurrence the
+  project-scoped read and delete already address. Two, `openapi.json` publishes `filter` and `tags` on both the
+  suite and case listings and files `configuration` under `listProjectTestRuns` alone: a parameter the router
+  honours has to be in the document ("if it is not in `openapi.json`, it does not exist"), and `configuration`
+  stays off the suite and case listings on the same Issue #122 reasoning that withdrew `tags` from `milestones`
+  and `configurations` — neither resource links a configuration. `GET /test_suites/{id}/test_cases`, the
+  `milestones` and the `configurations` listings are unchanged and stay exhaustive, and `?tags=` on
+  `GET /milestones` and `GET /configurations` is still accepted and ignored, as the Tags Plan above records.
+  Deviation recorded with tests in `tests/tags.rs`: a project's suites, cases and runs each match
+  case-insensitively and after trimming, keep the any-of semantics, never match an untagged child, answer `[]`
+  for an unnamed tag, compose with `?filter=`, the run listing composes with `?configuration=`, one project's
+  tag filter judges that project's occurrence rather than the global first one, and the document assertion pins
+  `?tags=` to the four list operations whose resource can store one.
 
 ## Required case matrix
 

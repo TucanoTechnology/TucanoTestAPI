@@ -8,53 +8,9 @@ impl<R: Repository> TestService<R> {
     /// Lists a resource, applying the optional substring and tag filters.
     pub fn list(&self, resource: Resource, query: &ListQuery) -> Result<Vec<String>, DomainError> {
         let mut items = self.repository.list(resource)?;
-
-        if let Some(filter) = query.filter.as_ref() {
-            let needle = filter.to_lowercase();
-            items.retain(|item| item.to_lowercase().contains(&needle));
-        }
-
-        if let Some(tags_param) = query.tags.as_ref() {
-            let requested: Vec<String> = tags_param
-                .split(',')
-                .map(|tag| tag.trim().to_lowercase())
-                .collect();
-            items.retain(|item| {
-                let Ok(value) = self.first_document(resource, item) else {
-                    return false;
-                };
-                let Some(tags) = value.get("tags").and_then(Value::as_array) else {
-                    return false;
-                };
-                let item_tags: Vec<String> = tags
-                    .iter()
-                    .filter_map(|tag| tag.as_str().map(str::to_lowercase))
-                    .collect();
-                requested.iter().any(|tag| item_tags.contains(tag))
-            });
-        }
-
-        // Only runs carry configuration references, and an unnamed
-        // configuration yields an empty listing rather than an error, matching
-        // how the substring and tag filters already behave.
-        if resource == Resource::Runs
-            && let Some(config_id) = query.configuration.as_ref()
-        {
-            items.retain(|item| {
-                let Ok(value) = self.first_document(resource, item) else {
-                    return false;
-                };
-                let Some(configurations) = value.get("configurations").and_then(Value::as_array)
-                else {
-                    return false;
-                };
-                configurations.iter().any(|configuration| {
-                    configuration.get("configId").and_then(Value::as_str)
-                        == Some(config_id.as_str())
-                })
-            });
-        }
-
+        apply_list_query(resource, query, &mut items, |item| {
+            self.first_document(resource, item).ok()
+        });
         Ok(items)
     }
 
@@ -69,10 +25,37 @@ impl<R: Repository> TestService<R> {
         parent: &Parent,
         child: Resource,
     ) -> Result<Vec<String>, DomainError> {
+        self.list_children_matching(parent, child, &ListQuery::default())
+    }
+
+    /// Identifiers of the children `parent` owns that satisfy `query`.
+    ///
+    /// A project-scoped listing judges each child on the document the named
+    /// parent holds, not on the first occurrence a global lookup resolves: a
+    /// suite or case identifier two projects hold is filtered as the occurrence
+    /// the addressed parent owns, exactly as it is deleted (`delete_in`) and
+    /// read back through the parent-scoped routes.
+    ///
+    /// The filters themselves are the ones the global listings apply, shared
+    /// through `apply_list_query`, so `?filter=`, `?tags=` and the runs-only
+    /// `?configuration=` narrow a parent's children the same way they narrow a
+    /// global scan. A filter that matches nothing yields an empty listing
+    /// rather than an error.
+    pub fn list_children_matching(
+        &self,
+        parent: &Parent,
+        child: Resource,
+        query: &ListQuery,
+    ) -> Result<Vec<String>, DomainError> {
         self.require_parent(parent)?;
-        self.repository
+        let mut items = self
+            .repository
             .list_children(parent, child)
-            .map_err(error::read_error)
+            .map_err(error::read_error)?;
+        apply_list_query(child, query, &mut items, |item| {
+            self.repository.read_at(child, Some(parent), item).ok()
+        });
+        Ok(items)
     }
 
     /// Validates, names and stores a new document in the collection that has no
@@ -240,6 +223,77 @@ impl<R: Repository> TestService<R> {
                 .map_err(error::delete_error)
         })
     }
+}
+
+/// Applies the `ListQuery` filters to an identifier listing, in the order the
+/// contract documents: `?filter=`, then `?tags=`, then the runs-only
+/// `?configuration=`. Every parameter sent has to be satisfied.
+///
+/// `load` reads the document an identifier names, from whichever location the
+/// caller lists — the global scan for [`TestService::list`], the named parent
+/// for [`TestService::list_children_matching`]. An identifier whose document
+/// `load` cannot produce never matches, and neither does a document without the
+/// array a filter walks, so an unnamed tag or configuration yields an empty
+/// listing rather than an error.
+fn apply_list_query<F: Fn(&str) -> Option<Value>>(
+    resource: Resource,
+    query: &ListQuery,
+    items: &mut Vec<String>,
+    load: F,
+) {
+    if let Some(filter) = query.filter.as_ref() {
+        let needle = filter.to_lowercase();
+        items.retain(|item| item.to_lowercase().contains(&needle));
+    }
+
+    if let Some(tags_param) = query.tags.as_ref() {
+        let requested = requested_tags(tags_param);
+        items.retain(|item| {
+            load(item).is_some_and(|value| document_has_any_tag(&value, &requested))
+        });
+    }
+
+    // Only runs carry configuration references.
+    if resource == Resource::Runs
+        && let Some(config_id) = query.configuration.as_ref()
+    {
+        items.retain(|item| {
+            load(item).is_some_and(|value| document_links_configuration(&value, config_id))
+        });
+    }
+}
+
+/// The requested tags, compared as the stored ones are: comma-separated, each
+/// element trimmed and matched case-insensitively.
+fn requested_tags(parameter: &str) -> Vec<String> {
+    parameter
+        .split(',')
+        .map(|tag| tag.trim().to_lowercase())
+        .collect()
+}
+
+/// Whether `document` carries at least one of `requested`.
+///
+/// A document without a `tags` array never matches: `?tags=` selects what a
+/// resource is labelled with, never what it lacks.
+fn document_has_any_tag(document: &Value, requested: &[String]) -> bool {
+    let Some(tags) = document.get("tags").and_then(Value::as_array) else {
+        return false;
+    };
+    tags.iter()
+        .filter_map(|tag| tag.as_str())
+        .any(|tag| requested.contains(&tag.to_lowercase()))
+}
+
+/// Whether `document` links the configuration `config_id` through its
+/// `configurations` array.
+fn document_links_configuration(document: &Value, config_id: &str) -> bool {
+    let Some(configurations) = document.get("configurations").and_then(Value::as_array) else {
+        return false;
+    };
+    configurations.iter().any(|configuration| {
+        configuration.get("configId").and_then(Value::as_str) == Some(config_id)
+    })
 }
 
 /// The identity field a `PUT` body may carry, for the routes that name a

@@ -40,7 +40,7 @@ instead. See [Storage layout v3](../architecture/adr-storage-layout-v3.md) for t
 
 | Route | Operation id | What it does |
 | --- | --- | --- |
-| `GET /projects/{id}/test_runs` | `listProjectTestRuns` | Lists one project's runs, as a sorted array of ids |
+| `GET /projects/{id}/test_runs` | `listProjectTestRuns` | Lists one project's runs, as a sorted array of ids; supports `?filter=`, `?tags=` and `?configuration=` |
 | `POST /projects/{id}/test_runs` | `addProjectTestRun` | Creates the run inside the project, from a `TestRunCreateRequest` |
 | `DELETE /projects/{id}/test_runs/{run_id}` | `removeProjectTestRun` | Removes the run from the project |
 | `GET /test_runs` | `listTestRuns` | Lists runs across every project; supports `?filter=`, `?tags=`, `?configuration=` |
