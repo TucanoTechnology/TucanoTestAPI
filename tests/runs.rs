@@ -1171,6 +1171,38 @@ async fn importing_into_an_unknown_run_is_not_found() {
 }
 
 #[tokio::test]
+async fn an_over_deep_junit_document_is_rejected_without_aborting_the_server() {
+    let (_directory, app) = test_app();
+    create_run(&app, "nightly").await;
+
+    // Deep nesting, not a large body: the audit found that ~3,410 nested
+    // elements overflowed the worker stack and aborted the process. The
+    // document is refused before the parser recurses, so the request answers a
+    // client error and the server keeps serving.
+    let mut report = String::new();
+    for _ in 0..5_000 {
+        report.push_str("<testsuite>");
+    }
+    for _ in 0..5_000 {
+        report.push_str("</testsuite>");
+    }
+
+    let (status, body) = send_json(
+        &app,
+        xml_request("/test_runs/nightly.json/import/junit", report),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "over-deep: {body}");
+    assert_error_envelope(&body, "invalid_request");
+
+    // The same process answers the next request, and the refused body wrote
+    // nothing into the run.
+    let (status, stored) = send_json(&app, get("/test_runs/nightly.json")).await;
+    assert_eq!(status, StatusCode::OK, "the server survived: {stored}");
+    assert!(stored["results"].is_null(), "nothing was written: {stored}");
+}
+
+#[tokio::test]
 async fn a_json_import_maps_its_fields_and_defaults_the_timestamp() {
     let (_directory, app) = test_app();
     create_run(&app, "nightly").await;

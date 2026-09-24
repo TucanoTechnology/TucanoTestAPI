@@ -57,11 +57,119 @@ pub struct ParsedReport {
     pub errors: usize,
 }
 
+/// The deepest element nesting a JUnit document may use.
+///
+/// A real report nests a suite inside the root and a testcase inside the suite —
+/// well under ten levels. roxmltree bounds entity-reference depth but parses
+/// element nesting by recursion, so a document nested thousands of levels deep
+/// exhausts the worker stack before the parser returns and aborts the process.
+const MAX_ELEMENT_DEPTH: usize = 100;
+
+/// Whether the raw document nests elements deeper than [`MAX_ELEMENT_DEPTH`].
+///
+/// A cheap byte scan rather than a second XML parser: it walks the bytes once,
+/// counting each start tag as one level deeper and each close tag as one level
+/// shallower. What looks like markup but is not an element — a comment, a CDATA
+/// section, a processing instruction, a quoted attribute value — is skipped
+/// whole, so a stack trace wrapped in CDATA cannot inflate the count and a
+/// comment cannot fake a close tag to hold the count down. Over-counting what
+/// remains (a declaration, a stray `<` in text) only makes the bound stricter;
+/// under-counting a real element is what must not happen, and cannot: in a
+/// well-formed document every `<name …>` is one tag this scan counts once, and
+/// every `</name>` is one it discounts once.
+fn nests_too_deeply(xml: &str) -> bool {
+    let bytes = xml.as_bytes();
+    let mut depth: usize = 0;
+    let mut index = 0;
+
+    while index < bytes.len() {
+        if bytes[index] != b'<' {
+            index += 1;
+            continue;
+        }
+
+        if bytes[index..].starts_with(b"<!--") {
+            index = skip_past(bytes, index + 4, b"-->");
+        } else if bytes[index..].starts_with(b"<![CDATA[") {
+            index = skip_past(bytes, index + 9, b"]]>");
+        } else if bytes.get(index + 1) == Some(&b'?') {
+            index = skip_past(bytes, index + 2, b"?>");
+        } else if bytes.get(index + 1) == Some(&b'/') {
+            // A close tag ends the element it names and holds nothing.
+            depth = depth.saturating_sub(1);
+            index = skip_past(bytes, index + 1, b">");
+        } else {
+            // A start tag or declaration, unless it closes itself with `/>`.
+            let (self_closing, next) = scan_tag(bytes, index + 1);
+            if !self_closing {
+                depth = depth.saturating_add(1);
+                if depth > MAX_ELEMENT_DEPTH {
+                    return true;
+                }
+            }
+            index = next;
+        }
+    }
+
+    false
+}
+
+/// The index just past `delimiter`, or the end of the document when the
+/// construct is never closed.
+fn skip_past(bytes: &[u8], from: usize, delimiter: &[u8]) -> usize {
+    let mut cursor = from;
+    while cursor < bytes.len() {
+        if bytes[cursor..].starts_with(delimiter) {
+            return cursor + delimiter.len();
+        }
+        cursor += 1;
+    }
+    bytes.len()
+}
+
+/// Walks the tag that starts just after `<` to the `>` that ends it, skipping
+/// quoted attribute values, and returns whether it closes itself with `/>`
+/// along with the index just past it.
+fn scan_tag(bytes: &[u8], from: usize) -> (bool, usize) {
+    let mut cursor = from;
+    let mut previous: Option<u8> = None;
+
+    while cursor < bytes.len() {
+        match bytes[cursor] {
+            b'>' => return (previous == Some(b'/'), cursor + 1),
+            quote @ (b'"' | b'\'') => {
+                previous = Some(quote);
+                cursor += 1;
+                while cursor < bytes.len() && bytes[cursor] != quote {
+                    cursor += 1;
+                }
+                cursor += 1;
+            }
+            byte => {
+                previous = Some(byte);
+                cursor += 1;
+            }
+        }
+    }
+
+    // An unclosed tag is counted rather than ignored, so a truncated document
+    // cannot hide depth from the bound.
+    (false, bytes.len())
+}
+
 /// Reads a JUnit report, mapping every testcase it can name.
 ///
 /// Malformed XML is an `invalid_request`; a testcase without a `name` is not an
-/// error, it is counted in [`ParsedReport::errors`].
+/// error, it is counted in [`ParsedReport::errors`]. A document nested deeper
+/// than `MAX_ELEMENT_DEPTH` is refused as an `invalid_request` before the
+/// parser recurses into it.
 pub fn parse(xml: &str) -> Result<ParsedReport, DomainError> {
+    if nests_too_deeply(xml) {
+        return Err(DomainError::invalid_request(
+            "JUnit XML nests elements too deeply",
+        ));
+    }
+
     let document =
         Document::parse(xml).map_err(|_| DomainError::invalid_request("Malformed JUnit XML"))?;
 
@@ -337,6 +445,105 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn an_over_deep_document_is_refused_before_the_parser_sees_it() {
+        // The audit's reproduction: deep nesting, not a large body. Before the
+        // bound existed this overflowed the worker stack and aborted.
+        let document = format!("{}{}", "<a>".repeat(5_000), "</a>".repeat(5_000));
+
+        match parse(&document).expect_err("over-deep document") {
+            DomainError::InvalidRequest {
+                code: "invalid_request",
+                message,
+            } => assert_eq!(message, "JUnit XML nests elements too deeply"),
+            other => panic!("unexpected error: {other:?}"),
+        }
+
+        // An unclosed document aborts the parser the same way, so it is refused
+        // as well.
+        assert!(nests_too_deeply(&"<a>".repeat(5_000)));
+    }
+
+    #[test]
+    fn the_depth_bound_holds_exactly_at_the_limit() {
+        let at_limit = format!(
+            "{}{}",
+            "<a>".repeat(MAX_ELEMENT_DEPTH),
+            "</a>".repeat(MAX_ELEMENT_DEPTH)
+        );
+        let over_limit = format!(
+            "{}{}",
+            "<a>".repeat(MAX_ELEMENT_DEPTH + 1),
+            "</a>".repeat(MAX_ELEMENT_DEPTH + 1)
+        );
+
+        assert!(!nests_too_deeply(&at_limit));
+        assert!(nests_too_deeply(&over_limit));
+
+        // A document at the bound is still handed to the parser and read; one
+        // past it is refused before the parser recurses.
+        assert!(parse(&at_limit).is_ok());
+        assert!(parse(&over_limit).is_err());
+    }
+
+    #[test]
+    fn self_closing_siblings_do_not_consume_the_depth_bound() {
+        // Two hundred sibling testcases nest one level, not two hundred, so a
+        // report cannot be refused for width masquerading as depth.
+        let mut document = String::from("<testsuite>");
+        for _ in 0..200 {
+            document.push_str(r#"<testcase name="t"/>"#);
+        }
+        document.push_str("</testsuite>");
+
+        assert_eq!(parse(&document).expect("valid JUnit").cases.len(), 200);
+    }
+
+    #[test]
+    fn cdata_bodies_do_not_accumulate_towards_the_depth_bound() {
+        // A real report wraps a stack trace in CDATA. Skipped whole, many such
+        // testcases stay at one level; miscounted, they would add up past the
+        // bound and refuse a legitimate report.
+        let mut document = String::from("<testsuite>");
+        for index in 0..200 {
+            document.push_str(&format!(
+                r#"<testcase name="t{index}"><failure><![CDATA[at <boom> (x:1)]]></failure></testcase>"#
+            ));
+        }
+        document.push_str("</testsuite>");
+
+        assert_eq!(parse(&document).expect("valid JUnit").cases.len(), 200);
+    }
+
+    #[test]
+    fn markup_that_only_looks_like_a_close_tag_does_not_discount_a_real_element() {
+        // Neither a comment's or attribute value's `</a>` may lower the count:
+        // miscounted, a document could nest thousands of real elements while
+        // the count stayed low, and the abort would remain reachable.
+        let in_a_comment = "<a><!--</a></a></a>-->".repeat(200);
+        let in_an_attribute = r#"<a b="</a> </a>">"#.repeat(200);
+
+        assert!(nests_too_deeply(&in_a_comment));
+        assert!(nests_too_deeply(&in_an_attribute));
+    }
+
+    #[test]
+    fn a_reasonably_deep_report_still_imports() {
+        let mut document = String::from("<testsuites>");
+        for _ in 0..8 {
+            document.push_str("<testsuite>");
+        }
+        document.push_str(r#"<testcase classname="Deep" name="inner"/>"#);
+        for _ in 0..8 {
+            document.push_str("</testsuite>");
+        }
+        document.push_str("</testsuites>");
+
+        let report = parse(&document).expect("valid JUnit");
+        assert_eq!(report.cases.len(), 1);
+        assert_eq!(report.cases[0].test_case_id, "Deep.inner");
     }
 
     #[test]
