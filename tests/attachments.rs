@@ -385,6 +385,59 @@ async fn a_step_without_attachments_lists_an_empty_array() {
 }
 
 #[tokio::test]
+async fn a_step_attachment_downloads_opaquely_and_named_for_the_client() {
+    let (_directory, app) = test_app();
+    create_case_with_steps(&app).await;
+
+    let collection = "/test_cases/TC-STEPS/steps/1/attachments";
+
+    // Whatever the file is, the step's bytes reach the wire opaquely and the
+    // response names the file the uploader supplied, exactly as the case-level
+    // route does.
+    for (name, contents) in [
+        ("report.pdf", b"%PDF-1.4".as_slice()),
+        ("notes.txt", b"evidence"),
+    ] {
+        let (status, uploaded) =
+            send_json(&app, multipart_request(collection, name, contents)).await;
+        assert_eq!(status, StatusCode::CREATED);
+        let filename = uploaded["filename"].as_str().expect("stored filename");
+
+        let (status, headers, body) =
+            send_full(&app, get(&format!("{collection}/{filename}"))).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            content_type(&headers),
+            Some("application/octet-stream"),
+            "{name} is served opaquely"
+        );
+        assert_eq!(
+            content_disposition(&headers),
+            Some(format!("attachment; filename=\"{name}\"").as_str()),
+            "{name} is named for the client"
+        );
+        assert_eq!(body, contents, "{name} round-trips its bytes");
+    }
+
+    // The stored media type stays in the document, and the step entry keeps the
+    // narrow `StepAttachment` shape rather than gaining an `uploadedAt`.
+    let (status, stored) = send_json(&app, get("/test_cases/TC-STEPS")).await;
+    assert_eq!(status, StatusCode::OK);
+    let listed = stored["steps"][1]["attachments"]
+        .as_array()
+        .expect("attachments");
+    let recorded: Vec<&str> = listed
+        .iter()
+        .map(|entry| entry["mimeType"].as_str().expect("mimeType"))
+        .collect();
+    assert_eq!(recorded, ["application/pdf", "text/plain"], "{stored}");
+    assert!(
+        listed.iter().all(|entry| entry.get("uploadedAt").is_none()),
+        "a step attachment records no upload time: {stored}"
+    );
+}
+
+#[tokio::test]
 async fn a_missing_step_attachment_returns_not_found() {
     let (_directory, app) = test_app();
     create_case_with_steps(&app).await;
@@ -396,6 +449,52 @@ async fn a_missing_step_attachment_returns_not_found() {
     .await;
     assert_eq!(status, StatusCode::NOT_FOUND);
     assert_error_envelope(&body, "not_found");
+}
+
+#[tokio::test]
+async fn a_missing_step_attachment_download_returns_not_found() {
+    let (_directory, app) = test_app();
+    create_case_with_steps(&app).await;
+
+    // An unattached filename in a valid step, an index that addresses no step,
+    // and an index that addresses the plain string step: each is simply not
+    // found — never a served byte and never a bad request.
+    for uri in [
+        "/test_cases/TC-STEPS/steps/1/attachments/missing.txt",
+        "/test_cases/TC-STEPS/steps/9/attachments/missing.txt",
+        "/test_cases/TC-STEPS/steps/0/attachments/missing.txt",
+    ] {
+        let (status, body) = send_json(&app, get(uri)).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "GET {uri}");
+        assert_error_envelope(&body, "not_found");
+    }
+
+    // An unknown case is refused before the step or the file is considered.
+    let (status, body) = send_json(
+        &app,
+        get("/test_cases/nope/steps/1/attachments/missing.txt"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_error_envelope(&body, "not_found");
+    assert_eq!(body["error"]["message"], "Test case not found");
+}
+
+#[tokio::test]
+async fn a_step_attachment_download_name_may_not_traverse() {
+    let (_directory, app) = test_app();
+    create_case_with_steps(&app).await;
+
+    // A name that tries to climb out of the step's folder or to name a nested
+    // path is refused rather than read, and no byte is served.
+    for uri in [
+        "/test_cases/TC-STEPS/steps/1/attachments/..%2F..%2Fescape.txt",
+        "/test_cases/TC-STEPS/steps/1/attachments/nested%2Fchild.txt",
+    ] {
+        let (status, body) = send_json(&app, get(uri)).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "GET {uri}");
+        assert_error_envelope(&body, "not_found");
+    }
 }
 
 #[tokio::test]
@@ -418,8 +517,8 @@ async fn step_attachments_reject_an_unusable_step_index() {
     create_case_with_steps(&app).await;
 
     // A value that is not a non-negative integer is a bad request, not an
-    // `invalid_id` and not a new error code. The `{filename}` route only
-    // serves DELETE, so a bad index there is exercised through DELETE.
+    // `invalid_id` and not a new error code. The `{filename}` route serves both
+    // the download and the delete, and the index is rejected before either.
     for (request, label) in [
         (
             get("/test_cases/TC-STEPS/steps/nope/attachments"),
@@ -428,6 +527,10 @@ async fn step_attachments_reject_an_unusable_step_index() {
         (
             get("/test_cases/TC-STEPS/steps/-1/attachments"),
             "GET /test_cases/TC-STEPS/steps/-1/attachments",
+        ),
+        (
+            get("/test_cases/TC-STEPS/steps/nope/attachments/missing.txt"),
+            "GET /test_cases/TC-STEPS/steps/nope/attachments/missing.txt",
         ),
         (
             delete("/test_cases/TC-STEPS/steps/nope/attachments/missing.txt"),
@@ -777,8 +880,8 @@ async fn a_parent_scoped_step_attachment_route_reaches_the_occurrence_it_names()
     assert_eq!(status, StatusCode::OK);
     assert_eq!(listing, json!([]));
 
-    // A step attachment has no download route, so the suite's copy is checked
-    // through the listing that does reach it.
+    // The parent-scoped step surface has no download route, so the suite's copy
+    // is checked through the listing that does reach it.
     let (status, listing) = send_json(&app, get(&suite_uri)).await;
     assert_eq!(status, StatusCode::OK, "the suite's step file survives");
     assert_eq!(listing[0]["filename"], suite_file.as_str());

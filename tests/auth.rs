@@ -714,6 +714,7 @@ async fn every_guarded_operation_refuses_an_anonymous_caller() {
         ("DELETE", "/test_cases/missing/attachments/report.txt"),
         ("GET", "/test_cases/missing/steps/0/attachments"),
         ("POST", "/test_cases/missing/steps/0/attachments"),
+        ("GET", "/test_cases/missing/steps/0/attachments/report.txt"),
         (
             "DELETE",
             "/test_cases/missing/steps/0/attachments/report.txt",
@@ -761,7 +762,7 @@ async fn every_guarded_operation_refuses_an_anonymous_caller() {
     ];
     assert_eq!(
         operations.len(),
-        67,
+        68,
         "the guarded surface changed; update this matrix with it"
     );
 

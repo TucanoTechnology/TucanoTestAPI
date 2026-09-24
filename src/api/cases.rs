@@ -203,6 +203,16 @@ async fn list_suite_case_step_attachments<R: Repository>(
     list_step_files(&service, &parent, &case_id, &step_index)
 }
 
+async fn download_step_attachment<R: Repository>(
+    State(service): State<AppState<R>>,
+    principal: Principal,
+    Path((id, step_index, filename)): Path<(String, String, String)>,
+) -> Result<Response, DomainError> {
+    let parent = service.require_test_case(&id)?;
+    access::require(&service, &principal, parent.project(), Role::Viewer)?;
+    download_step_file(&service, &parent, &id, &step_index, &filename)
+}
+
 async fn upload_step_attachment<R: Repository>(
     State(service): State<AppState<R>>,
     principal: Principal,
@@ -337,14 +347,7 @@ async fn upload_step_file<R: Repository>(
     Ok(upload_response(stored))
 }
 
-/// Answers a download with the stored bytes, served opaquely and named for the
-/// client.
-///
-/// The body is `application/octet-stream` whatever the file is — the stored
-/// media type stays in the case document's `mimeType` — and the
-/// `Content-Disposition` names the file the uploader supplied, so a download
-/// lands under a name a human recognises instead of the stored
-/// `<suffix>-<original name>`.
+/// Answers a case download with the stored bytes, shaped by [`bytes_response`].
 fn attachment_response<R: Repository>(
     service: &AppState<R>,
     parent: &Parent,
@@ -352,9 +355,20 @@ fn attachment_response<R: Repository>(
     filename: &str,
 ) -> Result<Response, DomainError> {
     let contents = service.read_attachment(parent, case_id, filename)?;
+    Ok(bytes_response(contents, filename))
+}
+
+/// Shapes stored bytes as an opaque download named for the client.
+///
+/// The body is `application/octet-stream` whatever the file is — the stored
+/// media type stays in the case document's `mimeType` — and the
+/// `Content-Disposition` names the file the uploader supplied, so a download
+/// lands under a name a human recognises instead of the stored
+/// `<suffix>-<original name>`.
+fn bytes_response(contents: Vec<u8>, filename: &str) -> Response {
     let disposition = HeaderValue::from_str(&content_disposition(filename))
         .expect("the disposition is printable ASCII by construction");
-    Ok((
+    (
         [
             (
                 header::CONTENT_TYPE,
@@ -364,7 +378,7 @@ fn attachment_response<R: Repository>(
         ],
         contents,
     )
-        .into_response())
+        .into_response()
 }
 
 /// Deletes one stored file from the addressed case folder.
@@ -388,6 +402,19 @@ fn list_step_files<R: Repository>(
     let step_index = parse_step_index(step_index)?;
     let attachments = service.list_step_attachments(parent, case_id, step_index)?;
     Ok(Json(json!(attachments)))
+}
+
+/// Reads one stored file from the addressed step's folder.
+fn download_step_file<R: Repository>(
+    service: &AppState<R>,
+    parent: &Parent,
+    case_id: &str,
+    step_index: &str,
+    filename: &str,
+) -> Result<Response, DomainError> {
+    let step_index = parse_step_index(step_index)?;
+    let contents = service.read_step_attachment(parent, case_id, step_index, filename)?;
+    Ok(bytes_response(contents, filename))
 }
 
 /// Deletes one stored file from the addressed step's folder.
@@ -492,7 +519,7 @@ pub(crate) fn routes<R: Repository + 'static>() -> Router<AppState<R>> {
         )
         .route(
             "/test_cases/{id}/steps/{step_index}/attachments/{filename}",
-            delete(delete_step_attachment::<R>),
+            get(download_step_attachment::<R>).delete(delete_step_attachment::<R>),
         )
         .route("/test_cases/{id}/history", get(list_case_history::<R>))
         .route(

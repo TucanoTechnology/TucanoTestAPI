@@ -159,6 +159,7 @@ the check.
 | `POST /test_cases/{id}/duplicate` | duplication is seeded for a suite (row 21); a case is placed, not duplicated (row 22) |
 | `GET /test_cases/{id}/history/{version}` | read companion of `GET /test_cases/{id}/history` (row 9) |
 | `GET /test_cases/{id}/steps/{step_index}/attachments` | read companion of the step-attachment upload (row 7) |
+| `GET /test_cases/{id}/steps/{step_index}/attachments/{filename}` | read-back companion of row 7 |
 | `DELETE /test_cases/{id}/steps/{step_index}/attachments/{filename}` | teardown is scoped to the case folder |
 | `GET /test_runs` | list companion of `POST /projects/{id}/test_runs` (row 12); [§3 step 12](#step-12--validation-of-the-seeded-environment) and the filter assertions ([§3 step 12](#step-12--validation-of-the-seeded-environment)) read it across every reachable project |
 | `GET /test_runs/{id}` | read companion of row 12; [§3 step 12](#step-12--validation-of-the-seeded-environment) reads both seeded runs back |
