@@ -218,6 +218,13 @@ Then point the deployment back at `$PREVIOUS` against the **same** `TUCANO_DATA_
 rollback procedure, including the canary replica that gates a promotion, is
 [docs/deployment/canary-validation-and-rollback.md](../deployment/canary-validation-and-rollback.md).
 
+The shipped `docker-compose.yml` is the exception to "an immutable tag": it composes
+`image: tucano-test-api:local` with `build: .`, so that name is a build output and `--build` retags
+it. There the rollback target is the running container's image **id**, recorded and pinned under a
+rollback-only tag *before* the candidate is built, and the Compose rollback recreates the service
+from it with `--no-build`. The executable sequence is in the
+[runbook's Rollback section](../deployment/canary-validation-and-rollback.md#rollback).
+
 One rule is worth internalising before you roll back: **security fixes ship as patch releases and are
 never rolled back**, because the previous image carries the flaw the patch closed. If the release you
 are escaping contains a security fix, forward-fix instead.

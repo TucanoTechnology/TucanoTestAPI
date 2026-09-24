@@ -90,6 +90,12 @@ command. Start the API alone with `docker compose up -d --build api`.
 | `api` | `3100` | `3000` | `tucano-test-api:local` |
 | `gui` | `8080` | `8080` | `tucano-test-gui:local` |
 
+Those `…:local` names are local build outputs, not release tags — every `docker compose up --build`
+retags them, so the image that ran before loses the name. Before rebuilding, record the running
+container's image id and pin it under a rollback-only tag; a Compose rollback recreates the service
+from that id with `--no-build`. The exact sequence is in the
+[runbook's Rollback section](docs/deployment/canary-validation-and-rollback.md#rollback).
+
 The `api` service sets `TUCANO_AUTH_REQUIRED=true`, so every guarded route needs a bearer token from
 `POST /auth/login` — sign in with the bootstrap account from `.env`. That is the safe posture the
 shipped file is required to produce ([audit finding F-178-1](docs/security/audit-s3-container-and-deployment.md)).
@@ -352,7 +358,7 @@ reference](docs/reference/storage-and-api.md). The error contract reconciliation
 | [docs/contracts/api-compatibility.md](docs/contracts/api-compatibility.md) | File-format and endpoint compatibility rules against the legacy implementation |
 | [docs/contracts/test-case-versioning-plan.md](docs/contracts/test-case-versioning-plan.md) | Field names, snapshot shape, trigger rules, and addressing for test-case versioning and revision history |
 | [docs/contracts/file-format-versioning-plan.md](docs/contracts/file-format-versioning-plan.md) | The `formatVersion` storage marker: field, reader and writer rules, migration rules, and the rollback drill matrix |
-| [docs/deployment/deployment-guide.md](docs/deployment/deployment-guide.md) | The deployment model: the JSON volume mount, Compose configuration, the optional configuration file, container hardening, scaling, and rollback to an immutable release tag |
+| [docs/deployment/deployment-guide.md](docs/deployment/deployment-guide.md) | The deployment model: the JSON volume mount, Compose configuration, the optional configuration file, container hardening, scaling, and rollback to an immutable release tag — or, for the Compose local build, to the running container's pinned image id |
 | [docs/deployment/config.example.json](docs/deployment/config.example.json) | The configuration-file template, kept valid against the loader's schema by a unit test |
 | [docs/deployment/configuration-reference.md](docs/deployment/configuration-reference.md) | Every setting: environment variable, file key, default, sensitivity, precedence rules, validation rules, and the encrypted-secret envelope format (#190) |
 | [docs/deployment/canary-validation-and-rollback.md](docs/deployment/canary-validation-and-rollback.md) | Canary validation, the scratch-CRUD smoke check, and safe rollback |

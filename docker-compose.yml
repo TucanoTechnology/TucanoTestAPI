@@ -3,6 +3,11 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+    # A local build name, not a release tag: every `up --build` retags it, so the
+    # image the previous container ran loses this name and can be collected. A
+    # rollback therefore records the running container's image id and pins it
+    # under a rollback-only tag *before* rebuilding — see "Rollback" in
+    # docs/deployment/canary-validation-and-rollback.md (audit finding F-178-2).
     image: tucano-test-api:local
     environment:
       TUCANO_DATA_DIR: /data
