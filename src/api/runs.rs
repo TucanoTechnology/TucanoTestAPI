@@ -39,9 +39,10 @@ async fn list_project_runs<R: Repository>(
     State(service): State<AppState<R>>,
     principal: Principal,
     Path(id): Path<String>,
+    Query(query): Query<ListQuery>,
 ) -> Result<Json<Value>, DomainError> {
     access::require(&service, &principal, &id, Role::Viewer)?;
-    let items = service.list_children(&Parent::Project(id), Resource::Runs)?;
+    let items = service.list_children_matching(&Parent::Project(id), Resource::Runs, &query)?;
     Ok(Json(json!(items)))
 }
 

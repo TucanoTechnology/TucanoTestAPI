@@ -42,7 +42,12 @@ One query parameter serves every listing route that supports it:
 | Route | Operation id | Supports |
 | --- | --- | --- |
 | `GET /projects` | `listProjects` | `?filter=`, `?tags=` |
-| `GET /test_runs` | `listTestRuns` | `?filter=`, `?tags=`, `?configuration=` |
+| `GET /projects/{id}/test_suites` | `listProjectTestSuites` | `?filter=`, `?tags=` |
+| `GET /projects/{id}/test_cases` | `listProjectTestCases` | `?filter=`, `?tags=` |
+| `GET /projects/{id}/test_runs` | `listProjectTestRuns` | `?filter=`, `?tags=`, `?configuration=` |
+
+The retired flat collection paths (`GET /test_suites`, `GET /test_cases`, `GET /test_runs`) still accept
+the same parameters but carry no contract entry — use the project-scoped route (Issue #293).
 
 `?tags=` takes a comma-separated list and matches with **OR** semantics: a resource is kept when it
 carries **at least one** of the listed tags. Matching is case-insensitive and each entry is trimmed,
@@ -50,7 +55,7 @@ so `?tags=Smoke, regression` behaves as you would hope.
 
 ```sh
 curl -s 'http://localhost:3100/projects?tags=smoke,regression'
-curl -s 'http://localhost:3100/test_runs?tags=smoke&configuration=firefox.json'
+curl -s 'http://localhost:3100/projects/checkout.json/test_runs?tags=smoke&configuration=firefox.json'
 ```
 
 Two rules that shape what you get back:
@@ -58,16 +63,15 @@ Two rules that shape what you get back:
 - **A resource with no `tags` array never matches.** `?tags=` is not "everything unlabelled"; it is
   "everything carrying one of these labels".
 - **`?tags=` composes with `?filter=`**, and on runs it also composes with `?configuration=`. A
-  request must satisfy all of the parameters you send.
+  request must satisfy all of the parameters you send, and a filter that matches nothing answers `[]`.
 
 Where tags are **not** available is worth knowing, because a client that assumes otherwise gets an
 empty or unhelpful listing:
 
 | Route | Why |
 | --- | --- |
-| `GET /milestones`, `GET /configurations` | These documents carry no `tags` field, so no tag filter is offered |
-| `GET /projects/{id}/test_suites`, `GET /projects/{id}/test_cases`, `GET /test_suites/{id}/test_cases` | Parent-scoped listings are exhaustive for that parent; no query parameters |
-| `GET /projects/{id}/test_runs`, `GET /projects/{id}/milestones`, `GET /projects/{id}/configurations` | The same rule for the project-scoped collections: a sorted array of ids, no `?filter=`, `?tags=` or `?configuration=` |
+| `GET /milestones`, `GET /configurations`, and their project-scoped forms | These documents carry no `tags` field, so no tag filter is offered |
+| `GET /test_suites/{id}/test_cases` | A suite's cases are answered exhaustively for that suite; the listing takes no query parameters |
 
 ## Configurations
 

@@ -339,18 +339,274 @@ async fn the_tags_filter_works_on_runs() {
     assert_eq!(listed_ids(&app, "/test_runs").await, all);
 }
 
+#[tokio::test]
+async fn the_tags_filter_works_on_a_projects_suites() {
+    let (_directory, app) = test_app();
+
+    let project = create_tagged(&app, "/projects", json!({"name": "checkout"})).await;
+    let listing = format!("/projects/{project}/test_suites");
+
+    let smoke = create_tagged(
+        &app,
+        &listing,
+        json!({"name": "smoke-suites", "tags": ["Smoke"]}),
+    )
+    .await;
+    let regressions = create_tagged(
+        &app,
+        &listing,
+        json!({"name": "regression-suites", "tags": ["regression"]}),
+    )
+    .await;
+    let _untagged = create_tagged(&app, &listing, json!({"name": "untagged-suites"})).await;
+
+    // The filter is additive: without it the project still lists everything it
+    // owns, untagged suites included.
+    let mut all = vec![
+        smoke.clone(),
+        regressions.clone(),
+        "untagged-suites.json".to_owned(),
+    ];
+    all.sort();
+    assert_eq!(listed_ids(&app, &listing).await, all);
+
+    for query in ["Smoke", "smoke", "SMOKE", "%20smoke%20", "smoke,unused"] {
+        assert_eq!(
+            listed_ids(&app, &format!("{listing}?tags={query}")).await,
+            vec![smoke.clone()],
+            "`?tags={query}` should match the stored tag, case-insensitively and trimmed"
+        );
+    }
+
+    let mut both = vec![smoke.clone(), regressions];
+    both.sort();
+    assert_eq!(
+        listed_ids(&app, &format!("{listing}?tags=smoke,regression")).await,
+        both,
+        "a suite matching any requested tag is listed"
+    );
+
+    assert_eq!(
+        listed_ids(&app, &format!("{listing}?tags=unused")).await,
+        Vec::<String>::new(),
+        "a filter that matches nothing answers an empty listing, not `400`"
+    );
+    assert_eq!(
+        listed_ids(&app, &format!("{listing}?tags=smoke&filter=smoke")).await,
+        vec![smoke],
+        "`?tags=` composes with `?filter=`"
+    );
+}
+
+#[tokio::test]
+async fn the_tags_filter_works_on_a_projects_cases() {
+    let (_directory, app) = test_app();
+
+    let project = create_tagged(&app, "/projects", json!({"name": "checkout"})).await;
+    let listing = format!("/projects/{project}/test_cases");
+
+    let smoke = create_tagged(
+        &app,
+        &listing,
+        json!({
+            "testCaseId": "TC-SMOKE",
+            "title": "Login",
+            "expectedResult": "Stored",
+            "tags": ["Smoke"],
+        }),
+    )
+    .await;
+    let slow = create_tagged(
+        &app,
+        &listing,
+        json!({
+            "testCaseId": "TC-SLOW",
+            "title": "Search",
+            "expectedResult": "Stored",
+            "tags": ["slow"],
+        }),
+    )
+    .await;
+    let _untagged = create_tagged(
+        &app,
+        &listing,
+        json!({"testCaseId": "TC-PLAIN", "title": "Logout", "expectedResult": "Stored"}),
+    )
+    .await;
+
+    let mut all = vec![smoke.clone(), slow.clone(), "TC-PLAIN".to_owned()];
+    all.sort();
+    assert_eq!(listed_ids(&app, &listing).await, all);
+
+    for query in ["Smoke", "smoke", "SMOKE", "%20smoke%20", "smoke,unused"] {
+        assert_eq!(
+            listed_ids(&app, &format!("{listing}?tags={query}")).await,
+            vec![smoke.clone()],
+            "`?tags={query}` should match the stored tag, case-insensitively and trimmed"
+        );
+    }
+
+    let mut both = vec![smoke, slow.clone()];
+    both.sort();
+    assert_eq!(
+        listed_ids(&app, &format!("{listing}?tags=smoke,slow")).await,
+        both,
+        "a case matching any requested tag is listed"
+    );
+
+    assert_eq!(
+        listed_ids(&app, &format!("{listing}?tags=unused")).await,
+        Vec::<String>::new(),
+        "a filter that matches nothing answers an empty listing, not `400`"
+    );
+    assert_eq!(
+        listed_ids(&app, &format!("{listing}?filter=slow&tags=slow")).await,
+        vec![slow],
+        "`?tags=` composes with `?filter=`"
+    );
+}
+
+#[tokio::test]
+async fn the_tags_filter_works_on_a_projects_runs() {
+    let (_directory, app) = test_app();
+    let home = common::fixture_home(&app).await;
+    let listing = format!("/projects/{home}/test_runs");
+
+    let nightly = create_tagged(&app, &listing, json!({"name": "nightly", "tags": ["CI"]})).await;
+    let manual = create_tagged(&app, &listing, json!({"name": "manual"})).await;
+
+    let mut all = vec![nightly.clone(), manual];
+    all.sort();
+    assert_eq!(listed_ids(&app, &listing).await, all);
+
+    for query in ["CI", "ci", "%20ci%20", "ci,unused"] {
+        assert_eq!(
+            listed_ids(&app, &format!("{listing}?tags={query}")).await,
+            vec![nightly.clone()],
+            "`?tags={query}` should match the stored tag, case-insensitively and trimmed"
+        );
+    }
+
+    assert_eq!(
+        listed_ids(&app, &format!("{listing}?tags=unused")).await,
+        Vec::<String>::new(),
+        "a filter that matches nothing answers an empty listing, not `400`"
+    );
+    assert_eq!(
+        listed_ids(&app, &format!("{listing}?tags=ci&filter=night")).await,
+        vec![nightly],
+        "`?tags=` composes with `?filter=`"
+    );
+}
+
+/// A project-scoped tag filter judges the occurrence the named project holds.
+///
+/// A suite identifier is unique inside its project, but two projects may each
+/// hold a suite named `shared` with different tags. The listing answers from the
+/// project the path names — the occurrence the project-scoped read and delete
+/// address — rather than from the first occurrence a global lookup resolves, so
+/// one project's labels never leak into another project's listing.
+#[tokio::test]
+async fn a_projects_tags_filter_judges_that_projects_occurrence() {
+    let (_directory, app) = test_app();
+
+    let alpha = create_tagged(&app, "/projects", json!({"name": "alpha"})).await;
+    let beta = create_tagged(&app, "/projects", json!({"name": "beta"})).await;
+
+    // The untagged occurrence is created first, so a global first-occurrence
+    // lookup would resolve the untagged document.
+    create_tagged(
+        &app,
+        &format!("/projects/{beta}/test_suites"),
+        json!({"name": "shared"}),
+    )
+    .await;
+    create_tagged(
+        &app,
+        &format!("/projects/{alpha}/test_suites"),
+        json!({"name": "shared", "tags": ["smoke"]}),
+    )
+    .await;
+
+    assert_eq!(
+        listed_ids(&app, &format!("/projects/{alpha}/test_suites?tags=smoke")).await,
+        vec!["shared.json".to_owned()],
+        "alpha's occurrence carries the tag"
+    );
+    assert_eq!(
+        listed_ids(&app, &format!("/projects/{beta}/test_suites?tags=smoke")).await,
+        Vec::<String>::new(),
+        "beta's occurrence carries no tag, so it never matches"
+    );
+}
+
+/// `?configuration=` narrows a project's runs to those linking the named
+/// configuration, and the tag filter narrows that same result rather than
+/// replacing it.
+#[tokio::test]
+async fn a_projects_run_tags_filter_composes_with_the_configuration_filter() {
+    let (_directory, app) = test_app();
+    let home = common::fixture_home(&app).await;
+    let listing = format!("/projects/{home}/test_runs");
+
+    let nightly = create_tagged(&app, &listing, json!({"name": "nightly", "tags": ["ci"]})).await;
+    let _smoke = create_tagged(&app, &listing, json!({"name": "smoke", "tags": ["ci"]})).await;
+    let chrome = common::create_named(&app, "/configurations", "chrome-linux").await;
+
+    let (status, body) = send_json(
+        &app,
+        json_request(
+            "POST",
+            &format!("/test_runs/{nightly}/configurations"),
+            &json!({"configId": chrome.clone()}),
+        ),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "linking {chrome} to {nightly}: {body}"
+    );
+
+    assert_eq!(
+        listed_ids(&app, &format!("{listing}?configuration={chrome}")).await,
+        vec![nightly.clone()],
+        "only the linked run carries the configuration"
+    );
+    assert_eq!(
+        listed_ids(&app, &format!("{listing}?tags=ci&configuration={chrome}")).await,
+        vec![nightly.clone()],
+        "both parameters narrow the same result"
+    );
+    assert_eq!(
+        listed_ids(
+            &app,
+            &format!("{listing}?tags=smoke&configuration={chrome}")
+        )
+        .await,
+        Vec::<String>::new(),
+        "the tag filter narrows the configuration result rather than widening it"
+    );
+    assert_eq!(
+        listed_ids(&app, &format!("{listing}?configuration=missing.json")).await,
+        Vec::<String>::new(),
+        "an unnamed configuration answers an empty listing, not `400`"
+    );
+}
+
 /// The published document advertises `?tags=` only where a tag can be stored.
 ///
 /// `?tags=` walks the stored document's `tags` array, so on a resource whose
 /// model has no `tags` field — and whose writes therefore refuse one — the
 /// filter is documented but can only ever answer an empty listing. It is
-/// published on the one list operation left in the document whose resource can
-/// carry tags: `GET /projects`. Suites, cases and runs filter by tags as well,
-/// but their flat collection paths — `GET /test_suites`, `GET /test_cases`,
-/// `GET /test_runs` — are served without a separate contract entry
-/// (`api::UNDOCUMENTED_ROUTES`). The parent-scoped lists that replace them
-/// publish no query parameters at all, and the tag filter stays on the global
-/// scans only, so the document names the parameter exactly once.
+/// published on every list operation whose resource can carry tags: the global
+/// `GET /projects`, and the three project-scoped listings — the suites, cases
+/// and runs a project owns. The flat collection paths that serve the same
+/// resources — `GET /test_suites`, `GET /test_cases`, `GET /test_runs` — are
+/// retired and carry no contract entry (`api::UNDOCUMENTED_ROUTES`).
+///
+/// Issue #293 is what added the parameter to the three project-scoped listings;
+/// before it the parent-scoped collections published no query parameters at all.
 #[tokio::test]
 async fn the_tags_parameter_is_published_only_where_a_tag_can_be_stored() {
     let document: Value =
@@ -381,25 +637,51 @@ async fn the_tags_parameter_is_published_only_where_a_tag_can_be_stored() {
         "the schemas publishing a tags array are the models that store one and the write bodies that accept one"
     );
 
-    let mut documented: Vec<String> = Vec::new();
-    for (path, item) in document["paths"].as_object().expect("paths") {
-        for (method, operation) in item.as_object().expect("operation") {
-            let Some(parameters) = operation.get("parameters").and_then(Value::as_array) else {
-                continue;
-            };
-            if parameters
-                .iter()
-                .any(|parameter| parameter["$ref"] == json!("#/components/parameters/tags"))
-            {
-                documented.push(format!("{} {path}", method.to_uppercase()));
+    // Every operation that references the parameter component, by method and
+    // path.
+    let publishes = |reference: &str| -> Vec<String> {
+        let mut operations: Vec<String> = Vec::new();
+        for (path, item) in document["paths"].as_object().expect("paths") {
+            for (method, operation) in item.as_object().expect("operation") {
+                let Some(parameters) = operation.get("parameters").and_then(Value::as_array) else {
+                    continue;
+                };
+                if parameters
+                    .iter()
+                    .any(|parameter| parameter["$ref"] == json!(reference))
+                {
+                    operations.push(format!("{} {path}", method.to_uppercase()));
+                }
             }
         }
-    }
-    documented.sort();
+        operations.sort();
+        operations
+    };
+
     assert_eq!(
-        documented,
-        vec!["GET /projects"],
+        publishes("#/components/parameters/tags"),
+        vec![
+            "GET /projects",
+            "GET /projects/{id}/test_cases",
+            "GET /projects/{id}/test_runs",
+            "GET /projects/{id}/test_suites",
+        ],
         "`?tags=` is published only on the list operations of a taggable resource"
+    );
+    assert_eq!(
+        publishes("#/components/parameters/filter"),
+        vec![
+            "GET /projects",
+            "GET /projects/{id}/test_cases",
+            "GET /projects/{id}/test_runs",
+            "GET /projects/{id}/test_suites",
+        ],
+        "`?filter=` narrows the same listings the tag filter does"
+    );
+    assert_eq!(
+        publishes("#/components/parameters/configuration"),
+        vec!["GET /projects/{id}/test_runs"],
+        "`?configuration=` is published only where a resource can link one"
     );
 
     // The two resources the parameter is withheld from cannot store a tag at

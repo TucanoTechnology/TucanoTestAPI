@@ -253,15 +253,17 @@ through a project or a suite.
 | Route | Supports |
 | --- | --- |
 | `GET /projects` (`listProjects`) | `?filter=`, `?tags=` |
-| `GET /projects/{id}/test_suites` (`listProjectTestSuites`) | — |
-| `GET /projects/{id}/test_cases` (`listProjectTestCases`) | — |
-| `GET /projects/{id}/test_runs` (`listProjectTestRuns`) | — |
+| `GET /projects/{id}/test_suites` (`listProjectTestSuites`) | `?filter=`, `?tags=` |
+| `GET /projects/{id}/test_cases` (`listProjectTestCases`) | `?filter=`, `?tags=` |
+| `GET /projects/{id}/test_runs` (`listProjectTestRuns`) | `?filter=`, `?tags=`, `?configuration=` |
 | `GET /projects/{id}/milestones` (`listProjectMilestones`) | — |
 | `GET /projects/{id}/configurations` (`listProjectConfigurations`) | — |
 | `GET /test_suites/{id}/test_cases` (`listTestSuiteCases`) | — |
 
-`?filter=` is a case-insensitive substring match on resource **identifiers**. The parent-scoped
-listings take no filter; see [Tags and configurations](tags-and-configurations.md) for `?tags=`.
+`?filter=` is a case-insensitive substring match on resource **identifiers**. The project-scoped
+listings take it alongside `?tags=`, and runs also take `?configuration=`; see
+[Tags and configurations](tags-and-configurations.md) for those. A suite's cases and a project's
+milestones and configurations take no query parameters: see the same page for why.
 
 ## Container updates and partial writes
 
