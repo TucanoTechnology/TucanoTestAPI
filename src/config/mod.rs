@@ -109,11 +109,35 @@ impl ConfigFile {
     /// or [`ConfigError::UnsupportedVersion`] if the marker names a schema this
     /// build does not implement.
     pub fn parse(text: &str) -> Result<Self, ConfigError> {
+        // Syntax first. A JSON syntax error describes the document's shape and
+        // names a position; it cannot quote a typed field's value, so serde's
+        // own message is the one place a raw serde string is safe to carry. It
+        // is bounded because it is derived from untrusted text and is itself
+        // unbounded.
+        let value: serde_json::Value =
+            serde_json::from_str(text).map_err(|source| ConfigError::Malformed {
+                detail: truncate_detail(&source.to_string()),
+            })?;
+
+        // Shape second. serde's *type* errors quote the value they could not
+        // place — `invalid type: string "…", expected a boolean` — so before
+        // this check a mistyped secret field printed its value through the very
+        // refusal that exists to not print one. This walk names the offending
+        // key and the type it wanted, and never the value it was given. It runs
+        // ahead of the typed parse below, which makes that parse's own message
+        // an internal fallback rather than the operator-facing one.
+        check_shape(&value)?;
+
+        // Typed parse last. The shape check has already refused every mismatch
+        // it can describe, so the fallback below is expected to be unreachable;
+        // it is kept value-free anyway, so a key that slips past the check in
+        // future still cannot leak its value.
         let file: Self = serde_json::from_str(text).map_err(|source| ConfigError::Malformed {
-            // serde's own message names an offending field or a line and
-            // column, and it quotes *keys* rather than values where it quotes
-            // anything at all — a secret lives in a value, never in a key name.
-            detail: source.to_string(),
+            detail: format!(
+                "the document does not match the configuration schema (at line {} column {})",
+                source.line(),
+                source.column()
+            ),
         })?;
         if file.version != CONFIG_VERSION {
             return Err(ConfigError::UnsupportedVersion {
@@ -215,13 +239,189 @@ pub fn load_from_env() -> Result<Option<ConfigFile>, ConfigError> {
     load(lookup, key_ring.as_ref())
 }
 
+/// Every key the configuration file's schema recognises, in documentation
+/// order.
+///
+/// The shape check walks this list to refuse an unknown key by name, and the
+/// message it builds lists the same names, so an operator sees the spelling this
+/// build expects without having to read the source.
+const KNOWN_KEYS: [&str; 8] = [
+    "version",
+    "auth_required",
+    "jwt_secret",
+    "jwt_secret_file",
+    "access_token_ttl",
+    "refresh_token_ttl",
+    "bootstrap_username",
+    "bootstrap_password",
+];
+
+/// The longest byte count a [`ConfigError::Malformed`] detail may occupy.
+///
+/// The detail of a syntax error is the one message copied from serde, and its
+/// length is a function of an untrusted document. 200 bytes is more than any
+/// position-carrying message needs, so the cap only ever bites on text nobody
+/// should be reading anyway.
+const MAX_DETAIL_BYTES: usize = 200;
+
+/// Caps `detail` at [`MAX_DETAIL_BYTES`] bytes, cutting on a character
+/// boundary and marking the cut so a reader can tell a truncated message from a
+/// whole one.
+fn truncate_detail(detail: &str) -> String {
+    const MARKER: &str = "…";
+    if detail.len() <= MAX_DETAIL_BYTES {
+        return detail.to_owned();
+    }
+    let mut end = MAX_DETAIL_BYTES - MARKER.len();
+    while !detail.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}{MARKER}", &detail[..end])
+}
+
+/// Checks every key of `value` against the file's schema, refusing the first
+/// that does not fit.
+///
+/// This is deliberately a *shape* walk and not a second serde parse: knowing
+/// each key's JSON type is what lets the refusal name the offending key and the
+/// type it wanted while never rendering the value it was given. A missing or
+/// `null` optional key is accepted, matching the `Option<T>` the typed schema
+/// declares and the shipped `docs/deployment/config.example.json`, which spells
+/// every unsupplied secret as `null`.
+fn check_shape(value: &serde_json::Value) -> Result<(), ConfigError> {
+    let Some(object) = value.as_object() else {
+        return Err(ConfigError::Malformed {
+            detail: format!(
+                "the document must be a JSON object, not {}",
+                type_name(value)
+            ),
+        });
+    };
+
+    for key in object.keys() {
+        if !KNOWN_KEYS.contains(&key.as_str()) {
+            let expected = KNOWN_KEYS
+                .iter()
+                .map(|key| format!("`{key}`"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            return Err(ConfigError::Malformed {
+                detail: format!("unknown key {key:?}; expected one of {expected}"),
+            });
+        }
+    }
+
+    match object.get("version") {
+        None => {
+            return Err(ConfigError::Malformed {
+                detail: "the required key `version` is missing".to_owned(),
+            });
+        }
+        Some(version) if !version.as_u64().is_some_and(|n| n <= u64::from(u32::MAX)) => {
+            return Err(wrong_type("version", "an unsigned integer", version));
+        }
+        Some(_) => {}
+    }
+
+    check_field(
+        object,
+        "auth_required",
+        "a boolean",
+        serde_json::Value::is_boolean,
+    )?;
+    check_field(
+        object,
+        "jwt_secret_file",
+        "a string",
+        serde_json::Value::is_string,
+    )?;
+    check_field(
+        object,
+        "access_token_ttl",
+        "a string",
+        serde_json::Value::is_string,
+    )?;
+    check_field(
+        object,
+        "refresh_token_ttl",
+        "a string",
+        serde_json::Value::is_string,
+    )?;
+    check_field(
+        object,
+        "bootstrap_username",
+        "a string",
+        serde_json::Value::is_string,
+    )?;
+    check_field(
+        object,
+        "jwt_secret",
+        "a string or an encrypted envelope",
+        is_secret,
+    )?;
+    check_field(
+        object,
+        "bootstrap_password",
+        "a string or an encrypted envelope",
+        is_secret,
+    )?;
+    Ok(())
+}
+
+/// Checks one optional key: absent or `null` passes, and a value `accept`
+/// rejects is refused by name and expected type.
+fn check_field(
+    object: &serde_json::Map<String, serde_json::Value>,
+    key: &str,
+    expected: &str,
+    accept: impl Fn(&serde_json::Value) -> bool,
+) -> Result<(), ConfigError> {
+    match object.get(key) {
+        None | Some(serde_json::Value::Null) => Ok(()),
+        Some(value) if accept(value) => Ok(()),
+        Some(value) => Err(wrong_type(key, expected, value)),
+    }
+}
+
+/// Whether `value` has a shape a [`SecretValue`] accepts: a plain string, or an
+/// envelope object whose own fields the typed parse still has to validate.
+fn is_secret(value: &serde_json::Value) -> bool {
+    value.is_string() || value.is_object()
+}
+
+/// The refusal for a key whose JSON type contradicts the schema.
+///
+/// It names the key, the type it wanted, and the *kind* of value it found —
+/// never the value.
+fn wrong_type(key: &str, expected: &str, value: &serde_json::Value) -> ConfigError {
+    ConfigError::Malformed {
+        detail: format!(
+            "key `{key}` must be {expected}, but the file provides {}",
+            type_name(value)
+        ),
+    }
+}
+
+/// The JSON type of `value`, described without its contents.
+fn type_name(value: &serde_json::Value) -> &'static str {
+    match value {
+        serde_json::Value::Null => "null",
+        serde_json::Value::Bool(_) => "a boolean",
+        serde_json::Value::Number(_) => "a number",
+        serde_json::Value::String(_) => "a string",
+        serde_json::Value::Array(_) => "an array",
+        serde_json::Value::Object(_) => "an object",
+    }
+}
+
 /// A setting the server cannot start with.
 ///
 /// The variants are deliberately few and each names the *setting* at fault.
 /// None of them can carry a secret's value, the configuration file's path or
 /// the file's contents: those are absent from this type by construction, so no
 /// `Display` impl can leak them by accident. `detail` is the one free-text
-/// field, and it is serde's own message about a key or a position.
+/// field, and this module builds every message it holds — a key name, an
+/// expected type, or a position — never a value read from the document.
 #[derive(Debug)]
 pub enum ConfigError {
     /// The named configuration file could not be read.
@@ -231,6 +431,9 @@ pub enum ConfigError {
     /// needs in order to know which setting to look at.
     UnreadableFile { source: std::io::Error },
     /// The configuration file is not a valid document of this schema.
+    ///
+    /// The detail names the offending key and the type that key wants, or the
+    /// position of a syntax error; it never quotes the value that was refused.
     Malformed { detail: String },
     /// The `version` marker is not [`CONFIG_VERSION`].
     UnsupportedVersion { found: u32 },
@@ -420,7 +623,152 @@ mod tests {
     #[test]
     fn a_field_of_the_wrong_type_is_refused() {
         let error = parse(&document(r#", "auth_required": "yes""#)).expect_err("wrong type");
-        assert!(matches!(error, ConfigError::Malformed { .. }), "{error:?}");
+        match error {
+            ConfigError::Malformed { detail } => assert!(
+                detail.contains("auth_required") && detail.contains("boolean"),
+                "the message should name the field and its type: {detail}"
+            ),
+            other => panic!("expected a malformed error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_wrong_typed_secret_field_never_echoes_the_value() {
+        // F-177-6: serde's own type error quotes the value it could not place,
+        // so a mistyped secret used to reach the startup log verbatim. The
+        // shape check names the key and the type and never the value.
+        let sentinel = "SENTINEL-audit-177-wrong-type";
+        let text = document(&format!(r#", "auth_required": "{sentinel}""#));
+        let rendered = parse(&text).expect_err("wrong type").to_string();
+        assert!(rendered.contains("auth_required"), "{rendered}");
+        assert!(rendered.contains("boolean"), "{rendered}");
+        assert!(
+            !rendered.contains(sentinel),
+            "a refusal must not echo the value it refused: {rendered}"
+        );
+    }
+
+    #[test]
+    fn every_key_refuses_a_wrong_type_by_name_and_never_by_value() {
+        // Each fragment puts the same sentinel inside a value whose type
+        // contradicts the key it was given to, which is the shape the audit
+        // finding used to make serde print a value.
+        let sentinel = "SENTINEL-config-wrong-type";
+        let cases = [
+            (format!(r#""version": "{sentinel}""#), "version", "integer"),
+            (
+                format!(r#""auth_required": "{sentinel}""#),
+                "auth_required",
+                "boolean",
+            ),
+            (
+                format!(r#""jwt_secret": ["{sentinel}"]"#),
+                "jwt_secret",
+                "envelope",
+            ),
+            (
+                format!(r#""jwt_secret_file": ["{sentinel}"]"#),
+                "jwt_secret_file",
+                "string",
+            ),
+            (
+                format!(r#""access_token_ttl": ["{sentinel}"]"#),
+                "access_token_ttl",
+                "string",
+            ),
+            (
+                format!(r#""refresh_token_ttl": ["{sentinel}"]"#),
+                "refresh_token_ttl",
+                "string",
+            ),
+            (
+                format!(r#""bootstrap_username": ["{sentinel}"]"#),
+                "bootstrap_username",
+                "string",
+            ),
+            (
+                format!(r#""bootstrap_password": ["{sentinel}"]"#),
+                "bootstrap_password",
+                "envelope",
+            ),
+        ];
+        for (fragment, key, expected) in cases {
+            let text = document(&format!(", {fragment}"));
+            let rendered = parse(&text).expect_err(key).to_string();
+            assert!(rendered.contains(key), "{key} missing from: {rendered}");
+            assert!(
+                rendered.contains(expected),
+                "{key} should name the expected type in: {rendered}"
+            );
+            assert!(
+                !rendered.contains(sentinel),
+                "{key} echoed the value: {rendered}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_null_optional_key_is_accepted_like_an_absent_one() {
+        // The shipped example spells every unsupplied secret as `null`, so a
+        // shape check that only tolerated absence would refuse documentation
+        // the build requires to stay valid.
+        let text = document(
+            r#", "auth_required": null, "jwt_secret": null, "jwt_secret_file": null,
+               "access_token_ttl": null, "refresh_token_ttl": null,
+               "bootstrap_username": null, "bootstrap_password": null"#,
+        );
+        let file = parse(&text).expect("null is an omission");
+        assert!(file.jwt_secret.is_none());
+        assert!(file.auth_required.is_none());
+    }
+
+    #[test]
+    fn a_document_that_is_not_an_object_is_refused() {
+        let rendered = parse("[1, 2, 3]").expect_err("not an object").to_string();
+        assert!(rendered.contains("JSON object"), "{rendered}");
+        assert!(rendered.contains("an array"), "{rendered}");
+    }
+
+    #[test]
+    fn a_version_outside_the_u32_range_is_refused_without_echoing_it() {
+        let rendered = parse(r#"{"version": 4294967296}"#)
+            .expect_err("out of range")
+            .to_string();
+        assert!(rendered.contains("version"), "{rendered}");
+        assert!(
+            !rendered.contains("4294967296"),
+            "a refusal must not echo the number it refused: {rendered}"
+        );
+    }
+
+    #[test]
+    fn a_malformed_file_is_reported_by_setting_and_field() {
+        let rendered = parse(&document(r#", "auth_required": "yes""#))
+            .expect_err("wrong type")
+            .to_string();
+        assert!(rendered.contains(CONFIG_FILE_ENV), "{rendered}");
+        assert!(rendered.contains("auth_required"), "{rendered}");
+    }
+
+    #[test]
+    fn a_syntax_error_detail_is_capped_at_a_safe_length() {
+        let long = "a".repeat(MAX_DETAIL_BYTES + 50);
+        let capped = truncate_detail(&long);
+        assert!(
+            capped.len() <= MAX_DETAIL_BYTES,
+            "capped to {} bytes",
+            capped.len()
+        );
+    }
+
+    #[test]
+    fn truncation_never_splits_a_multi_byte_character() {
+        // `é` is two bytes, so an even byte cap lands mid-character and a naive
+        // slice would panic. The cap must walk back to a boundary instead.
+        let long = "é".repeat(MAX_DETAIL_BYTES);
+        let capped = truncate_detail(&long);
+        assert!(capped.len() <= MAX_DETAIL_BYTES);
+        assert!(capped.starts_with('é') && capped.ends_with('…'), "{capped}");
     }
 
     #[test]
