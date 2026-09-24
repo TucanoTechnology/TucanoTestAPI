@@ -213,6 +213,117 @@ mod data_integrity_tests {
             "Final value should be valid JSON"
         );
     }
+
+    /// F-177-3 regression (Issue #323): a write the API acknowledged with `200`
+    /// must never be silently discarded. The test above only proves the
+    /// surviving document stays parseable; this one proves durability — N
+    /// concurrent writers each record a distinct acknowledged write, and
+    /// afterwards every acknowledged value reads back, from the live document
+    /// or from one of the revision snapshots the writes produced.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn test_every_acknowledged_write_is_readable_back() {
+        use axum::http::StatusCode;
+        use serde_json::json;
+        use std::collections::HashSet;
+        use std::sync::Arc;
+
+        let (_dir, app) = common::test_app();
+        let app = Arc::new(app);
+
+        let project = common::create_named(&app, "/projects", "integrity").await;
+        let (status, created) = common::send_json(
+            &app,
+            common::json_request(
+                "POST",
+                &format!("/projects/{project}/test_cases"),
+                &json!({
+                    "testCaseId": "CW-1",
+                    "title": "base",
+                    "expectedResult": "ok"
+                }),
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED, "create: {created}");
+
+        // Concurrent unconditional writes (no If-Match): the legacy
+        // last-writer-wins arm, which the audit showed discarding half of the
+        // acknowledged writes. Each carries a distinct qualifying field, so
+        // each acknowledged write must start exactly one new version.
+        let writers = 16usize;
+        let barrier = Arc::new(tokio::sync::Barrier::new(writers));
+        let mut handles = Vec::with_capacity(writers);
+        for i in 0..writers {
+            let app = Arc::clone(&app);
+            let barrier = Arc::clone(&barrier);
+            handles.push(tokio::spawn(async move {
+                barrier.wait().await;
+                common::send_json(
+                    &app,
+                    common::json_request(
+                        "PUT",
+                        "/test_cases/CW-1",
+                        &json!({"title": format!("writer {i}")}),
+                    ),
+                )
+                .await
+            }));
+        }
+        for handle in handles {
+            let (status, body) = handle.await.expect("task");
+            assert_eq!(
+                status,
+                StatusCode::OK,
+                "every concurrent write is acknowledged: {body}"
+            );
+        }
+
+        // The version advanced once per acknowledged write, and the history
+        // records every one of them — the audit's failure shape was 32
+        // acknowledged writes answering version 17 with 16 history entries.
+        let (status, live) = common::send_json(&app, common::get("/test_cases/CW-1")).await;
+        assert_eq!(status, StatusCode::OK, "read back: {live}");
+        assert_eq!(
+            live["version"].as_u64(),
+            Some(1 + writers as u64),
+            "each acknowledged write starts exactly one version: {live}"
+        );
+
+        let (status, history) =
+            common::send_json(&app, common::get("/test_cases/CW-1/history")).await;
+        assert_eq!(status, StatusCode::OK, "history: {history}");
+        assert_eq!(
+            history.as_array().map(Vec::len),
+            Some(writers),
+            "the history records every acknowledged write: {history}"
+        );
+
+        // Every distinct acknowledged value is readable back: the last writer's
+        // title from the live document, every earlier one from the immutable
+        // snapshot its write left behind.
+        let mut titles: HashSet<String> = HashSet::new();
+        titles.insert(live["title"].as_str().expect("live title").to_owned());
+        for version in 1..=writers as u64 {
+            let (status, revision) = common::send_json(
+                &app,
+                common::get(&format!("/test_cases/CW-1/history/{version}")),
+            )
+            .await;
+            assert_eq!(status, StatusCode::OK, "revision {version}: {revision}");
+            titles.insert(
+                revision["title"]
+                    .as_str()
+                    .expect("revision title")
+                    .to_owned(),
+            );
+        }
+        for i in 0..writers {
+            assert!(
+                titles.contains(&format!("writer {i}")),
+                "the acknowledged write from writer {i} was silently discarded; readable titles: {titles:?}"
+            );
+        }
+    }
 }
 
 #[cfg(test)]
