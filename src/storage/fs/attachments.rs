@@ -25,7 +25,7 @@ impl FileRepository {
                 .write(true)
                 .create_new(true)
                 .open(&path)?;
-            set_private_permissions(&file)?;
+            set_private_permissions(&file, PRIVATE_FILE_MODE)?;
             file.write_all(contents)?;
             file.sync_all()?;
             if let Err(error) = self.record_attachment(&marker, entry) {
@@ -82,13 +82,13 @@ impl FileRepository {
             }
             let path = step_attachment_path(&self.root, parent, case, step_index, filename)?;
             if let Some(directory) = path.parent() {
-                fs::create_dir_all(directory)?;
+                create_private_dir_all(directory)?;
             }
             let mut file = OpenOptions::new()
                 .write(true)
                 .create_new(true)
                 .open(&path)?;
-            set_private_permissions(&file)?;
+            set_private_permissions(&file, PRIVATE_FILE_MODE)?;
             file.write_all(contents)?;
             file.sync_all()?;
             if let Err(error) = self.record_step_attachment(&marker, step_index, entry) {

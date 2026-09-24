@@ -8,11 +8,12 @@ pub mod layout;
 
 pub use fs::FileRepository;
 pub use layout::{
-    Parent, Placement, RESERVED_PROJECT_CHILDREN, Resource, attachment_path, case_dir, case_marker,
-    ensure_within, folder_name, folder_wire_id, node_folder, parent_dir, parent_marker,
-    project_collection_dir, project_dir, project_document_path, project_marker, revision_dir,
-    revision_marker, root_dir, set_private_permissions, step_attachment_path, step_dir, suite_dir,
-    suite_marker, unique_suffix, validate_component, validate_document_id,
+    PRIVATE_DIR_MODE, PRIVATE_FILE_MODE, Parent, Placement, RESERVED_PROJECT_CHILDREN, Resource,
+    attachment_path, case_dir, case_marker, create_private_dir_all, ensure_within, folder_name,
+    folder_wire_id, node_folder, parent_dir, parent_marker, project_collection_dir, project_dir,
+    project_document_path, project_marker, revision_dir, revision_marker, root_dir,
+    set_private_permissions, step_attachment_path, step_dir, suite_dir, suite_marker,
+    unique_suffix, validate_component, validate_document_id,
 };
 
 use serde_json::Value;

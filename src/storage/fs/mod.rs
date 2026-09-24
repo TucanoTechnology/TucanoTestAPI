@@ -6,11 +6,11 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, UNIX_EPOCH};
 
 use super::layout::{
-    Parent, Placement, RESERVED_PROJECT_CHILDREN, attachment_path, case_dir, case_marker,
-    folder_wire_id, node_folder, parent_dir, project_collection_dir, project_dir,
-    project_document_path, project_marker, revision_dir, revision_marker, root_dir,
-    set_private_permissions, step_attachment_path, suite_dir, suite_marker, unique_suffix,
-    validate_document_id,
+    PRIVATE_FILE_MODE, Parent, Placement, RESERVED_PROJECT_CHILDREN, attachment_path, case_dir,
+    case_marker, create_private_dir_all, folder_wire_id, node_folder, parent_dir,
+    project_collection_dir, project_dir, project_document_path, project_marker, revision_dir,
+    revision_marker, root_dir, set_private_permissions, step_attachment_path, suite_dir,
+    suite_marker, unique_suffix, validate_document_id,
 };
 use super::{Repository, Resource, StorageProbe};
 
@@ -41,7 +41,7 @@ impl FileRepository {
         let root = root.into();
         for resource in Resource::ROOT_DIRS {
             if let Some(name) = resource.dir_name() {
-                fs::create_dir_all(root.join(name))?;
+                create_private_dir_all(&root.join(name))?;
             }
         }
         refuse_legacy_layout(&root)?;
@@ -202,13 +202,13 @@ impl FileRepository {
         let directory = destination.parent().ok_or_else(|| {
             io::Error::new(io::ErrorKind::InvalidInput, "destination has no parent")
         })?;
-        fs::create_dir_all(directory)?;
+        create_private_dir_all(directory)?;
         let temporary = directory.join(format!(".tucano-{}.tmp", unique_suffix()));
         let mut file = OpenOptions::new()
             .write(true)
             .create_new(true)
             .open(&temporary)?;
-        set_private_permissions(&file)?;
+        set_private_permissions(&file, PRIVATE_FILE_MODE)?;
         let result = (|| {
             serde_json::to_writer_pretty(&mut file, value)
                 .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
@@ -397,7 +397,7 @@ impl FileRepository {
             ));
         }
         if let Some(parent) = to.parent() {
-            fs::create_dir_all(parent)?;
+            create_private_dir_all(parent)?;
         }
         match mode {
             Placement::Copy => copy_dir_all(&from, &to),
@@ -652,7 +652,7 @@ fn step_object_mut(document: &mut Value, step_index: usize) -> io::Result<&mut M
 
 /// Recursively duplicate a folder, contents and all.
 fn copy_dir_all(from: &Path, to: &Path) -> io::Result<()> {
-    fs::create_dir_all(to)?;
+    create_private_dir_all(to)?;
     for entry in fs::read_dir(from)? {
         let entry = entry?;
         let target = to.join(entry.file_name());
