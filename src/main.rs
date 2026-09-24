@@ -1,12 +1,34 @@
 use std::io::IsTerminal;
+use std::process::ExitCode;
 use std::time::Duration;
 
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::fmt;
 use tucano_test::{api, auth, config, repository};
 
+/// Serves the API, or runs one of the two auth subcommands.
+///
+/// A startup failure is reported here rather than by returning a `Result` from
+/// `main`, because `Termination for Result` prints the error's `Debug`
+/// rendering — a struct dump that names neither the setting nor the field an
+/// operator has to fix, and that for a malformed configuration file is the only
+/// text a deployment logs. Rendering `Display` instead keeps the refusal the
+/// wording its type documents, and `ExitCode::FAILURE` keeps the exit status a
+/// refused startup already told an orchestrator.
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+async fn main() -> ExitCode {
+    match run().await {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            eprintln!("tucano-test: {error}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// The work [`main`] reports on, kept in its own function so a failure reaches
+/// `Display` above instead of `Debug`.
+async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = std::env::args().skip(1);
     let command = args.next();
 
