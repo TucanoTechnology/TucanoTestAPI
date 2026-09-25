@@ -24,8 +24,8 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use crate::storage::{
-    ensure_within, folder_name, folder_wire_id, set_private_permissions, unique_suffix,
-    validate_component,
+    PRIVATE_FILE_MODE, create_private_dir_all, ensure_within, folder_name, folder_wire_id,
+    set_private_permissions, unique_suffix, validate_component,
 };
 
 /// How much authority an account holds inside one project.
@@ -110,7 +110,7 @@ impl AuthStore {
             root: root.into(),
             lock_timeout: DEFAULT_LOCK_TIMEOUT,
         };
-        fs::create_dir_all(store.grants_dir())?;
+        create_private_dir_all(&store.grants_dir())?;
         Ok(store)
     }
 
@@ -137,10 +137,15 @@ impl AuthStore {
     /// The project is named the way the tree names it: the wire id loses its
     /// `.json` suffix to become a folder name, which is then validated, so a
     /// project identifier can never address a file outside `auth/projects/`.
+    /// The document name the folder composes is validated too: the suffix can
+    /// push an otherwise acceptable folder past the filesystem's name limit,
+    /// and the grant write must be a bad request rather than a storage failure.
     fn grant_path(&self, project_id: &str) -> io::Result<PathBuf> {
         let folder = folder_name(project_id);
         validate_component(folder)?;
-        let path = self.grants_dir().join(format!("{folder}.json"));
+        let document = format!("{folder}.json");
+        validate_component(&document)?;
+        let path = self.grants_dir().join(document);
         ensure_within(&self.root, &path)?;
         Ok(path)
     }
@@ -481,13 +486,13 @@ fn write_json_atomically(destination: &Path, value: &serde_json::Value) -> io::R
     let directory = destination
         .parent()
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "destination has no parent"))?;
-    fs::create_dir_all(directory)?;
+    create_private_dir_all(directory)?;
     let temporary = directory.join(format!(".tucano-{}.tmp", unique_suffix()));
     let mut file = OpenOptions::new()
         .write(true)
         .create_new(true)
         .open(&temporary)?;
-    set_private_permissions(&file)?;
+    set_private_permissions(&file, PRIVATE_FILE_MODE)?;
     let result = (|| {
         serde_json::to_writer_pretty(&mut file, value)
             .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
@@ -536,6 +541,33 @@ mod tests {
         let (directory, _store) = store();
         assert!(directory.path().join("auth").is_dir());
         assert!(directory.path().join("auth/projects").is_dir());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn stored_auth_files_are_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let (directory, store) = store();
+        store.insert_user(&account("u1", "alice")).expect("insert");
+        store
+            .set_role("checkout.json", "u1", Role::Owner)
+            .expect("grant");
+
+        let mode_of = |relative: &str| {
+            std::fs::metadata(directory.path().join(relative))
+                .expect(relative)
+                .permissions()
+                .mode()
+                & 0o777
+        };
+
+        // The auth store holds password hashes and refresh-token digests, so it
+        // is owner-only like the rest of the tree: no other uid can read it.
+        assert_eq!(mode_of("auth"), 0o700);
+        assert_eq!(mode_of("auth/projects"), 0o700);
+        assert_eq!(mode_of("auth/users.json"), 0o600);
+        assert_eq!(mode_of("auth/projects/checkout.json"), 0o600);
     }
 
     #[test]
@@ -802,6 +834,27 @@ mod tests {
                 "{escape} must not resolve"
             );
         }
+    }
+
+    #[test]
+    fn an_over_long_project_identifier_is_refused_as_a_client_error() {
+        let (_directory, store) = store();
+
+        // The grant document adds `.json` to the project's folder, so a
+        // 251-byte identifier composes a 256-byte name — one the filesystem
+        // cannot hold. The grant must be refused before any write is attempted.
+        let refused = format!("{}.json", "n".repeat(251));
+        assert_eq!(
+            store.role_of(&refused, "u1").expect_err("refused").kind(),
+            io::ErrorKind::InvalidInput
+        );
+
+        // A 250-byte identifier composes exactly the filesystem's limit.
+        let longest = format!("{}.json", "n".repeat(250));
+        assert_eq!(store.role_of(&longest, "u1").expect("grant"), None);
+        store
+            .set_role(&longest, "u1", Role::Owner)
+            .expect("a project identifier at the name limit is accepted");
     }
 
     #[test]

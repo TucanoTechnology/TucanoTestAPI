@@ -33,6 +33,7 @@ jobs:
             type=ref,event=tag
             type=raw,value=build-${{ github.run_number }}
       - uses: docker/build-push-action@v6
+        id: build
         with:
           context: .
           file: Dockerfile
@@ -42,3 +43,40 @@ jobs:
           labels: ${{ steps.metadata.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+      - name: Resolve the published image reference
+        id: published
+        # The scan has to spell the repository path the way the registry holds
+        # it. `github.repository` is the repository's *display* case, while GHCR
+        # stores the name lowercase and Trivy's reference parser rejects an
+        # uppercase path segment before it reaches the registry at all, so the
+        # mixed-case form kills the step with
+        # `failed to parse the image name: could not parse reference` and the
+        # release goes red without ever auditing the image.
+        # docker/metadata-action lowercases the same name when it builds the
+        # tags, so this is the reference the push above actually wrote.
+        shell: bash
+        run: echo "ref=${IMAGE_NAME,,}" >> "$GITHUB_OUTPUT"
+      - name: Scan the published digest
+        # The gate has to name the artifact a consumer pulls, so it scans the
+        # digest this job just pushed rather than the local build the
+        # security.yml job scans. The reference joins the lowercase repository
+        # path from the step above to the build step's own `digest` output; a
+        # mutable tag must never be re-resolved here, because that would let
+        # the scan and the push disagree about which image is being gated.
+        # Policy is the one security.yml's container-scan uses: CRITICAL/HIGH,
+        # unfixed findings ignored, and a non-zero exit code so the release run
+        # goes red. The scan runs after the push, so a finding fails the run
+        # without withdrawing the digest.
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: ${{ steps.published.outputs.ref }}@${{ steps.build.outputs.digest }}
+          format: table
+          exit-code: "1"
+          ignore-unfixed: true
+          severity: CRITICAL,HIGH
+        env:
+          # trivy-action reaches a private registry through its own credentials
+          # (documented for the pinned version); the login step above does not
+          # cover this scan on its own.
+          TRIVY_USERNAME: ${{ github.actor }}
+          TRIVY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}

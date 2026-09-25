@@ -169,6 +169,8 @@ the check.
 | `DELETE /test_runs/{id}` | teardown-scope call ([§4](#4-teardown-scope)) |
 | `DELETE /test_runs/{id}/configurations/{config_id}` | unlink companion of row 11; the seed links without unlinking |
 | `POST /test_runs/{id}/duplicate` | duplication is seeded for a suite (row 21), not for a run |
+| `PUT /test_runs/{id}/results/{case_id}` | replace companion of the result recording (rows 14 and 15): the seed writes each result, and corrects the one it re-records, through `POST /test_runs/{id}/results`, whose merge is what row 15 is about (issue #283) |
+| `DELETE /test_runs/{id}/results/{case_id}` | delete companion of the result recording (rows 14 and 15): the seed leaves every recorded result in place, and teardown withdraws a run whole rather than one result of it ([§4](#4-teardown-scope), issue #283) |
 | `GET /test_runs/{id}/results/{case_id}/defects` | list companion of the defect-link creation (row 16) |
 | `DELETE /test_runs/{id}/results/{case_id}/defects/{link_id}` | row 17 unlinks the GitHub link the seed created; it writes the route with the link id it read back from the create response, which the check matches as the same shape |
 | `GET /test_suites/{id}` | read companion of the suite routes, exercised only for a suite with one home; [§3 step 12](#step-12--validation-of-the-seeded-environment) reads the single-homed seeded suites back this way and asserts that the dual-homed `portable.checkout.json` is refused `409` |
@@ -543,7 +545,9 @@ the source cases.
 
 ### Step 7 — results, including the re-record and every status
 
-`POST /test_runs/{id}/results` is the only route that writes a result, and it
+`POST /test_runs/{id}/results` is the route the seed writes results through —
+it is the only one that *creates* a result (issue #283 adds per-case `PUT` and
+`DELETE` companions that replace and withdraw one) — and it
 only accepts a case the run holds. A second call for the same case in the same
 run **merges** into the first: `status` and `timestamp` are replaced, and a
 field the body leaves out keeps its stored value. That is how the merge in row

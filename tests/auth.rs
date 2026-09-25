@@ -733,6 +733,8 @@ async fn every_guarded_operation_refuses_an_anonymous_caller() {
         ("POST", "/test_runs/missing.json/test_suites"),
         ("POST", "/test_runs/missing.json/test_cases"),
         ("POST", "/test_runs/missing.json/results"),
+        ("PUT", "/test_runs/missing.json/results/missing"),
+        ("DELETE", "/test_runs/missing.json/results/missing"),
         ("GET", "/test_runs/missing.json/results/missing/defects"),
         ("POST", "/test_runs/missing.json/results/missing/defects"),
         (
@@ -764,7 +766,7 @@ async fn every_guarded_operation_refuses_an_anonymous_caller() {
     ];
     assert_eq!(
         operations.len(),
-        70,
+        72,
         "the guarded surface changed; update this matrix with it"
     );
 
@@ -1026,7 +1028,7 @@ async fn a_viewer_reads_the_projects_it_reaches_and_cannot_write() {
         .collect();
     assert_eq!(
         writes.len(),
-        39,
+        41,
         "the write surface changed; update this matrix with it"
     );
 

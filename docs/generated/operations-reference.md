@@ -10,7 +10,7 @@ operation index — method, path, `operationId` and summary. Schemas, parameters
 and status codes are the contract itself: read them in [`openapi.json`](../../openapi.json) or in
 the Swagger UI at `/api-docs`, which is rendered from the same document.
 
-The contract currently registers **89** operations.
+The contract currently registers **91** operations.
 
 | Method | Path | Operation | Summary |
 | --- | --- | --- | --- |
@@ -85,6 +85,8 @@ The contract currently registers **89** operations.
 | `POST` | `/test_runs/{id}/import/json` | `importJsonResults` | Import JSON results into a run |
 | `POST` | `/test_runs/{id}/import/junit` | `importJUnitResults` | Import JUnit XML results into a run |
 | `POST` | `/test_runs/{id}/results` | `recordTestRunResult` | Record test case execution result in run |
+| `PUT` | `/test_runs/{id}/results/{case_id}` | `replaceTestRunResult` | Replace a test case execution result in run |
+| `DELETE` | `/test_runs/{id}/results/{case_id}` | `deleteTestRunResult` | Remove a test case execution result from run |
 | `GET` | `/test_runs/{id}/results/{case_id}/defects` | `listResultDefects` | List the defects linked to a run result |
 | `POST` | `/test_runs/{id}/results/{case_id}/defects` | `linkResultDefect` | Link a defect to a run result |
 | `DELETE` | `/test_runs/{id}/results/{case_id}/defects/{link_id}` | `unlinkResultDefect` | Unlink a defect from a run result |

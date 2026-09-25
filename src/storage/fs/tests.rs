@@ -1395,13 +1395,89 @@ fn stored_documents_use_private_permissions() {
 
     let (directory, repository) = repository();
     create_project(&repository, "checkout.json");
+    let parent = project("checkout.json");
+    repository
+        .write_at(
+            Resource::Cases,
+            Some(&parent),
+            "TC-001",
+            &json!({"testCaseId": "TC-001", "steps": [{}]}),
+        )
+        .expect("case");
+    let entry = json!({"filename": "notes.txt"});
+    repository
+        .save_attachment(&parent, "TC-001", "notes.txt", &entry, b"evidence")
+        .expect("attachment");
+    repository
+        .save_step_attachment(&parent, "TC-001", 0, "notes.txt", &entry, b"evidence")
+        .expect("step attachment");
+    repository
+        .save_revision(&parent, "TC-001", 1, &json!({"testCaseId": "TC-001"}))
+        .expect("snapshot");
 
-    let mode = fs::metadata(directory.path().join("projects/checkout/project.json"))
-        .expect("metadata")
-        .permissions()
-        .mode()
-        & 0o777;
-    assert_eq!(mode, 0o666);
+    let mode_of = |relative: &str| {
+        fs::metadata(directory.path().join(relative))
+            .expect(relative)
+            .permissions()
+            .mode()
+            & 0o777
+    };
+
+    // Every file the store writes — a document, a revision and both kinds of
+    // attachment — is owner-only, so another uid can neither read nor rewrite
+    // it.
+    assert_eq!(mode_of("projects/checkout/project.json"), 0o600);
+    assert_eq!(mode_of("projects/checkout/TC-001/test-case.json"), 0o600);
+    assert_eq!(mode_of("projects/checkout/TC-001/revisions/v1.json"), 0o600);
+    assert_eq!(mode_of("projects/checkout/TC-001/notes.txt"), 0o600);
+    assert_eq!(mode_of("projects/checkout/TC-001/steps/0/notes.txt"), 0o600);
+}
+
+#[cfg(unix)]
+#[test]
+fn stored_directories_are_owner_only() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let (directory, repository) = repository();
+    create_project(&repository, "checkout.json");
+    let parent = project("checkout.json");
+    repository
+        .write_at(
+            Resource::Cases,
+            Some(&parent),
+            "TC-001",
+            &json!({"testCaseId": "TC-001", "steps": [{}]}),
+        )
+        .expect("case");
+    repository
+        .save_step_attachment(
+            &parent,
+            "TC-001",
+            0,
+            "notes.txt",
+            &json!({"filename": "notes.txt"}),
+            b"evidence",
+        )
+        .expect("step attachment");
+    repository
+        .save_revision(&parent, "TC-001", 1, &json!({"testCaseId": "TC-001"}))
+        .expect("snapshot");
+
+    let mode_of = |relative: &str| {
+        fs::metadata(directory.path().join(relative))
+            .expect(relative)
+            .permissions()
+            .mode()
+            & 0o777
+    };
+
+    // A directory the store creates is owner-only too, so another uid cannot
+    // even list what is stored, let alone open a document.
+    assert_eq!(mode_of("projects"), 0o700);
+    assert_eq!(mode_of("projects/checkout"), 0o700);
+    assert_eq!(mode_of("projects/checkout/TC-001"), 0o700);
+    assert_eq!(mode_of("projects/checkout/TC-001/revisions"), 0o700);
+    assert_eq!(mode_of("projects/checkout/TC-001/steps/0"), 0o700);
 }
 
 #[test]
@@ -1518,4 +1594,111 @@ fn an_unwritable_root_is_not_ready() {
     assert!(!probe.ready());
 
     restore().expect("restore permissions");
+}
+
+#[test]
+fn create_at_refuses_a_document_the_location_already_holds() {
+    let (_directory, repository) = repository();
+    create_project(&repository, "checkout.json");
+    let home = project("checkout.json");
+
+    repository
+        .create_at(
+            Resource::Runs,
+            Some(&home),
+            "nightly.json",
+            &json!({"name": "first"}),
+        )
+        .expect("first create");
+
+    let error = repository
+        .create_at(
+            Resource::Runs,
+            Some(&home),
+            "nightly.json",
+            &json!({"name": "second"}),
+        )
+        .expect_err("a taken location is not creatable");
+    assert_eq!(error.kind(), io::ErrorKind::AlreadyExists);
+    assert_eq!(
+        repository
+            .read_at(Resource::Runs, Some(&home), "nightly.json")
+            .expect("read")["name"],
+        json!("first"),
+        "a refused create must leave the stored document untouched"
+    );
+}
+
+#[test]
+fn create_at_refuses_a_suite_the_folder_already_holds() {
+    let (_directory, repository) = repository();
+    create_project(&repository, "checkout.json");
+    let home = project("checkout.json");
+
+    repository
+        .create_at(
+            Resource::Suites,
+            Some(&home),
+            "regression.json",
+            &json!({"name": "first"}),
+        )
+        .expect("first create");
+
+    let error = repository
+        .create_at(
+            Resource::Suites,
+            Some(&home),
+            "regression.json",
+            &json!({"name": "second"}),
+        )
+        .expect_err("a taken location is not creatable");
+    assert_eq!(error.kind(), io::ErrorKind::AlreadyExists);
+    assert_eq!(
+        repository
+            .read_at(Resource::Suites, Some(&home), "regression.json")
+            .expect("read")["name"],
+        json!("first"),
+        "a refused create must leave the stored document untouched"
+    );
+}
+
+#[test]
+fn concurrent_creates_of_one_identifier_yield_exactly_one_winner() {
+    let (_directory, repository) = repository();
+    let repository = std::sync::Arc::new(repository);
+    create_project(&repository, "checkout.json");
+    let home = project("checkout.json");
+
+    let threads = 8usize;
+    let barrier = std::sync::Arc::new(std::sync::Barrier::new(threads));
+    let mut handles = Vec::with_capacity(threads);
+    for thread in 0..threads {
+        let repository = std::sync::Arc::clone(&repository);
+        let barrier = std::sync::Arc::clone(&barrier);
+        let home = home.clone();
+        handles.push(std::thread::spawn(move || {
+            barrier.wait();
+            repository.create_at(
+                Resource::Runs,
+                Some(&home),
+                "nightly.json",
+                &json!({"name": format!("thread {thread}")}),
+            )
+        }));
+    }
+
+    let mut created = 0usize;
+    let mut refused = 0usize;
+    for handle in handles {
+        match handle.join().expect("thread") {
+            Ok(()) => created += 1,
+            Err(error) => {
+                assert_eq!(error.kind(), io::ErrorKind::AlreadyExists, "{error}");
+                refused += 1;
+            }
+        }
+    }
+
+    assert_eq!(created, 1, "exactly one create may win");
+    assert_eq!(refused, threads - 1, "every other create is refused");
 }

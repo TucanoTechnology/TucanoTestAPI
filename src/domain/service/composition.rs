@@ -86,7 +86,7 @@ impl<R: Repository> TestService<R> {
     /// or ones it already records a result for — so a result for a case the run
     /// never picked up is a `404` rather than a stray entry in the run.
     pub fn record_run_result(&self, run_id: &str, body: &Value) -> Result<(), DomainError> {
-        let update = result_update(body)?;
+        let update = result_update(body, None)?;
 
         let home = self.run_home(run_id)?;
         let mut run =
@@ -112,6 +112,52 @@ impl<R: Repository> TestService<R> {
         audited(
             resource_noun(Resource::Runs),
             "record_result",
+            run_id,
+            || self.save(Resource::Runs, run_id, Some(&home), &run),
+        )
+    }
+
+    /// Replaces the result a run records for one case, named by the path.
+    ///
+    /// The body is validated exactly as a recording's is, except that the case is
+    /// already named: a `testCaseId` may be left out, and one that is supplied
+    /// must agree with the path rather than point the replacement elsewhere. A
+    /// replacement never creates — a run that records no result for the case
+    /// answers `404` — and the defect links and attachments the stored result
+    /// carries survive it, because no request can describe them.
+    pub fn replace_run_result(
+        &self,
+        run_id: &str,
+        case_id: &str,
+        body: &Value,
+    ) -> Result<(), DomainError> {
+        let update = result_update(body, Some(case_id))?;
+
+        let home = self.run_home(run_id)?;
+        let mut run =
+            self.load::<TestRun>(Resource::Runs, run_id, Some(&home), "Test run not found")?;
+        composition::replace_result(&mut run, update)?;
+        audited(
+            resource_noun(Resource::Runs),
+            "replace_result",
+            run_id,
+            || self.save(Resource::Runs, run_id, Some(&home), &run),
+        )
+    }
+
+    /// Removes the result a run records for one case, named by the path.
+    ///
+    /// A run that records no result for the case — one that records nothing at
+    /// all as much as one that records other cases — answers `404`: there is
+    /// nothing to remove.
+    pub fn delete_run_result(&self, run_id: &str, case_id: &str) -> Result<(), DomainError> {
+        let home = self.run_home(run_id)?;
+        let mut run =
+            self.load::<TestRun>(Resource::Runs, run_id, Some(&home), "Test run not found")?;
+        composition::remove_result(&mut run, case_id)?;
+        audited(
+            resource_noun(Resource::Runs),
+            "delete_result",
             run_id,
             || self.save(Resource::Runs, run_id, Some(&home), &run),
         )
@@ -374,7 +420,15 @@ const RESULT_REQUEST_FIELDS: [&str; 5] =
 /// explicit `null` clears it. A `timestamp` — which storage always keeps as a
 /// string, either Unix seconds or ISO-8601 — falls back to now when the request
 /// omits it.
-fn result_update(body: &Value) -> Result<composition::ResultUpdate, DomainError> {
+///
+/// `addressed_case` is how the route named the case: `None` on the collection
+/// route, where the body carries the required `testCaseId`, and `Some(case_id)`
+/// on the route that replaces one result by path, where the identifier is
+/// optional and a body that repeats it must agree with the path.
+fn result_update(
+    body: &Value,
+    addressed_case: Option<&str>,
+) -> Result<composition::ResultUpdate, DomainError> {
     let object = body
         .as_object()
         .ok_or_else(|| DomainError::invalid_request("Request body must be a JSON object"))?;
@@ -386,8 +440,24 @@ fn result_update(body: &Value) -> Result<composition::ResultUpdate, DomainError>
         }
     }
 
-    let test_case_id = required_string(body, "testCaseId")
-        .ok_or_else(|| DomainError::invalid_request("Required field testCaseId is missing"))?;
+    let test_case_id = match addressed_case {
+        None => required_string(body, "testCaseId")
+            .ok_or_else(|| DomainError::invalid_request("Required field testCaseId is missing"))?,
+        Some(addressed) => match object.get("testCaseId") {
+            None => addressed.to_owned(),
+            Some(Value::String(value)) if value == addressed => addressed.to_owned(),
+            Some(Value::String(_)) => {
+                return Err(DomainError::invalid_request(
+                    "Field `testCaseId` must match the case in the path",
+                ));
+            }
+            Some(_) => {
+                return Err(DomainError::invalid_request(
+                    "Field `testCaseId` is invalid",
+                ));
+            }
+        },
+    };
     let status = required_string(body, "status")
         .ok_or_else(|| DomainError::invalid_request("Required field status is missing"))?;
     if !VALID_STATUSES.contains(&status.as_str()) {
