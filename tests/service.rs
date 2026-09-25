@@ -922,11 +922,18 @@ async fn openapi_documents_the_error_contract_of_every_operation() {
         }
     }
 
-    // The result body is the run's own record, not the stored document.
+    // The result body is the run's own record, not the stored document. A
+    // replacement is addressed by path, so it publishes its own body shape
+    // rather than the one that requires the case to be named again.
     assert_eq!(
         document["paths"]["/test_runs/{id}/results"]["post"]["requestBody"]["content"]["application/json"]
             ["schema"]["$ref"],
         "#/components/schemas/TestResultRequest"
+    );
+    assert_eq!(
+        document["paths"]["/test_runs/{id}/results/{case_id}"]["put"]["requestBody"]["content"]["application/json"]
+            ["schema"]["$ref"],
+        "#/components/schemas/TestResultReplaceRequest"
     );
 
     // The upload route documents both of its 400 shapes.
@@ -947,6 +954,9 @@ async fn openapi_documents_the_error_contract_of_every_operation() {
     // and rejects unknown fields the way `validate_payload` does.
     const NO_REQUIRED: &[&str] = &[];
     const NAME_REQUIRED: &[&str] = &["name"];
+    // A replacement is addressed by path, so the case is not the body's to
+    // name: only the status the replacement records is required.
+    const STATUS_REQUIRED: &[&str] = &["status"];
     for (path, method, name, required) in [
         ("/projects", "post", "ProjectCreateRequest", NAME_REQUIRED),
         ("/projects/{id}", "put", "ProjectUpdateRequest", NO_REQUIRED),
@@ -967,6 +977,12 @@ async fn openapi_documents_the_error_contract_of_every_operation() {
             "put",
             "TestRunUpdateRequest",
             NO_REQUIRED,
+        ),
+        (
+            "/test_runs/{id}/results/{case_id}",
+            "put",
+            "TestResultReplaceRequest",
+            STATUS_REQUIRED,
         ),
         (
             "/test_cases/{id}",
@@ -1042,7 +1058,7 @@ async fn openapi_documents_the_error_contract_of_every_operation() {
 /// Neither half subsumes the other. The table names a test but cannot see
 /// whether it reaches the route; the recording sees a success but cannot say
 /// which test produced it, only that one in the run did. Keep both.
-const CONTRACT_COVERAGE: [(&str, &str); 89] = [
+const CONTRACT_COVERAGE: [(&str, &str); 91] = [
     ("get /health", "health_reports_filesystem_storage"),
     (
         "get /openapi.json",
@@ -1242,6 +1258,14 @@ const CONTRACT_COVERAGE: [(&str, &str); 89] = [
     (
         "post /test_runs/{id}/results",
         "test_runs_support_composition_execution_and_isolation",
+    ),
+    (
+        "put /test_runs/{id}/results/{case_id}",
+        "replacing_a_result_keeps_the_defects_it_cannot_describe",
+    ),
+    (
+        "delete /test_runs/{id}/results/{case_id}",
+        "removing_a_result_takes_it_out_of_the_run",
     ),
     (
         "get /test_runs/{id}/results/{case_id}/defects",
@@ -1601,7 +1625,7 @@ async fn openapi_declares_the_security_posture_of_every_operation() {
     ];
 
     let operations = documented_operations(&document);
-    assert_eq!(operations.len(), 89, "the documented surface changed");
+    assert_eq!(operations.len(), 91, "the documented surface changed");
 
     for (label, operation) in &operations {
         let responses = operation["responses"].as_object().expect("responses");
@@ -1659,7 +1683,7 @@ async fn openapi_declares_the_security_posture_of_every_operation() {
         .filter(|(_, operation)| operation["responses"].get("403").is_some())
         .count();
     assert_eq!(
-        refuses, 78,
+        refuses, 80,
         "the 403 surface changed; update this count with it"
     );
 }
@@ -1692,6 +1716,7 @@ async fn openapi_schemas_are_strict_only_where_the_api_rejects_unknown_fields() 
         "ImportEntry",
         "TestRun",
         "TestResultRequest",
+        "TestResultReplaceRequest",
         "ProjectCreateRequest",
         "ProjectUpdateRequest",
         "TestSuiteUpdateRequest",
@@ -1869,7 +1894,7 @@ async fn openapi_operations_carry_stable_ids_and_resource_tags() {
             "{label} carries an undeclared tag: {tag}"
         );
     }
-    assert_eq!(ids.len(), 89, "every documented operation is named");
+    assert_eq!(ids.len(), 91, "every documented operation is named");
 }
 
 #[tokio::test]

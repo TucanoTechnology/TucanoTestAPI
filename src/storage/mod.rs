@@ -8,8 +8,9 @@ pub mod layout;
 
 pub use fs::FileRepository;
 pub use layout::{
-    MAX_COMPONENT_BYTES, Parent, Placement, RESERVED_PROJECT_CHILDREN, Resource, attachment_path,
-    case_dir, case_marker, ensure_within, folder_name, folder_wire_id, node_folder, parent_dir,
+    MAX_COMPONENT_BYTES, PRIVATE_DIR_MODE, PRIVATE_FILE_MODE, Parent, Placement,
+    RESERVED_PROJECT_CHILDREN, Resource, attachment_path, case_dir, case_marker,
+    create_private_dir_all, ensure_within, folder_name, folder_wire_id, node_folder, parent_dir,
     parent_marker, project_collection_dir, project_dir, project_document_path, project_marker,
     revision_dir, revision_marker, root_dir, set_private_permissions, step_attachment_path,
     step_dir, suite_dir, suite_marker, unique_suffix, validate_component, validate_document_id,
@@ -112,6 +113,21 @@ pub trait Repository: Send + Sync {
 
     /// Atomically persist a document.
     fn write_at(
+        &self,
+        resource: Resource,
+        parent: Option<&Parent>,
+        id: &str,
+        value: &Value,
+    ) -> io::Result<()>;
+
+    /// Create a document, refusing one the addressed location already holds.
+    ///
+    /// The existence check and the write are one operation under one lock
+    /// acquisition, so a create cannot interleave with another create of the
+    /// same identifier: the loser of that race reports
+    /// [`io::ErrorKind::AlreadyExists`] instead of overwriting the winner. A
+    /// separate `exists_at` followed by `write_at` cannot give that guarantee.
+    fn create_at(
         &self,
         resource: Resource,
         parent: Option<&Parent>,

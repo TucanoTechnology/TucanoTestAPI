@@ -155,6 +155,7 @@ pub const ROUTES: &[&str] = &[
     "/test_runs/{id}/test_suites",
     "/test_runs/{id}/test_cases",
     "/test_runs/{id}/results",
+    "/test_runs/{id}/results/{case_id}",
     "/test_runs/{id}/results/{case_id}/defects",
     "/test_runs/{id}/results/{case_id}/defects/{link_id}",
     "/test_runs/{id}/import/junit",

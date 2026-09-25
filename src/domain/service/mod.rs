@@ -197,14 +197,7 @@ impl<R: Repository> TestService<R> {
         validation::validate_payload(resource, value)?;
         let id = resources::derive_create_id(resource, value)?;
         audited(resource_noun(resource), "create", &id, || {
-            if self.repository.exists_at(resource, parent, &id)? {
-                return Err(DomainError::Conflict("Resource already exists".to_owned()));
-            }
-            let mut document = value.clone();
-            if resource == Resource::Cases {
-                stamp_case_creation(&mut document);
-            }
-            self.write_marker(resource, parent, &id, &document)?;
+            self.create_marker(resource, parent, &id, value)?;
             Ok(Created { id: id.clone() })
         })
     }
@@ -262,6 +255,29 @@ impl<R: Repository> TestService<R> {
             }
         }
         Ok(())
+    }
+
+    /// Persists a newly created document, refusing a location already taken.
+    ///
+    /// The refusal comes from storage, which checks and writes the location
+    /// under one lock: a concurrent create of the same identifier therefore
+    /// answers a conflict rather than overwriting this one. A document that
+    /// already exists is reported the same way a rejected create always was.
+    fn create_marker(
+        &self,
+        resource: Resource,
+        parent: Option<&Parent>,
+        id: &str,
+        value: &Value,
+    ) -> Result<(), DomainError> {
+        let mut document = value.clone();
+        if resource == Resource::Cases {
+            stamp_case_creation(&mut document);
+        }
+        normalise_marker(resource, id, &mut document);
+        self.repository
+            .create_at(resource, parent, id, &document)
+            .map_err(DomainError::from)
     }
 
     /// Persists a document, keeping a parent marker's child collections empty:

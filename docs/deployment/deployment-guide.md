@@ -59,6 +59,15 @@ and the container holds nothing that must survive a restart:
   record is [`docs/architecture/adr-storage-layout-v3.md`](../architecture/adr-storage-layout-v3.md).
 - **The port is not the state.** Host port `3100` (Compose) or `3000` (plain `docker run`) is where
   the API answers; which port it uses has no bearing on what is stored.
+- **Everything written is owner-only.** The store creates stored files with mode `0600` and stored
+  directories with mode `0700`, so the tree can be read only by the account the service runs as —
+  `tucano`, uid `10001`, in the image (see *Container hardening* below). Reading the volume from
+  outside the service therefore means using that account: a backup job, an inspection shell or a
+  second replica pointed at the same volume must run as the same uid (or as `root`), because under
+  any other uid the stored directories cannot even be traversed. The modes are applied as files and
+  folders are created, and the store never re-permissions what is already there: a volume written by
+  an earlier build keeps the modes its existing directories have until they are recreated, while a
+  document the service rewrites becomes owner-only from that write on.
 
 This is the property that makes both scaling and rollback possible: two containers pointed at the
 same `TUCANO_DATA_DIR` see the same data.
@@ -325,6 +334,12 @@ storage:
 - **Never give each replica its own volume.** Separate per-replica local volumes diverge: each
   replica would serve a different partial view of the data, and a create would be invisible to the
   others. Use platform-provided shared storage (or a single node with one shared volume) instead.
+- **Every replica shares one uid.** Files and directories the store creates are owner-only
+  (`0600`/`0700`), and the advisory lock file it serialises writers with is not writable by any
+  other uid either. A replica running as a different uid from the one that wrote the data can
+  neither traverse the tree nor take the lock, so it would answer `404` for documents that exist and
+  `503 lock_timeout` for writes. Run every replica as the same uid — the image's `tucano` (`10001`)
+  is that uid by default — and make it the owner of the volume.
 
 The filesystem is the only storage backend. Object storage (S3) was declined as a persistence
 backend by [`docs/architecture/adr-object-storage.md`](../architecture/adr-object-storage.md), so
@@ -441,6 +456,9 @@ layout, the refusal and the operator recipe are recorded in
       `GET /diagnostics` answers `200` either way with the individual checks, so it reads as evidence
       rather than as the probe itself.
 - [ ] Multi-node deployments: shared storage with working advisory locks; no per-replica volumes.
+- [ ] Every replica runs as the same uid, and that uid owns the volume: stored files and directories
+      are owner-only (`0600`/`0700`), so a replica under another uid cannot read the tree or take the
+      advisory lock.
 - [ ] Authentication decided: the shipped Compose file runs authenticated — `TUCANO_AUTH_REQUIRED=true`
       plus `TUCANO_JWT_SECRET` and the bootstrap pair from `.env`. A deployment that turns it off
       keeps the historic anonymous shape and must be reachable only from a trusted network.

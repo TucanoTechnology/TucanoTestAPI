@@ -814,6 +814,119 @@ fn a_re_recorded_result_keeps_what_the_request_leaves_out() {
 }
 
 #[test]
+fn a_result_is_replaced_by_the_case_the_route_addresses() {
+    let (service, _directory) = service();
+    let home = project(&service);
+    run_in(&service, &home, "nightly");
+
+    // The path names the case, so a body that describes only what changed is
+    // complete, and it rewrites the stored result rather than adding one.
+    service
+        .replace_run_result(
+            "nightly.json",
+            "TC-1",
+            &json!({ "status": "Failed", "timestamp": "2", "notes": "flaky on CI" }),
+        )
+        .expect("replace");
+
+    let run = service.get(Resource::Runs, "nightly.json").expect("run");
+    let results = run["results"].as_array().expect("results");
+    assert_eq!(results.len(), 1, "a replacement rewrites in place: {run}");
+    assert_eq!(results[0]["status"], "Failed");
+    assert_eq!(results[0]["timestamp"], "2");
+    assert_eq!(results[0]["notes"], "flaky on CI");
+
+    // A body may repeat the case as long as it agrees with the path, and an
+    // explicit null clears a field it no longer describes.
+    service
+        .replace_run_result(
+            "nightly.json",
+            "TC-1",
+            &json!({ "testCaseId": "TC-1", "status": "Passed", "timestamp": "3", "notes": null }),
+        )
+        .expect("replace again");
+
+    let run = service.get(Resource::Runs, "nightly.json").expect("run");
+    assert_eq!(run["results"][0]["status"], "Passed");
+    assert_eq!(run["results"][0]["timestamp"], "3");
+    assert_eq!(run["results"][0].get("notes"), None);
+
+    // A body that points the replacement elsewhere is refused rather than
+    // retargeted, and nothing is written.
+    let error = service
+        .replace_run_result(
+            "nightly.json",
+            "TC-1",
+            &json!({ "testCaseId": "TC-2", "status": "Passed" }),
+        )
+        .expect_err("a body identifier that disagrees with the path");
+    assert!(
+        matches!(error, DomainError::InvalidRequest { ref message, .. }
+            if message == "Field `testCaseId` must match the case in the path"),
+        "{error:?}"
+    );
+    let run = service.get(Resource::Runs, "nightly.json").expect("run");
+    assert_eq!(run["results"][0]["status"], "Passed", "nothing was written");
+}
+
+#[test]
+fn replacing_or_removing_an_absent_result_is_not_found() {
+    let (service, _directory) = service();
+    let home = project(&service);
+    run_in(&service, &home, "nightly");
+
+    // A removal takes the result out of the run...
+    service
+        .delete_run_result("nightly.json", "TC-1")
+        .expect("remove");
+    let run = service.get(Resource::Runs, "nightly.json").expect("run");
+    let results = run["results"].as_array().expect("results");
+    assert!(results.is_empty(), "the removed result is gone: {run}");
+
+    // ...and the same case cannot be removed twice, nor replaced once there is
+    // no result to replace: a replacement never creates.
+    for outcome in [
+        service.delete_run_result("nightly.json", "TC-1").err(),
+        service
+            .replace_run_result("nightly.json", "TC-1", &json!({ "status": "Passed" }))
+            .err(),
+    ] {
+        assert!(
+            matches!(outcome, Some(DomainError::NotFound(ref message))
+                if message == "Test result not found in test run"),
+            "{outcome:?}"
+        );
+    }
+
+    // A run that records no results at all answers the same way, and a run that
+    // does not exist is not found as a run.
+    service
+        .create_in(
+            Resource::Runs,
+            &home,
+            &json!({ "name": "empty", "timestamp": "1" }),
+        )
+        .expect("empty run");
+    for outcome in [
+        service.delete_run_result("empty.json", "TC-1").err(),
+        service
+            .replace_run_result("empty.json", "TC-1", &json!({ "status": "Passed" }))
+            .err(),
+    ] {
+        assert!(
+            matches!(outcome, Some(DomainError::NotFound(ref message))
+                if message == "Test result not found in test run"),
+            "{outcome:?}"
+        );
+    }
+
+    let error = service
+        .delete_run_result("missing.json", "TC-1")
+        .expect_err("unknown run");
+    assert!(matches!(error, DomainError::NotFound(message) if message == "Test run not found"));
+}
+
+#[test]
 fn a_run_embeds_a_snapshot_of_the_case_it_selected() {
     let (service, _directory) = service();
     let project = project(&service);

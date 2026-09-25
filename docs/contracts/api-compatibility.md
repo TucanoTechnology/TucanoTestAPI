@@ -1877,6 +1877,32 @@ root cause merged by the #180 triage; CWE-20).
   `tests/auth.rs::every_guarded_operation_refuses_an_anonymous_caller`, and the
   `identifiers_cannot_escape_the_storage_root` and `a_test_case_identifier_is_addressed_verbatim` matrices in
   `tests/service.rs`, which carry the new path.
+- **A recorded result can be corrected and withdrawn** (Issue #283). `POST /test_runs/{id}/results` could
+  record a result for a case but nothing could rewrite or take one back, so a mistyped result stayed in the run
+  and the only way out was deleting the whole run. Two routes close the gap: `PUT
+  /test_runs/{id}/results/{case_id}` replaces the result the run holds for that case, and `DELETE
+  /test_runs/{id}/results/{case_id}` removes it. This is additive: the documented surface grows from 89 to 91
+  operations, no existing operation, schema or field changed shape, and no request that succeeded now fails.
+  The replacement body is the recording shape with the case named by the path, published as
+  `TestResultReplaceRequest` (`additionalProperties: false`, `required: ["status"]`): `testCaseId` is optional
+  and, when present, has to name the case in the path — a different identifier is `400 invalid_request` — while
+  `status` is required, `timestamp` defaults to the current instant, and `notes` and `durationMs` are rewritten
+  only when supplied, with `null` clearing them, exactly as the recording route treats them. A replacement
+  rewrites an existing result and never creates one: a case the run holds no result for, or a run whose
+  `results` is absent or empty, answers `404` "Test result not found in test run", and the run is read after the
+  body is validated, so a replacement that cannot be applied writes nothing. What the body cannot carry is left
+  alone: `attachments` and `defectLinks` survive a replacement, and, because both routes address the run
+  document the request names, `DELETE` takes the result's attachments and links with it — `GET
+  /test_runs/{id}/results/{case_id}/defects` then answers `404`. Both routes take the actor an editor of the
+  run's project, share the results envelope (`200 {"message": ...}`), and answer `404` for an unknown run.
+  Deviation recorded with tests in `tests/runs.rs::replacing_a_result_keeps_the_defects_it_cannot_describe`,
+  `::removing_a_result_takes_it_out_of_the_run`, `src/domain/composition.rs`
+  (`::a_replacement_rewrites_every_field_the_request_describes`,
+  `::a_replacement_keeps_the_defect_links_and_attachments_it_cannot_describe`,
+  `::replacing_an_absent_result_is_not_found`, `::removing_a_result_takes_it_out_of_the_run`,
+  `::removing_an_absent_result_is_not_found`) and `src/domain/service/tests.rs`
+  (`::a_result_is_replaced_by_the_case_the_route_addresses`,
+  `::replacing_or_removing_an_absent_result_is_not_found`).
 - **An over-long stored component is a client error rather than a storage failure** (Issue #324, plan above).
   `MAX_COMPONENT_BYTES` (`255`) is now enforced in `validate_component`, so a name or identifier that composes
   a longer component — including the `{suffix}-{original name}` an attachment is stored under — is answered

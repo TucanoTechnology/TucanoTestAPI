@@ -24,8 +24,8 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use crate::storage::{
-    ensure_within, folder_name, folder_wire_id, set_private_permissions, unique_suffix,
-    validate_component,
+    PRIVATE_FILE_MODE, create_private_dir_all, ensure_within, folder_name, folder_wire_id,
+    set_private_permissions, unique_suffix, validate_component,
 };
 
 /// How much authority an account holds inside one project.
@@ -110,7 +110,7 @@ impl AuthStore {
             root: root.into(),
             lock_timeout: DEFAULT_LOCK_TIMEOUT,
         };
-        fs::create_dir_all(store.grants_dir())?;
+        create_private_dir_all(&store.grants_dir())?;
         Ok(store)
     }
 
@@ -486,13 +486,13 @@ fn write_json_atomically(destination: &Path, value: &serde_json::Value) -> io::R
     let directory = destination
         .parent()
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "destination has no parent"))?;
-    fs::create_dir_all(directory)?;
+    create_private_dir_all(directory)?;
     let temporary = directory.join(format!(".tucano-{}.tmp", unique_suffix()));
     let mut file = OpenOptions::new()
         .write(true)
         .create_new(true)
         .open(&temporary)?;
-    set_private_permissions(&file)?;
+    set_private_permissions(&file, PRIVATE_FILE_MODE)?;
     let result = (|| {
         serde_json::to_writer_pretty(&mut file, value)
             .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
@@ -541,6 +541,33 @@ mod tests {
         let (directory, _store) = store();
         assert!(directory.path().join("auth").is_dir());
         assert!(directory.path().join("auth/projects").is_dir());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn stored_auth_files_are_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let (directory, store) = store();
+        store.insert_user(&account("u1", "alice")).expect("insert");
+        store
+            .set_role("checkout.json", "u1", Role::Owner)
+            .expect("grant");
+
+        let mode_of = |relative: &str| {
+            std::fs::metadata(directory.path().join(relative))
+                .expect(relative)
+                .permissions()
+                .mode()
+                & 0o777
+        };
+
+        // The auth store holds password hashes and refresh-token digests, so it
+        // is owner-only like the rest of the tree: no other uid can read it.
+        assert_eq!(mode_of("auth"), 0o700);
+        assert_eq!(mode_of("auth/projects"), 0o700);
+        assert_eq!(mode_of("auth/users.json"), 0o600);
+        assert_eq!(mode_of("auth/projects/checkout.json"), 0o600);
     }
 
     #[test]

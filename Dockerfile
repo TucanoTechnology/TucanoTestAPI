@@ -1,4 +1,6 @@
-FROM rust:1.98.0-slim-trixie AS builder
+# Tag `rust:1.98.0-slim-trixie` resolved to its manifest-list digest, matching the
+# runtime stage below, so the audited image is the image this revision builds.
+FROM rust:1.98.0-slim-trixie@sha256:17d1ba895198f9934c6314ec5346a0d5115372f3243390c3d731e242f35c2f27 AS builder
 
 ARG BUILD_NUMBER=local
 

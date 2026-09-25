@@ -31,9 +31,23 @@ The following security scans run automatically on every PR and push to main:
   finding, so examples assemble the shape from parts instead
 
 ### 3. Container Image Scanning (`trivy`)
-- Scans the production Docker image for OS and library vulnerabilities
-- Reports CRITICAL and HIGH severity issues
-- **Fails the build** if any CRITICAL or HIGH vulnerabilities are found
+
+Two jobs scan the image, under one policy: report CRITICAL and HIGH severity issues, ignore
+findings with no available fix, and **fail the run** if anything is found.
+
+- **Every pull request, every push to `main`, and weekly** — `container-scan` in `security.yml`
+  builds the image inside the job (`docker build --file Dockerfile --tag tucano-test .`) and scans
+  that local build.
+- **Every push to `main` and every `v*.*.*` tag, in the job that publishes** — `release.yml` scans
+  the artifact it just pushed, and only that artifact: the image reference is assembled from the
+  build step's `digest` output, so the scan is tied to one content-addressed digest and never to a
+  re-resolved moving tag. The job fails on a finding the same way, so the digest a consumer pulls
+  is the digest a passing scan reported on.
+
+The release scan runs after the push by design, so a failing scan fails the release run but does not
+withdraw the digest from the registry. Promotion and rollback therefore gate on a green release run
+for the tag they deploy, not on the tag's mere presence
+(see [canary-validation-and-rollback.md](../deployment/canary-validation-and-rollback.md)).
 
 ### 4. SBOM Generation (`cargo-cyclonedx`)
 - Generates a Software Bill of Materials (SBOM) in CycloneDX JSON format
@@ -46,7 +60,19 @@ The following security scans run automatically on every PR and push to main:
 ## Dependency Management
 
 ### Version Pinning
-- All dependencies are pinned to specific versions in `Cargo.toml`
+- Version requirements for direct dependencies are declared in `Cargo.toml`; the committed
+  `Cargo.lock` is what fixes the versions a build resolves, transitive crates included. No
+  requirement is an exact pin: Cargo derives a caret range from a bare `version`, so
+  `serde = "1.0.229"` means `>=1.0.229, <2.0.0`, and no dependency uses the `=` operator.
+- The `[dependencies]` block (`Cargo.toml:8-23`) mixes precisions. Eight crates name a full
+  `major.minor.patch` version — `serde`, `serde_json`, `axum`, `tokio`, `tower-http`,
+  `tracing-subscriber`, `fs2`, `roxmltree` — which sets the range's floor at that patch release,
+  while eight name only a major/minor line — `tracing = "0.1"`, `aes-gcm = "0.11"`,
+  `argon2 = "0.5"`, `base64 = "0.22"`, `getrandom = "0.2"`, `hmac = "0.12"`, `rand = "0.8"`,
+  `sha2 = "0.10"` — which sets the floor at that line's `.0` release. Every `[dev-dependencies]`
+  entry (`Cargo.toml:26-30`) names a full `major.minor.patch` version.
+- Because every requirement is a range, a newer release can satisfy it and `cargo update` can move
+  a resolved version with no `Cargo.toml` change; the `Cargo.lock` diff is the review signal.
 - Use `cargo update` deliberately and review changes before committing
 - Lock file (`Cargo.lock`) is committed to ensure reproducible builds
 
@@ -131,9 +157,15 @@ docker run --rm -v "$SCAN_DIR:/repo:ro" zricethezav/gitleaks:v8.9.0 detect --sou
 # only accepts bind mounts from paths it is configured to share. `git archive`
 # exports the committed tree, so the fixture has to be committed to be scanned.
 
-# Test container scanning
+# Test container scanning (the security.yml job's local build)
 docker build -t tucano-test .
 trivy image tucano-test
+
+# Test the release scan: name a published digest, never a tag, and use the
+# policy the job uses. The reference is what `release.yml` builds from the
+# build step's `digest` output.
+trivy image --exit-code 1 --ignore-unfixed --severity CRITICAL,HIGH \
+  ghcr.io/tucanotechnology/tucanotestapi@sha256:<digest>
 
 # Clean up
 git reset --soft HEAD~1
