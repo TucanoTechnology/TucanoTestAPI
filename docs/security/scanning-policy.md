@@ -13,6 +13,23 @@ The following security scans run automatically on every PR and push to main:
 - Uses the RustSec Advisory Database
 - **Fails the build** if any known vulnerabilities are found
 
+### Cargo-deny policy checks (`cargo-deny`)
+
+The `deny` job enforces `deny.toml` over the resolved graph on every pull request and every
+push to `main`, with four independent checks:
+
+- **advisories** — the RustSec database (deliberate second engine alongside `cargo-audit`);
+- **sources** — crates.io index only: an unknown registry or a git dependency fails the build;
+- **licenses** — an explicit SPDX allow-list (`AGPL-3.0-or-later` for this repository's own
+  package, `MIT`, `Apache-2.0`, `BSD-3-Clause`, `Unicode-3.0` for dependencies); anything else,
+  including an unknown or non-`OSI`-approved expression, fails the build;
+- **bans** — wildcard (`*`) requirements are denied everywhere in the graph; multiple coexisting
+  versions of the same crate warn rather than fail, because the proc-macro and crypto stacks in
+  the tree legitimately carry two majors at once and `Cargo.lock` resolves them.
+
+The allow-list is reviewed with each dependency change; widening it is a policy change and
+belongs in the PR that needs it.
+
 ### 2. Secret Scanning (`gitleaks`)
 - Scans the tracked tree for accidentally committed secrets — every file `git ls-files`
   reports, extracted with `git archive` and scanned from a temporary directory so that the
