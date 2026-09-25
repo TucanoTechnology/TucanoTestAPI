@@ -45,6 +45,7 @@
 - [Deployment guide](deployment/deployment-guide.md)
 - [Configuration reference](deployment/configuration-reference.md)
 - [Canary validation and rollback](deployment/canary-validation-and-rollback.md)
+- [Off-box mirror and backup](deployment/off-box-mirror-runbook.md)
 
 # Security
 
