@@ -56,6 +56,24 @@ jobs:
         # tags, so this is the reference the push above actually wrote.
         shell: bash
         run: echo "ref=${IMAGE_NAME,,}" >> "$GITHUB_OUTPUT"
+      - name: Refuse the scan when the build emitted no digest
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        shell: bash
+        # Fail-closed guard for issue #363. The scan below pins exactly the
+        # digest this job pushed, so an empty `steps.build.outputs.digest` —
+        # a `push:` turned off on the build step, or a build-push-action major
+        # that stops emitting `digest` — would degenerate the reference to
+        # `ghcr.io/tucanotechnology/tucanotestapi@`, and trivy would fail on
+        # an unparseable reference without naming the step that produced it.
+        # This step owns the diagnosis: it stops the job before trivy runs,
+        # with a message that says the build step published no digest.
+        run: |
+          if [ -z "$DIGEST" ]; then
+            echo "::error::the build step (docker/build-push-action) emitted no digest output — refusing to scan; check that the build pushed and still exposes 'outputs.digest'"
+            exit 1
+          fi
+          echo "scan will pin ${DIGEST}"
       - name: Scan the published digest
         # The gate has to name the artifact a consumer pulls, so it scans the
         # digest this job just pushed rather than the local build the
