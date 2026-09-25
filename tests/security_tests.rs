@@ -100,6 +100,67 @@ mod symlink_tests {
 }
 
 #[cfg(test)]
+#[cfg(unix)]
+mod hardlink_tests {
+    use super::*;
+
+    #[test]
+    fn test_rejects_hardlink_escape() {
+        let (repo, temp) = setup_test_repo();
+
+        // Seed a case so its folder exists as a real attachment directory.
+        repo.write_at(
+            Resource::Projects,
+            None,
+            "checkout.json",
+            &serde_json::json!({"name": "checkout"}),
+        )
+        .unwrap();
+        let parent = Parent::Project("checkout.json".to_owned());
+        repo.write_at(
+            Resource::Cases,
+            Some(&parent),
+            "TC-001",
+            &serde_json::json!({"testCaseId": "TC-001"}),
+        )
+        .unwrap();
+
+        // A file outside the data root, hardlinked onto an in-tree attachment
+        // name: the path is ordinary, so only the opened file can betray the
+        // second link, and its content must not be served.
+        let outside = temp
+            .path()
+            .parent()
+            .unwrap()
+            .join(format!("outside-secret-{}", std::process::id()));
+        std::fs::write(&outside, b"outside content").unwrap();
+        std::fs::hard_link(
+            &outside,
+            temp.path()
+                .join("projects")
+                .join("checkout")
+                .join("TC-001")
+                .join("outside-hard.txt"),
+        )
+        .unwrap();
+
+        let read_result = repo.read_attachment(&parent, "TC-001", "outside-hard.txt");
+        assert_eq!(
+            read_result.unwrap_err().kind(),
+            std::io::ErrorKind::PermissionDenied,
+            "hardlink escape should be rejected as permission denied"
+        );
+        assert_eq!(
+            std::fs::read(&outside).unwrap(),
+            b"outside content",
+            "the outside file must stay intact"
+        );
+
+        std::fs::remove_file(&outside).unwrap();
+    }
+}
+
+#[cfg(test)]
 mod malformed_json_tests {
     use super::*;
     use axum::http::StatusCode;

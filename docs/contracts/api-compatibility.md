@@ -214,6 +214,12 @@ All baseline invariants remain: every identifier passes `validate_component`; ev
 `ensure_within`; parent and child paths are depth-checked; writes are atomic same-directory temp files with
 `0o666` permissions; raw paths or filesystem errors never reach clients.
 
+Attachment byte reads (`read_confined`, Issue #327) are additionally confined by the opened handle rather than
+by the path alone: the reader walks from the data root with `openat` and `O_NOFOLLOW` on every component, then
+refuses a descriptor whose link count exceeds one or whose device differs from the root's before reading any
+byte. A hardlink planted inside the attachment tree therefore answers the same safe `500 storage_error`
+envelope as a symlink escape; no documented response shape changes.
+
 ## Real-Parent Creation Plan (Issue #66)
 
 Issue: [#66](https://github.com/TucanoTechnology/TucanoTestAPI/issues/66) — creating a suite or case requires a
