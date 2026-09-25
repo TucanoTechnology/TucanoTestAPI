@@ -17,6 +17,11 @@ env:
 jobs:
   release:
     runs-on: [self-hosted, Linux, X64]
+    permissions:
+      contents: read
+      packages: write
+      # only for publishing the release SBOM as a run artifact (#331)
+      actions: write
     steps:
       - uses: actions/checkout@v5
       - uses: docker/setup-buildx-action@v3
@@ -98,3 +103,44 @@ jobs:
           # cover this scan on its own.
           TRIVY_USERNAME: ${{ github.actor }}
           TRIVY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+      - name: Generate the release SBOM
+        # The PR/main-push `sbom` job in security.yml proves the crate inventory
+        # continuously; this makes the SBOM part of the release itself (#331):
+        # the same cargo-cyclonedx generator, run in the same pinned toolchain
+        # image (by digest) so the release host keeps no state, sharing the
+        # registry cache volume the container jobs already warm.
+        run: |
+          docker run --rm -v "$PWD:/src" -w /src \
+            -v tucanotestapi-cargo-registry:/usr/local/cargo/registry \
+            rust:1.98.0-bookworm@sha256:82150a52ec202c1b14d7817e14516c392bb7f5cfebd88f1ed531cb37ebd39922 \
+            bash -c 'cargo install cargo-cyclonedx --locked && cargo cyclonedx --format json --override-filename sbom'
+      - name: Prove the SBOM lists the crate's components
+        run: |
+          python3 - <<'PY'
+          import json
+          import pathlib
+          import sys
+
+          sbom = pathlib.Path("sbom.json")
+          if not sbom.is_file() or sbom.stat().st_size == 0:
+              sys.exit("sbom.json is missing or empty")
+          document = json.loads(sbom.read_text(encoding="utf-8"))
+          if document.get("bomFormat") != "CycloneDX":
+              sys.exit("sbom.json is not a CycloneDX document")
+          components = document.get("components") or []
+          if not components:
+              sys.exit("sbom.json lists no components")
+          print(f"release SBOM: CycloneDX {document.get('specVersion')} with {len(components)} components")
+          PY
+      - name: Publish the SBOM with the release
+        # The release's public identity is its immutable GHCR tags; there is no
+        # GitHub Release object in this repository's model (release numbering
+        # policy), so the SBOM is attached to the immutable release *run* — the
+        # `build-<run number>` tag and this artifact share that run number as
+        # the join key. The generator runs after the digest scan on purpose:
+        # an image that fails its vulnerability gate publishes nothing.
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        with:
+          name: sbom-build-${{ github.run_number }}
+          path: sbom.json
+          retention-days: 90
