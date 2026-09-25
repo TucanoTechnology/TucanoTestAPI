@@ -82,7 +82,7 @@ Compose refuses to start while either required value is unset, rather than falli
 anonymous stack.
 
 `docker-compose.yml` defines two services: `api`, built from this repository's `Dockerfile`, and
-`gui`, built from a sibling `../Tucano-Test-GUI` checkout that must be present for the default
+`gui`, built from a sibling `../TucanoTestGUI` checkout that must be present for the default
 command. Start the API alone with `docker compose up -d --build api`.
 
 | Service | Host port | Container port | Image |
