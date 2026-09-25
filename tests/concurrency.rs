@@ -2,8 +2,9 @@
 //!
 //! These tests exercise the server under concurrent load: lost-update
 //! prevention via ETag/If-Match (OCC, #263), concurrent creates to
-//! different documents, mixed read/write safety, cross-resource lock
-//! contention, and sustained lock-contention latency.
+//! different documents, concurrent creates of the *same* document,
+//! mixed read/write safety, cross-resource lock contention, and
+//! sustained lock-contention latency.
 //!
 //! Every test uses [`tokio::spawn`] so the async router processes
 //! requests concurrently through the shared advisory lock.
@@ -12,7 +13,7 @@ mod common;
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode, header};
-use common::{get, json_request, send_full, send_json, test_app};
+use common::{assert_error_envelope, get, json_request, send_full, send_json, test_app};
 use serde_json::{Value, json};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -168,6 +169,71 @@ async fn test_concurrent_creates_all_succeed() {
         let (status, _) = send_json(&app, get(&format!("/test_cases/{id}"))).await;
         assert_eq!(status, StatusCode::OK, "case {id} should be retrievable");
     }
+}
+
+/// Creates to *one* identifier race for the same location: the existence
+/// check and the write happen under one lock, so exactly one request answers
+/// `201` and every other answers `409` rather than overwriting the winner.
+///
+/// Regression test for the TOCTOU in issue #322: with the check performed
+/// before the lock, two creates could both observe an empty location and both
+/// answer `201`, silently discarding every title but one.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn test_concurrent_identical_creates_return_409() {
+    let (_dir, app) = test_app();
+    let app = Arc::new(app);
+
+    let project = common::create_named(&app, "/projects", "race").await;
+    let case_uri = format!("/projects/{project}/test_cases");
+
+    let n = 16usize;
+    let barrier = Arc::new(tokio::sync::Barrier::new(n));
+    let mut handles = Vec::with_capacity(n);
+
+    for i in 0..n {
+        let app = Arc::clone(&app);
+        let barrier = Arc::clone(&barrier);
+        let uri = case_uri.clone();
+
+        handles.push(tokio::spawn(async move {
+            barrier.wait().await;
+            let body = json!({
+                "testCaseId": "RACE-1",
+                "title": format!("case from thread {i}"),
+                "expectedResult": "pass"
+            });
+            send_json(&app, json_request("POST", &uri, &body)).await
+        }));
+    }
+
+    let mut created = 0usize;
+    let mut conflicts = 0usize;
+    for handle in handles {
+        let (status, body) = handle.await.expect("task");
+        match status {
+            StatusCode::CREATED => {
+                created += 1;
+                assert_eq!(body["id"], "RACE-1", "body: {body}");
+            }
+            StatusCode::CONFLICT => {
+                conflicts += 1;
+                assert_error_envelope(&body, "conflict");
+            }
+            other => panic!("unexpected status {other}: {body}"),
+        }
+    }
+
+    assert_eq!(created, 1, "exactly one create may win the race");
+    assert_eq!(conflicts, n - 1, "every other create must answer 409");
+
+    // The winner's document is the one on disk: the loser's bodies were
+    // refused, not written and then quietly forgotten.
+    let (status, body) = send_json(&app, get("/test_cases/RACE-1")).await;
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+    assert_eq!(
+        body["testCaseId"], "RACE-1",
+        "the stored case must be the one that won"
+    );
 }
 
 /// Readers never see malformed JSON from an in-flight atomic write, and

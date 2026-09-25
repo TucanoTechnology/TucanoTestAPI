@@ -112,6 +112,39 @@ stored value when the body leaves them out and are replaced when it supplies the
 `null` clears a field. The run still holds one outcome per case — a second call for the same case
 updates the first rather than adding a second record.
 
+## Correcting or withdrawing a result
+
+Two routes address one recorded outcome by its case:
+
+| Route | `operationId` | Effect |
+| --- | --- | --- |
+| `PUT /test_runs/{id}/results/{case_id}` | `replaceTestRunResult` | Replaces the result stored for that case |
+| `DELETE /test_runs/{id}/results/{case_id}` | `deleteTestRunResult` | Removes it |
+
+The replacement body is the recording shape with the case named by the path: `status` is required,
+`timestamp` defaults to the current instant, and `notes` and `durationMs` are replaced when supplied
+and cleared by an explicit `null`. `testCaseId` is optional here; when you send it, it has to name
+the case in the path — a different identifier answers `400 invalid_request`. The request schema is
+`TestResultReplaceRequest`, closed like the recording one, so `attachments` and `defectLinks` are
+still refused.
+
+A replacement **never creates** a result: a case the run holds no outcome for answers `404
+not_found` (`"Test result not found in test run"`), as does a run that has recorded none yet. What
+the body cannot describe is left alone — the result's `attachments` and `defectLinks` survive a
+replacement (`PUT` rewrites outcomes, never the links attached to them). `DELETE` drops the whole
+outcome, its attachments and its links with it, so `GET /test_runs/{id}/results/{case_id}/defects`
+then answers `404`.
+
+```sh
+curl -s -X PUT http://localhost:3100/test_runs/run-2026-09-14.json/results/refund-partial.json \
+  -H 'Content-Type: application/json' \
+  -d '{"status":"Passed"}'
+```
+
+```json
+{"message":"Test result replaced in run"}
+```
+
 ## Case versions in a run
 
 A run records which version of each case it executed, in `caseVersions` (case id → version). The
@@ -232,6 +265,7 @@ See [Result imports and reports](imports-and-reports.md) for what those numbers 
 | Two outcomes for one case collapse into one | A run holds one outcome per case; the second call **merges** into the first |
 | `400 invalid_status` | The status was not one of `Passed`, `Failed`, `Blocked`, `Untested`, `Retest` |
 | `404 not_found` on `POST /test_runs/{id}/results` | The run does not hold that case. Include it first with `POST /test_runs/{id}/test_cases`, or import the report that ran it |
+| `404 not_found` on `PUT`/`DELETE /test_runs/{id}/results/{case_id}` | The run holds no outcome for that case (`"Test result not found in test run"`). `PUT` rewrites and never creates one — record it first with `POST /test_runs/{id}/results` |
 | `400 invalid_request` on a result body | An unknown field — the request schema is closed, so `attachments`, `defectLinks` and a GUI's `comment`/`duration` names are refused |
 | `400 invalid_request` on `durationMs` | `durationMs` must be a non-negative integer, not a negative or fractional number |
 | `409 conflict` linking a defect | That defect is already linked to this result |
@@ -261,5 +295,6 @@ layout and the point-in-time rule; [`docs/architecture/adr-storage-layout-v3.md`
 for why runs live inside their project and are governed by it; the
 [compatibility contract](../contracts/api-compatibility.md) for the
 defect-link plans (#87, #88), the run case-version capture plan (#92) and the run-result merge and
-membership plan (#284, #285). Where this page and one of those disagree, the source wins and this
-page is a bug.*
+membership plan (#284, #285); the result replace and delete routes (#283) are recorded in the
+compatibility contract's breaking-change accounting. Where this page and one of those disagree, the
+source wins and this page is a bug.*

@@ -8,7 +8,7 @@ use axum::{
     Json, Router,
     body::Bytes,
     extract::{Path, State},
-    routing::{delete, get, post},
+    routing::{delete, get, post, put},
 };
 use serde_json::{Value, json};
 
@@ -114,6 +114,27 @@ async fn record_run_result<R: Repository>(
     access::require_run(&service, &principal, &id, Role::Editor)?;
     service.record_run_result(&id, &body)?;
     Ok(Json(json!({ "message": "Test result recorded in run" })))
+}
+
+async fn replace_run_result<R: Repository>(
+    State(service): State<AppState<R>>,
+    principal: Principal,
+    Path((id, case_id)): Path<(String, String)>,
+    Json(body): Json<Value>,
+) -> Result<Json<Value>, DomainError> {
+    access::require_run(&service, &principal, &id, Role::Editor)?;
+    service.replace_run_result(&id, &case_id, &body)?;
+    Ok(Json(json!({ "message": "Test result replaced in run" })))
+}
+
+async fn delete_run_result<R: Repository>(
+    State(service): State<AppState<R>>,
+    principal: Principal,
+    Path((id, case_id)): Path<(String, String)>,
+) -> Result<Json<Value>, DomainError> {
+    access::require_run(&service, &principal, &id, Role::Editor)?;
+    service.delete_run_result(&id, &case_id)?;
+    Ok(Json(json!({ "message": "Test result removed from run" })))
 }
 
 async fn list_result_defects<R: Repository>(
@@ -223,6 +244,10 @@ pub(crate) fn routes<R: Repository + 'static>() -> Router<AppState<R>> {
         .route("/test_runs/{id}/test_suites", post(add_suite_to_run::<R>))
         .route("/test_runs/{id}/test_cases", post(add_case_to_run::<R>))
         .route("/test_runs/{id}/results", post(record_run_result::<R>))
+        .route(
+            "/test_runs/{id}/results/{case_id}",
+            put(replace_run_result::<R>).delete(delete_run_result::<R>),
+        )
         .route(
             "/test_runs/{id}/results/{case_id}/defects",
             get(list_result_defects::<R>).post(link_result_defect::<R>),
