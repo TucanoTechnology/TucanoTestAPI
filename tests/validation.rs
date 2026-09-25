@@ -6,13 +6,16 @@
 //! deliberately lenient behaviour that survives is pinned here too: partial
 //! payloads and omitted optional fields are still accepted, an unknown
 //! top-level key is still rejected, and a document persisted before the change
-//! is still readable and updatable.
+//! stays on disk untouched — refused when it is served, because its shape no
+//! longer deserialises, and still repairable through the write gate.
 
 mod common;
 
 use axum::Router;
 use axum::http::StatusCode;
-use common::{app_at, create_project, get, json_request, send_json, test_app};
+use common::{
+    app_at, assert_error_envelope, create_project, get, json_request, send_json, test_app,
+};
 use serde_json::{Value, json};
 use std::fs;
 use tempfile::TempDir;
@@ -210,40 +213,54 @@ async fn a_partial_update_of_a_valid_field_keeps_the_omitted_fields() {
 }
 
 /// A document persisted before the change carried a wrong-typed scalar and was
-/// stored verbatim; tightening the write gate must not make it unreadable.
+/// stored verbatim. The write gate judges a supplied body, never the stored
+/// bytes, so the document stays on disk untouched — but serving it would hand
+/// out a shape no route in the contract produces, so the read is refused.
 #[tokio::test]
-async fn a_document_persisted_before_the_change_stays_readable() {
+async fn a_document_persisted_before_the_change_is_refused_and_left_intact() {
     let directory = TempDir::new().expect("temp dir");
     let project = directory.path().join("projects/legacy");
     fs::create_dir_all(&project).expect("project folder");
-    fs::write(
-        project.join("project.json"),
-        r#"{"projectId":"legacy.json","name":"legacy","tags":"smoke","testSuites":[]}"#,
-    )
-    .expect("legacy document");
+    let marker = project.join("project.json");
+    let legacy = r#"{"projectId":"legacy.json","name":"legacy","tags":"smoke","testSuites":[]}"#;
+    fs::write(&marker, legacy).expect("legacy document");
     let app = app_at(directory.path());
 
-    let (status, stored) = send_json(&app, get("/projects/legacy.json")).await;
-    assert_eq!(status, StatusCode::OK, "{stored}");
-    assert_eq!(stored["tags"], json!("smoke"), "the legacy value is served");
-
+    // A listing reads identifiers, not document bodies, so the legacy
+    // identifier is still listed.
     let (status, listed) = send_json(&app, get("/projects")).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(listed, json!(["legacy.json"]));
 
+    // `tags` is a string where the model declares an array, so the document
+    // does not deserialise: the read answers the stable storage error instead
+    // of a 200 carrying the foreign shape.
+    let (status, refused) = send_json(&app, get("/projects/legacy.json")).await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{refused}");
+    assert_error_envelope(&refused, "storage_error");
+    assert_eq!(
+        refused["error"]["message"],
+        json!("Stored JSON is invalid"),
+        "the refusal names no serde detail"
+    );
+
+    assert_eq!(
+        fs::read_to_string(&marker).expect("legacy document still readable"),
+        legacy,
+        "a refused read leaves the stored bytes untouched"
+    );
+
+    // The write gate still merges into the stored document, so a client repairs
+    // the field it was refused and the document reads back.
     let (status, updated) = send_json(
         &app,
-        json_request(
-            "PUT",
-            "/projects/legacy.json",
-            &json!({"description": "updated"}),
-        ),
+        json_request("PUT", "/projects/legacy.json", &json!({"tags": []})),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{updated}");
 
     let (status, stored) = send_json(&app, get("/projects/legacy.json")).await;
-    assert_eq!(status, StatusCode::OK);
-    assert_eq!(stored["description"], json!("updated"));
-    assert_eq!(stored["tags"], json!("smoke"));
+    assert_eq!(status, StatusCode::OK, "{stored}");
+    assert_eq!(stored["name"], json!("legacy"));
+    assert_eq!(stored["tags"], json!([]), "the repaired field is served");
 }

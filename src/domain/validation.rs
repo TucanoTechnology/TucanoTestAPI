@@ -6,7 +6,9 @@
 //! one the resource actually defines, and every supplied field — scalar or
 //! nested collection — must deserialise into the field its model declares.
 //! Storage itself stays permissive so already-stored documents are never
-//! rewritten or rejected.
+//! rewritten; a stored document whose shape contradicts its model is refused
+//! when it is read, through [`document_matches_model`], instead of being served
+//! as raw JSON.
 
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -123,6 +125,31 @@ where
         }
     }
     Ok(())
+}
+
+/// Whether a stored document still deserialises into the model its resource
+/// declares.
+///
+/// Storage keeps whatever bytes it was handed, so a document can parse as JSON
+/// and still contradict its model: an array where the resource's document is an
+/// object, a scalar under a field the model types as an array, an unknown key.
+/// Serving one would hand a client content no route in the contract produces,
+/// so the read path refuses it instead. This is the read-side counterpart of
+/// [`validate_payload`], applied to the whole document rather than to the
+/// fields a request supplied.
+pub fn document_matches_model(resource: Resource, value: &Value) -> bool {
+    match resource {
+        Resource::Projects => deserialises::<Project>(value),
+        Resource::Suites => deserialises::<TestSuite>(value),
+        Resource::Cases => deserialises::<TestCase>(value),
+        Resource::Runs => deserialises::<TestRun>(value),
+        Resource::Milestones => deserialises::<Milestone>(value),
+        Resource::Configurations => deserialises::<TestConfiguration>(value),
+    }
+}
+
+fn deserialises<T: DeserializeOwned>(value: &Value) -> bool {
+    T::deserialize(value).is_ok()
 }
 
 #[cfg(test)]
