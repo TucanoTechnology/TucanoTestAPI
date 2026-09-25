@@ -74,6 +74,29 @@ pub fn app_at_with_lock_timeout(path: &Path, timeout: Duration) -> Router {
     ))
 }
 
+/// Like [`app_at`], but under an explicit set of request guardrails (#103):
+/// the timeout, concurrency, and body-size ceilings the tests drive directly.
+pub fn app_at_with_guardrails(
+    path: &Path,
+    guardrails: tucano_test::api::guardrails::Guardrails,
+) -> Router {
+    let repository = FileRepository::new(path).expect("repository");
+    let store = tucano_test::auth::AuthStore::new(path).expect("auth store");
+    let config = tucano_test::auth::AuthConfig {
+        required: false,
+        jwt_secret: None,
+        access_ttl: tucano_test::auth::DEFAULT_ACCESS_TTL,
+        refresh_ttl: tucano_test::auth::DEFAULT_REFRESH_TTL,
+        bootstrap_username: None,
+        bootstrap_password: None,
+    };
+    with_probe(api::router_with_guardrails(
+        repository,
+        api::auth::AuthState::new(store, config),
+        guardrails,
+    ))
+}
+
 /// Wraps a router so every request that reaches a route is recorded.
 ///
 /// The extra layer is inert unless a coverage run names a log file with
