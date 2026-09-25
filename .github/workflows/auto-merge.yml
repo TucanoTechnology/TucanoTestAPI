@@ -36,6 +36,34 @@ jobs:
             const repo = context.repo.repo;
             const sha = context.payload.workflow_run.head_sha;
 
+            // Comment a parked pull request exactly once per (pull request,
+            // state): repeat triggers must not spam the thread, and a human
+            // must be able to see the stall and its remedy without reading
+            // skipped-looking workflow logs (issue #357).
+            async function parkWithComment(number, signature, reason) {
+              const marker = `<!-- auto-merge-parked:${signature} -->`;
+              const pages = github.paginate.iterator(github.rest.issues.listComments, {
+                owner,
+                repo,
+                issue_number: number,
+                per_page: 100,
+              });
+              for await (const page of pages) {
+                if (page.data.some((c) => (c.body || '').includes(marker))) return;
+              }
+              await github.rest.issues.createComment({
+                owner,
+                repo,
+                issue_number: number,
+                body:
+                  `⏸ **Auto-merge parked.** This pull request is ${reason}. ` +
+                  'The merge gate only re-runs when a CI run finishes, so nothing retries this on its own: ' +
+                  `bring the branch up to date with \`${info.default_branch}\` (or resolve the reported state) ` +
+                  'and the next completed run returns it here.\n' +
+                  marker,
+              });
+            }
+
             const { data: info } = await github.rest.repos.get({ owner, repo });
 
             const { data: candidates } =
@@ -120,7 +148,49 @@ jobs:
               repo,
               pull_number: pr.number,
             });
-            if (state.mergeable !== true || state.mergeable_state === 'behind') {
+            // A behind head is a stall, not a verdict (issue #357). The old
+            // behaviour logged an info line and returned; because this job is
+            // triggered by a CI run completing and nothing brought the branch
+            // up to date, a green owner PR whose base advanced parked forever.
+            // 'behind' is fixable automatically, so it is: update the branch,
+            // which produces a new head sha, and the workflow run that follows
+            // re-enters this gate with the base already included.
+            if (state.mergeable_state === 'behind') {
+              try {
+                await github.rest.pulls.updateBranch({
+                  owner,
+                  repo,
+                  pull_number: pr.number,
+                });
+                core.info(
+                  `#${pr.number} was behind ${info.default_branch}; updated the branch — the merge will be retried by the run on the new head sha.`,
+                );
+              } catch (error) {
+                await parkWithComment(
+                  pr.number,
+                  'behind-update-failed',
+                  `behind \`${info.default_branch}\`, and the automatic branch update was refused (${error.message}) — update or rebase the branch by hand`,
+                );
+                core.info(`#${pr.number}: update-branch refused (${error.message}).`);
+              }
+              return;
+            }
+            if (state.mergeable !== true) {
+              if (state.mergeable === null) {
+                // GitHub is still computing mergeability; any later completed
+                // run of the watched workflows re-enters this gate with the
+                // settled value, so this one state stays an info line.
+                core.info(`#${pr.number} is still being evaluated for mergeability.`);
+                return;
+              }
+              // A settled state no run can clear on its own (a conflicting
+              // 'dirty', a 'blocked' review, …): say so on the pull request
+              // itself, not just in this log (issue #357).
+              await parkWithComment(
+                pr.number,
+                state.mergeable_state,
+                `not mergeable (state \`${state.mergeable_state}\`)`,
+              );
               core.info(`#${pr.number} is not mergeable (${state.mergeable_state}).`);
               return;
             }
