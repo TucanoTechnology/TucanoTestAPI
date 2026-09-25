@@ -13,7 +13,7 @@ RUN cargo build --release
 
 # The base image is pulled by digest rather than by tag so the cache key is the
 # published image instead of whatever happens to be cached locally.
-FROM debian:trixie-slim@sha256:abc9cb88a5587630d7f915f47b23b0668fe250fbfc6457aa4d52b534c1bbf73f
+FROM debian:trixie-slim@sha256:a99cfc517144bc59b1978475ec53b46ecabec7e43635402ee5b77cc54cd1b20a
 
 ARG BUILD_NUMBER=local
 
