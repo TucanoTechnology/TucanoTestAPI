@@ -106,6 +106,16 @@ for the tag they deploy, not on the tag's mere presence
 - Use `cargo update` deliberately and review changes before committing
 - Lock file (`Cargo.lock`) is committed to ensure reproducible builds
 
+
+CI supply-chain pins (#333): every `uses:` call site in `.github/workflows/` references a
+full commit SHA with the release tag retained as a trailing comment, every workflow
+container image and `docker run` reference carries its manifest digest, and the
+Dockerfile bases are digest-pinned. Dependabot (`.github/dependabot.yml`) opens weekly
+bump pull requests for actions, images, and crates; the pins only move when a bump PR
+passes the full suite and merges — no silent drift, and no rot. One residual trust:
+`trivy-action` downloads its scanner binary from the action's own pinned release at run
+time, so the action SHA pins the workflow logic while the trivy build artifact arrives over
+TLS from the same repository whose commit is pinned here.
 ### Adding New Dependencies
 1. Evaluate necessity - can existing dependencies handle this?
 2. Check maintenance status - is the crate actively maintained?
