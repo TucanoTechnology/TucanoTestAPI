@@ -72,6 +72,16 @@ for the tag they deploy, not on the tag's mere presence
 ### 4. SBOM Generation (`cargo-cyclonedx`)
 - Generates a Software Bill of Materials (SBOM) in CycloneDX JSON format
 - Uploaded as a build artifact (`sbom.json`) for compliance and auditing
+- **Released with every published image** (#331): the release workflow regenerates the SBOM
+  after the published-digest scan passes and publishes it as `sbom-build-<run number>` on the
+  release run — the same immutable run number the `build-<run number>` image tag carries, so
+  an image and its SBOM join on that number. Decision recorded: the repository's release model
+  has no GitHub Release objects (the GHCR tags are the artifacts), and OCI attestation against
+  the pushed manifest was set aside because its SBOM generator would be a new pinned external
+  dependency; run-attached artifacts are the same guarantee inside the existing supply chain.
+  The one limit stated plainly: artifact retention caps at 90 days, the image lives forever —
+  a release older than its artifact re-generates from the immutable tag's source commit, and
+  the SBOM is deterministic against `Cargo.lock` at that commit.
 - The job parses the document before uploading it and **fails** if it is missing,
   empty, malformed, or lists no components, so an empty generation can never be
   published as a successful artifact
