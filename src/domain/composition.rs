@@ -231,6 +231,43 @@ fn apply_patch<T>(stored: &mut Option<T>, patch: Patch<T>) {
     }
 }
 
+/// Replaces the result a run records for a case, keeping what a request cannot
+/// describe.
+///
+/// Unlike a recording, a replacement never creates: a run that records no result
+/// for the case has nothing to replace, so it is a `404` rather than a new entry.
+/// The fields the request decides are rewritten exactly as a recording rewrites
+/// them, and the stored result's defect links and attachments are kept as they
+/// were — no request can speak for them, and dropping them would lose the
+/// failures already linked to the case.
+pub fn replace_result(run: &mut TestRun, update: ResultUpdate) -> Result<(), DomainError> {
+    let existing = result_mut(run, &update.test_case_id)?;
+    existing.status = update.status;
+    existing.timestamp = update.timestamp;
+    apply_patch(&mut existing.notes, update.notes);
+    apply_patch(&mut existing.duration_ms, update.duration_ms);
+    Ok(())
+}
+
+/// Removes the result a run records for a case.
+///
+/// A run that records no result for the case — whether it records nothing at all
+/// or records other cases — is a `404`: there is no result to remove.
+pub fn remove_result(run: &mut TestRun, case_id: &str) -> Result<(), DomainError> {
+    let results = run
+        .results
+        .as_mut()
+        .ok_or_else(|| DomainError::NotFound("Test result not found in test run".to_owned()))?;
+    let before = results.len();
+    results.retain(|existing| existing.test_case_id != case_id);
+    if results.len() == before {
+        return Err(DomainError::NotFound(
+            "Test result not found in test run".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
 /// Whether a run holds `case_id`, so it may record a result for it.
 ///
 /// A run holds a case when it declares it — under `testCases`, or through one of
@@ -596,6 +633,121 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["failure.log"]
         );
+    }
+
+    #[test]
+    fn a_replacement_rewrites_every_field_the_request_describes() {
+        let mut target = run();
+        upsert_result(&mut target, update("TC-1", "Failed"));
+
+        replace_result(
+            &mut target,
+            ResultUpdate {
+                test_case_id: "TC-1".to_owned(),
+                status: "Passed".to_owned(),
+                timestamp: "2".to_owned(),
+                notes: Patch::Set("fixed".to_owned()),
+                duration_ms: Patch::Set(900),
+            },
+        )
+        .expect("replace");
+
+        let result = &target.results.as_ref().expect("results")[0];
+        assert_eq!(result.status, "Passed");
+        assert_eq!(result.timestamp, "2");
+        assert_eq!(result.notes.as_deref(), Some("fixed"));
+        assert_eq!(result.duration_ms, Some(900));
+    }
+
+    #[test]
+    fn a_replacement_keeps_the_defect_links_and_attachments_it_cannot_describe() {
+        let mut target = run();
+        upsert_result(&mut target, update("TC-1", "Failed"));
+        attach_defect_to_result(&mut target, "TC-1", link("L-1", "BUG-42")).expect("link");
+        target.results.as_mut().expect("results")[0].attachments = Some(vec![Attachment {
+            filename: "failure.log".to_owned(),
+            original_name: "failure.log".to_owned(),
+            mime_type: "text/plain".to_owned(),
+            size: 12.0,
+            uploaded_at: None,
+        }]);
+
+        replace_result(&mut target, update("TC-1", "Passed")).expect("replace");
+
+        let result = &target.results.as_ref().expect("results")[0];
+        assert_eq!(result.status, "Passed");
+        assert_eq!(
+            result
+                .defect_links
+                .as_ref()
+                .expect("links")
+                .iter()
+                .map(|link| link.defect_id.as_str())
+                .collect::<Vec<_>>(),
+            ["BUG-42"]
+        );
+        assert_eq!(
+            result
+                .attachments
+                .as_ref()
+                .expect("attachments")
+                .iter()
+                .map(|attachment| attachment.filename.as_str())
+                .collect::<Vec<_>>(),
+            ["failure.log"]
+        );
+    }
+
+    #[test]
+    fn replacing_an_absent_result_is_not_found() {
+        let mut empty = run();
+        let error = replace_result(&mut empty, update("TC-1", "Passed"))
+            .expect_err("a run with no results has nothing to replace");
+        assert!(matches!(error, DomainError::NotFound(_)));
+        assert_eq!(empty.results, None, "a failed replacement writes nothing");
+
+        let mut other = run();
+        upsert_result(&mut other, update("TC-2", "Passed"));
+        let error = replace_result(&mut other, update("TC-1", "Passed"))
+            .expect_err("a run records no result for that case");
+        assert!(matches!(error, DomainError::NotFound(_)));
+        let results = other.results.as_ref().expect("results");
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].status, "Passed");
+    }
+
+    #[test]
+    fn removing_a_result_takes_it_out_of_the_run() {
+        let mut target = run();
+        upsert_result(&mut target, update("TC-1", "Passed"));
+        upsert_result(&mut target, update("TC-2", "Failed"));
+
+        remove_result(&mut target, "TC-1").expect("remove");
+        let results = target.results.as_ref().expect("results");
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].test_case_id, "TC-2");
+
+        remove_result(&mut target, "TC-2").expect("remove the last one");
+        assert_eq!(
+            target.results.as_ref().expect("results"),
+            &[] as &[TestCaseResult]
+        );
+    }
+
+    #[test]
+    fn removing_an_absent_result_is_not_found() {
+        let mut empty = run();
+        let error = remove_result(&mut empty, "TC-1").expect_err("no result to remove");
+        assert!(matches!(error, DomainError::NotFound(_)));
+        assert_eq!(empty.results, None, "a failed removal writes nothing");
+
+        let mut other = run();
+        upsert_result(&mut other, update("TC-2", "Passed"));
+        let error = remove_result(&mut other, "TC-1").expect_err("no result for that case");
+        assert!(matches!(error, DomainError::NotFound(_)));
+        let results = other.results.as_ref().expect("results");
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].test_case_id, "TC-2");
     }
 
     #[test]

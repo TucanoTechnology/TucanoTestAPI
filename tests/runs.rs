@@ -607,6 +607,238 @@ async fn a_result_is_refused_for_a_case_the_run_does_not_hold() {
 }
 
 #[tokio::test]
+async fn replacing_a_result_keeps_the_defects_it_cannot_describe() {
+    let (_directory, app) = test_app();
+    create_run_holding(&app, "nightly", &["TC-1"]).await;
+
+    // A result that describes itself fully, with a defect linked to it.
+    let (status, recorded) = send_json(
+        &app,
+        json_request(
+            "POST",
+            "/test_runs/nightly.json/results",
+            &json!({
+                "testCaseId": "TC-1",
+                "status": "Failed",
+                "timestamp": "2026-09-04T12:00:00Z",
+                "notes": "card declined",
+                "durationMs": 1200,
+            }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "recording: {recorded}");
+
+    let (status, linked) = send_json(
+        &app,
+        json_request(
+            "POST",
+            "/test_runs/nightly.json/results/TC-1/defects",
+            &json!({
+                "defectId": "BUG-1",
+                "defectUrl": "https://tracker.example/BUG-1",
+                "trackerType": "custom",
+            }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "linking: {linked}");
+
+    // The path names the result, so the body need not: a replacement that
+    // carries only the status the case now records is complete.
+    let (status, body) = send_json(
+        &app,
+        json_request(
+            "PUT",
+            "/test_runs/nightly.json/results/TC-1",
+            &json!({"status": "Passed"}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "replacing: {body}");
+    assert_eq!(body, json!({"message": "Test result replaced in run"}));
+
+    // It rewrites the stored result rather than adding one, and keeps what the
+    // body cannot describe: the links already hanging off the result survive,
+    // and so do the fields the request leaves out.
+    let (_, run) = send_json(&app, get("/test_runs/nightly.json")).await;
+    let results = run["results"].as_array().expect("results array");
+    assert_eq!(results.len(), 1, "a replacement does not add one: {run}");
+    let result = &results[0];
+    assert_eq!(result["testCaseId"], "TC-1");
+    assert_eq!(result["status"], "Passed");
+    assert_eq!(result["notes"], "card declined");
+    assert_eq!(result["durationMs"], 1200);
+    assert_eq!(result["defectLinks"][0]["defectId"], "BUG-1");
+
+    // `status` and `timestamp` are the two fields a replacement always
+    // describes, exactly as a recording does, so an omitted `timestamp` is the
+    // current time rather than the stored one.
+    let replaced_at = result["timestamp"]
+        .as_str()
+        .expect("a replaced result carries a timestamp");
+    assert!(
+        replaced_at.parse::<u64>().is_ok(),
+        "an omitted timestamp falls back to Unix seconds, got {replaced_at}"
+    );
+
+    // A body may name the case as long as it agrees with the path, and an
+    // explicit `null` clears a stored field.
+    let (status, body) = send_json(
+        &app,
+        json_request(
+            "PUT",
+            "/test_runs/nightly.json/results/TC-1",
+            &json!({
+                "testCaseId": "TC-1",
+                "status": "Blocked",
+                "timestamp": "2026-09-04T13:00:00Z",
+                "notes": null,
+            }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "replacing again: {body}");
+
+    let (_, run) = send_json(&app, get("/test_runs/nightly.json")).await;
+    let result = &run["results"][0];
+    assert_eq!(result["status"], "Blocked");
+    assert_eq!(result["timestamp"], "2026-09-04T13:00:00Z");
+    assert!(
+        result.get("notes").is_none(),
+        "an explicit null clears the stored notes: {result}"
+    );
+    assert_eq!(result["defectLinks"][0]["defectId"], "BUG-1");
+
+    // A body that points the replacement at another case is refused rather than
+    // quietly retargeted, and the mismatch writes nothing.
+    let (status, body) = send_json(
+        &app,
+        json_request(
+            "PUT",
+            "/test_runs/nightly.json/results/TC-1",
+            &json!({"testCaseId": "TC-2", "status": "Passed"}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "mismatched case: {body}");
+    assert_error_envelope(&body, "invalid_request");
+
+    // The replacement validates its body the way a recording does, so a body
+    // that names no status is refused before the run is read.
+    let (status, body) = send_json(
+        &app,
+        json_request("PUT", "/test_runs/nightly.json/results/TC-1", &json!({})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "no status: {body}");
+    assert_error_envelope(&body, "invalid_request");
+
+    let (_, run) = send_json(&app, get("/test_runs/nightly.json")).await;
+    let result = &run["results"][0];
+    assert_eq!(result["status"], "Blocked", "nothing was written: {run}");
+
+    // A replacement never creates: a run that stores no result for the case —
+    // whether it records other cases or no results at all — answers 404, and so
+    // does a run that does not exist.
+    let (status, body) = send_json(
+        &app,
+        json_request(
+            "PUT",
+            "/test_runs/nightly.json/results/TC-2",
+            &json!({"status": "Passed"}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "absent result: {body}");
+    assert_error_envelope(&body, "not_found");
+
+    create_run_holding(&app, "empty", &["TC-9"]).await;
+    let (status, body) = send_json(
+        &app,
+        json_request(
+            "PUT",
+            "/test_runs/empty.json/results/TC-9",
+            &json!({"status": "Passed"}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "no results at all: {body}");
+    assert_error_envelope(&body, "not_found");
+
+    let (status, body) = send_json(
+        &app,
+        json_request(
+            "PUT",
+            "/test_runs/missing.json/results/TC-1",
+            &json!({"status": "Passed"}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "unknown run: {body}");
+    assert_error_envelope(&body, "not_found");
+}
+
+#[tokio::test]
+async fn removing_a_result_takes_it_out_of_the_run() {
+    let (_directory, app) = test_app();
+    create_run_holding(&app, "nightly", &["TC-1", "TC-2"]).await;
+
+    for case_id in ["TC-1", "TC-2"] {
+        let (status, body) = send_json(
+            &app,
+            json_request(
+                "POST",
+                "/test_runs/nightly.json/results",
+                &json!({"testCaseId": case_id, "status": "Failed"}),
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "recording {case_id}: {body}");
+    }
+
+    // The path names the result, and removing one takes out that result alone.
+    let (status, body) = send_json(&app, delete("/test_runs/nightly.json/results/TC-1")).await;
+    assert_eq!(status, StatusCode::OK, "removing: {body}");
+    assert_eq!(body, json!({"message": "Test result removed from run"}));
+
+    let (_, run) = send_json(&app, get("/test_runs/nightly.json")).await;
+    let results = run["results"].as_array().expect("results array");
+    assert_eq!(results.len(), 1, "one result is left: {run}");
+    assert_eq!(results[0]["testCaseId"], "TC-2");
+
+    // The result is gone as a result, not merely emptied: the routes that hang
+    // off it no longer find one.
+    let (status, body) = send_json(&app, get("/test_runs/nightly.json/results/TC-1/defects")).await;
+    assert_eq!(
+        status,
+        StatusCode::NOT_FOUND,
+        "defects of a removed result: {body}"
+    );
+    assert_error_envelope(&body, "not_found");
+
+    // The same result cannot be removed twice, a case the run records no result
+    // for is not found, and neither is a case of a run that records nothing.
+    let (status, body) = send_json(&app, delete("/test_runs/nightly.json/results/TC-1")).await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "removing twice: {body}");
+    assert_error_envelope(&body, "not_found");
+
+    let (status, body) = send_json(&app, delete("/test_runs/nightly.json/results/TC-9")).await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "never recorded: {body}");
+    assert_error_envelope(&body, "not_found");
+
+    create_run_holding(&app, "empty", &["TC-9"]).await;
+    let (status, body) = send_json(&app, delete("/test_runs/empty.json/results/TC-9")).await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "no results at all: {body}");
+    assert_error_envelope(&body, "not_found");
+
+    // A run that does not exist is not found as a run.
+    let (status, body) = send_json(&app, delete("/test_runs/missing.json/results/TC-1")).await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "unknown run: {body}");
+    assert_error_envelope(&body, "not_found");
+}
+
+#[tokio::test]
 async fn a_run_links_and_unlinks_a_top_level_configuration() {
     let (_directory, app) = test_app();
     assert_eq!(
