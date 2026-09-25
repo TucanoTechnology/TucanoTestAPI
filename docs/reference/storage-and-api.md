@@ -194,6 +194,9 @@ names.
 | `TUCANO_CONFIG_FILE` | — | Path to the optional configuration file described below. Environment-only; unset means no file. |
 | `TUCANO_CONFIG_KEY_FILE` | — | Path to the key ring file for decrypting AEAD-encrypted secrets in the configuration file. Environment-only; unset means no encryption keys. |
 | `TUCANO_LOCK_TIMEOUT_MS` | `5000` | Milliseconds a write waits for the advisory lock before it is refused with `503 lock_timeout`. Environment-only; must be a whole number, and anything else stops startup. An empty value is not a number but keeps the default, like an unset one. |
+| `TUCANO_MAX_BODY_BYTES` | `52428800` | Largest request body the router accepts, bytes. Environment-only; a whole number above zero, and anything else stops startup (#103). |
+| `TUCANO_REQUEST_TIMEOUT_MS` | `300000` | Wall clock a request may take before the `504` `request_timeout` answer cuts it off. `0` disables the deadline. Environment-only; a whole number or startup stops (#103). |
+| `TUCANO_MAX_CONCURRENCY` | `128` | Requests in flight before the `503` `service_unavailable` refusal with `Retry-After`. `0` removes the cap. Environment-only; a whole number or startup stops (#103). |
 | `TUCANO_AUTH_REQUIRED` | `false` | Require and enforce a bearer token on every guarded route. When off, every guard returns and the API is anonymous. |
 | `TUCANO_JWT_SECRET` | — | The HS256 signing secret. Required when auth is on; at least 32 bytes. |
 | `TUCANO_JWT_SECRET_FILE` | — | A file to read the secret from. Set this **or** `TUCANO_JWT_SECRET`, never both. |
@@ -280,7 +283,7 @@ additionally carries a `WWW-Authenticate: Bearer realm="…"` challenge.
 Two answers do not use the envelope, because they come from the router or an extractor rather than from a
 handler:
 
-- A request body larger than 50 MiB is refused by the router's size limit with `413` and the plain-text body
+- A request body larger than `TUCANO_MAX_BODY_BYTES` (default 50 MiB) is refused by the router's size limit with `413` and the plain-text body
   `length limit exceeded`. The limit applies to every route, so it is checked before any handler runs.
 - A body the multipart extractor cannot frame — an upload sent as JSON, or without a boundary — is answered
   with `400 text/plain`. Once the framing parses, upload rejections use the structured envelope
@@ -296,7 +299,15 @@ requires a shared persistent POSIX volume mounted at the same `TUCANO_DATA_DIR` 
 Repository mutations use an advisory lock file and atomic same-directory renames. A write that
 cannot take the lock within `TUCANO_LOCK_TIMEOUT_MS` (default `5000` ms) is refused with
 `503 lock_timeout` and a `Retry-After`, so a busy volume is answered rather than queued behind
-indefinitely. A local Docker volume is suitable for one node; multi-node deployments must provide
+indefinitely. Two ceilings stand beside it on the request path
+(#103): a request that outlives `TUCANO_REQUEST_TIMEOUT_MS` is cut off with `504
+request_timeout` — and because the storage layer publishes atomically, a write already handed to it
+when the deadline fired still ends as a whole document or the old one, never a half, so the answer
+means 'unknown', never 'half done' — and while `TUCANO_MAX_CONCURRENCY` requests are in flight new
+ones are refused with `503 service_unavailable` and a `Retry-After` rather than queued by the
+server. Both guards sit outside the body limit inside the request-id and tracing layers, so a
+refusal still carries a request id, appears in the metrics, and answers the same envelope as any
+other rejection. A local Docker volume is suitable for one node; multi-node deployments must provide
 shared storage with working advisory locks. Do not use separate per-replica local volumes, or data
 will diverge. The filesystem is the only storage backend: object storage (S3) was declined as a
 persistence backend by

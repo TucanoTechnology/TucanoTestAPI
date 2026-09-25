@@ -1553,6 +1553,7 @@ dependencies = [
  "base64",
  "criterion",
  "fs2",
+ "futures-core",
  "getrandom 0.2.17",
  "hmac",
  "http-body-util",
