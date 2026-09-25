@@ -15,6 +15,7 @@ mod cases;
 mod configurations;
 mod crud;
 mod error;
+pub mod guardrails;
 mod metrics;
 mod milestones;
 mod projects;
@@ -39,6 +40,7 @@ use serde_json::{Value, json};
 use tower_http::{limit::RequestBodyLimitLayer, trace::TraceLayer};
 
 use self::auth::AuthState;
+use self::guardrails::{GuardrailState, Guardrails};
 use self::metrics::HttpMetrics;
 use crate::{
     domain::{MAX_ATTACHMENT_BYTES, TestService},
@@ -62,15 +64,32 @@ pub struct AppState<R> {
     service: Arc<TestService<R>>,
     auth: AuthState,
     metrics: Arc<HttpMetrics>,
+    guardrails: Arc<GuardrailState>,
 }
 
 impl<R> AppState<R> {
     /// Pairs `service` with the authentication material `auth`.
     pub fn new(service: TestService<R>, auth: AuthState) -> Self {
+        Self::with_guardrails(service, auth, Guardrails::default())
+    }
+
+    /// The bounds the guardrail middleware enforces on every request.
+    pub(crate) fn guardrails(&self) -> &Arc<GuardrailState> {
+        &self.guardrails
+    }
+
+    /// Pairs `service` with `auth` under an explicit set of request bounds;
+    /// the guardrails a deployment configured at startup (#103).
+    pub(crate) fn with_guardrails(
+        service: TestService<R>,
+        auth: AuthState,
+        guardrails: Guardrails,
+    ) -> Self {
         Self {
             service: Arc::new(service),
             auth,
             metrics: Arc::new(HttpMetrics::new()),
+            guardrails: Arc::new(guardrails.state()),
         }
     }
 
@@ -101,6 +120,7 @@ impl<R> Clone for AppState<R> {
             service: Arc::clone(&self.service),
             auth: self.auth.clone(),
             metrics: Arc::clone(&self.metrics),
+            guardrails: Arc::clone(&self.guardrails),
         }
     }
 }
@@ -204,13 +224,21 @@ pub const UNDOCUMENTED_ROUTES: &[&str] = &[
     "/configurations",
 ];
 
-/// Builds the application, backed by `repository` and authenticated with
-/// `auth`.
+/// Builds the application under the default request bounds.
 pub fn router<R>(repository: R, auth: AuthState) -> Router
 where
     R: Repository + 'static,
 {
-    let state = AppState::new(TestService::new(repository), auth);
+    router_with_guardrails(repository, auth, Guardrails::default())
+}
+
+/// Builds the application, backed by `repository`, authenticated with `auth`,
+/// and bounded by `guardrails` (#103).
+pub fn router_with_guardrails<R>(repository: R, auth: AuthState, guardrails: Guardrails) -> Router
+where
+    R: Repository + 'static,
+{
+    let state = AppState::with_guardrails(TestService::new(repository), auth, guardrails);
 
     Router::<AppState<R>>::new()
         .route("/health", get(health))
@@ -228,7 +256,21 @@ where
         .merge(reports::routes::<R>())
         .merge(configurations::routes::<R>())
         .merge(auth::routes::<R>())
-        .layer(RequestBodyLimitLayer::new(MAX_BODY_BYTES))
+        .layer(RequestBodyLimitLayer::new(
+            state.guardrails().limits.max_body_bytes,
+        ))
+        // The permit layer sits outside the body limit so the in-flight count
+        // covers reading the body, and the timeout outside everything below
+        // Trace: a request cut off or refused still carries the span, the
+        // request id, and the metric counters like any other answer (#103).
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            guardrails::timeout::<R>,
+        ))
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            guardrails::concurrency::<R>,
+        ))
         .layer(
             TraceLayer::new_for_http()
                 .make_span_with(request_id::request_span)

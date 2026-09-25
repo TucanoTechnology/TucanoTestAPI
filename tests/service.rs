@@ -1984,6 +1984,8 @@ const ERROR_CODES: &[&str] = &[
     "invalid_refresh_token",
     "forbidden",
     "not_ready",
+    "request_timeout",
+    "service_unavailable",
 ];
 
 /// Every `$ref` the document contains, wherever it sits.
