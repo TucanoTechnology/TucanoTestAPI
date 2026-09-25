@@ -1,0 +1,45 @@
+# cargo-deny policy — the machine-checked half of docs/security/scanning-policy.md
+# (§ Version Pinning, § Advisory Scanning) for the dependency tree (#359).
+#
+# Scope note from the ticket: cargo-deny checks the four classes below. It cannot
+# express "every requirement is exact-pinned"; the policy's pinning model is
+# caret ranges plus the committed Cargo.lock, which is what `sources` and `bans`
+# here protect: everything must come from crates.io, and no wildcard requirement
+# may sneak into the manifests.
+
+[graph]
+targets = []
+all-features = true
+
+[advisories]
+# The RustSec advisory database, fetched over the network in CI (same source as
+# cargo-audit; overlap is deliberate — one file describes the policy).
+db-urls = ["https://github.com/RustSec/advisory-db"]
+db-path = "~/.cargo/advisory-db"
+version = 2
+
+[licenses]
+allow = [
+    "AGPL-3.0-or-later",   # the repository's own license (LICENSE, Cargo.toml)
+    "MIT",
+    "Apache-2.0",
+    "BSD-3-Clause",
+    "Unicode-3.0",
+]
+confidence-threshold = 0.93
+private = { ignore = false }
+
+
+[bans]
+multiple-versions = "warn"   # transitive multi-version coexistence is normal in
+                             # the Rust graph (proc-macro stacks etc.); the policy
+                             # is to review, not to auto-fail — direct duplicates
+                             # show up in every PR's diff regardless.
+wildcards = "deny"           # no `*` requirements anywhere in the graph
+highlight = "all"
+
+[sources]
+unknown-registry = "deny"    # crates.io only
+unknown-git = "deny"         # no git dependencies
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []
