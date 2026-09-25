@@ -362,6 +362,7 @@ reference](docs/reference/storage-and-api.md). The error contract reconciliation
 | [docs/deployment/config.example.json](docs/deployment/config.example.json) | The configuration-file template, kept valid against the loader's schema by a unit test |
 | [docs/deployment/configuration-reference.md](docs/deployment/configuration-reference.md) | Every setting: environment variable, file key, default, sensitivity, precedence rules, validation rules, and the encrypted-secret envelope format (#190) |
 | [docs/deployment/canary-validation-and-rollback.md](docs/deployment/canary-validation-and-rollback.md) | Canary validation, the scratch-CRUD smoke check, and safe rollback |
+| [docs/deployment/off-box-mirror-runbook.md](docs/deployment/off-box-mirror-runbook.md) | The off-box mirror and backup runbook: quiesced gold copies, convergent live mirrors, the restore drill, and retention (#246) |
 | [docs/security/threat-model.md](docs/security/threat-model.md) | Trust boundaries, abuse cases, and security invariants |
 | [docs/security/authentication-decision.md](docs/security/authentication-decision.md) | The authentication decision and its implemented tracking ticket (#130) |
 | [docs/security/configuration-decision.md](docs/security/configuration-decision.md) | The configuration and secrets decision (#187): environment variables versus a unified file, precedence, and key management |
