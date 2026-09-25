@@ -119,6 +119,21 @@ pub trait Repository: Send + Sync {
         value: &Value,
     ) -> io::Result<()>;
 
+    /// Create a document, refusing one the addressed location already holds.
+    ///
+    /// The existence check and the write are one operation under one lock
+    /// acquisition, so a create cannot interleave with another create of the
+    /// same identifier: the loser of that race reports
+    /// [`io::ErrorKind::AlreadyExists`] instead of overwriting the winner. A
+    /// separate `exists_at` followed by `write_at` cannot give that guarantee.
+    fn create_at(
+        &self,
+        resource: Resource,
+        parent: Option<&Parent>,
+        id: &str,
+        value: &Value,
+    ) -> io::Result<()>;
+
     /// Read, transform and write a document under one lock.
     ///
     /// Acquires the advisory lock, re-reads the document, passes it to `transform`
