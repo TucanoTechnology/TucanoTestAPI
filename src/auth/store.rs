@@ -137,10 +137,15 @@ impl AuthStore {
     /// The project is named the way the tree names it: the wire id loses its
     /// `.json` suffix to become a folder name, which is then validated, so a
     /// project identifier can never address a file outside `auth/projects/`.
+    /// The document name the folder composes is validated too: the suffix can
+    /// push an otherwise acceptable folder past the filesystem's name limit,
+    /// and the grant write must be a bad request rather than a storage failure.
     fn grant_path(&self, project_id: &str) -> io::Result<PathBuf> {
         let folder = folder_name(project_id);
         validate_component(folder)?;
-        let path = self.grants_dir().join(format!("{folder}.json"));
+        let document = format!("{folder}.json");
+        validate_component(&document)?;
+        let path = self.grants_dir().join(document);
         ensure_within(&self.root, &path)?;
         Ok(path)
     }
@@ -829,6 +834,27 @@ mod tests {
                 "{escape} must not resolve"
             );
         }
+    }
+
+    #[test]
+    fn an_over_long_project_identifier_is_refused_as_a_client_error() {
+        let (_directory, store) = store();
+
+        // The grant document adds `.json` to the project's folder, so a
+        // 251-byte identifier composes a 256-byte name — one the filesystem
+        // cannot hold. The grant must be refused before any write is attempted.
+        let refused = format!("{}.json", "n".repeat(251));
+        assert_eq!(
+            store.role_of(&refused, "u1").expect_err("refused").kind(),
+            io::ErrorKind::InvalidInput
+        );
+
+        // A 250-byte identifier composes exactly the filesystem's limit.
+        let longest = format!("{}.json", "n".repeat(250));
+        assert_eq!(store.role_of(&longest, "u1").expect("grant"), None);
+        store
+            .set_role(&longest, "u1", Role::Owner)
+            .expect("a project identifier at the name limit is accepted");
     }
 
     #[test]

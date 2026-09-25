@@ -643,6 +643,89 @@ async fn a_step_attachment_name_may_not_traverse() {
     assert_eq!(listing, json!([]));
 }
 
+#[tokio::test]
+async fn an_over_long_attachment_name_is_a_client_error_not_a_storage_failure() {
+    let (_directory, app) = test_app();
+
+    // Two cases in one project: a plain one for the case-level route and one
+    // carrying a structured step for the step-level route.
+    let project = common::create_project(&app, "checkout").await;
+    let cases = format!("/projects/{project}/test_cases");
+    common::create_case_in(&app, &cases, "TC-001").await;
+    let (status, body) = send_json(
+        &app,
+        json_request(
+            "POST",
+            &cases,
+            &json!({
+                "testCaseId": "TC-STEPS",
+                "title": "Order flow",
+                "expectedResult": "Confirmation modal shown",
+                "steps": ["Open the product page", {"action": "Click Checkout"}],
+            }),
+        ),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::CREATED,
+        "creating the step case: {body}"
+    );
+
+    // The stored name prefixes the client's own with a unique suffix, so a file
+    // name that is acceptable on its own can still compose a name the
+    // filesystem cannot hold. Refusing it here keeps the upload a bad request
+    // instead of a write that fails with `ENAMETOOLONG`.
+    let refused = "n".repeat(255);
+    let acceptable = "n".repeat(200);
+    let case_uri = "/test_cases/TC-001/attachments";
+    let step_uri = "/test_cases/TC-STEPS/steps/1/attachments";
+
+    for uri in [case_uri, step_uri] {
+        let (status, body) = send_json(&app, multipart_request(uri, &refused, b"evidence")).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "POST {uri}: {body}");
+        assert_error_envelope(&body, "invalid_request");
+    }
+
+    let (status, uploaded) =
+        send_json(&app, multipart_request(case_uri, &acceptable, b"evidence")).await;
+    assert_eq!(status, StatusCode::CREATED, "{uploaded}");
+    let filename = uploaded["filename"].as_str().expect("stored filename");
+    assert!(
+        filename.ends_with(&format!("-{acceptable}")),
+        "stored name: {filename}"
+    );
+
+    // A refused upload leaves nothing behind.
+    let (status, document) = send_json(&app, get("/test_cases/TC-001")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        document["attachments"]
+            .as_array()
+            .expect("attachments")
+            .len(),
+        1,
+        "only the accepted upload is recorded: {document}"
+    );
+
+    // A name the filesystem could not hold is a client error on the file
+    // routes too, never a storage failure.
+    let over_long = "n".repeat(256);
+    let case_file = format!("{case_uri}/{over_long}");
+
+    let (status, body) = send_json(&app, get(&case_file)).await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "GET {case_file}: {body}");
+    assert_error_envelope(&body, "not_found");
+
+    // The step file route serves DELETE only, so the same bound is exercised
+    // through the verb it answers.
+    for uri in [case_file, format!("{step_uri}/{over_long}")] {
+        let (status, body) = send_json(&app, delete(&uri)).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "DELETE {uri}: {body}");
+        assert_error_envelope(&body, "not_found");
+    }
+}
+
 /// One identifier in two folders, each copy carrying a structured step: the
 /// project's own case and the copy composed into its suite. This is the shape
 /// the bare-identifier routes refuse and the parent-scoped routes exist for.

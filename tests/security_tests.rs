@@ -163,6 +163,8 @@ mod hardlink_tests {
 #[cfg(test)]
 mod malformed_json_tests {
     use super::*;
+    use axum::http::StatusCode;
+    use serde_json::json;
 
     #[test]
     fn test_rejects_malformed_json() {
@@ -196,6 +198,56 @@ mod malformed_json_tests {
         });
         let result = repo.write_at(Resource::Projects, None, "P-001.json", &value);
         assert!(result.is_ok(), "Repository layer does not validate schema");
+    }
+
+    /// A stored document that parses as JSON but does not deserialise into the
+    /// shape its route declares is refused at the read boundary: the API answers
+    /// the same safe `500 storage_error` the unparseable variants answer, never
+    /// the foreign payload, and the stored file survives byte-identical.
+    #[tokio::test]
+    async fn a_wrong_shaped_stored_document_is_refused_and_preserved() {
+        let directory = TempDir::new().expect("temp dir");
+        let case = directory.path().join("projects/Checkout/TC-COPY-1");
+        std::fs::create_dir_all(&case).expect("case folder");
+        std::fs::write(
+            directory.path().join("projects/Checkout/project.json"),
+            br#"{"projectId":"Checkout","name":"Checkout","testSuites":[]}"#,
+        )
+        .expect("project marker");
+        // Valid JSON, wrong shape: an array where the case model declares an
+        // object.
+        let marker = case.join("test-case.json");
+        std::fs::write(&marker, b"[1,2,3]").expect("hostile document");
+        let app = common::app_at(directory.path());
+
+        let (status, headers, body) =
+            common::send_full(&app, common::get("/test_cases/TC-COPY-1")).await;
+
+        assert_eq!(
+            status,
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "a stored document whose shape contradicts its model must not be served"
+        );
+        assert_eq!(common::content_type(&headers), Some("application/json"));
+        let text = std::str::from_utf8(&body).expect("the refusal is UTF-8");
+        assert!(
+            !text.contains("1,2,3"),
+            "the refusal must not echo the stored bytes: {text}"
+        );
+
+        let value: serde_json::Value = serde_json::from_slice(&body).expect("the error envelope");
+        common::assert_error_envelope(&value, "storage_error");
+        assert_eq!(
+            value["error"]["message"],
+            json!("Stored JSON is invalid"),
+            "the refusal carries the stable message and no serde detail"
+        );
+
+        assert_eq!(
+            std::fs::read(&marker).expect("the stored document is preserved"),
+            b"[1,2,3]",
+            "the refused read leaves the stored file untouched"
+        );
     }
 }
 

@@ -1425,6 +1425,64 @@ contract, and this section records them.
   acknowledged value are asserted readable back) and `tests/concurrency.rs`
   (`::test_concurrent_updates_return_412_on_etag_mismatch`, `::test_concurrent_creates_all_succeed`,
   `::test_concurrent_mixed_read_write`, `::test_lock_contention_latency`).
+## Stored Component Length Bound Plan (Issue #324)
+
+Issue: [#324](https://github.com/TucanoTechnology/TucanoTestAPI/issues/324) — `validate_component` and
+`validate_document_id` in `src/storage/layout.rs` refused a hostile component but imposed no length bound, so an
+identifier or name longer than the filesystem's per-name limit was accepted at the API layer and failed only
+when the store wrote it, reaching the client as `500 storage_error` (audit findings F-176-3 and F-177-4, one
+root cause merged by the #180 triage; CWE-20).
+
+- **One bound, beside the other component rules.** `MAX_COMPONENT_BYTES` (`255`, the filesystem's `NAME_MAX`)
+  is checked in `validate_component`, where the empty, `.`, `..`, separator and NUL rules already live, and it
+  refuses with the `InvalidInput` those rules already raise. Everything that composes a path —
+  `validate_document_id`, `folder_name`, `node_folder`, `project_dir`, `attachment_path`,
+  `step_attachment_path` — therefore inherits it, and the answer is decided before any syscall rather than by
+  how the platform maps `ENAMETOOLONG`. On the read paths `InvalidInput` becomes `400 invalid_id`; on a create
+  it becomes `400 invalid_request`.
+- **The bound counts the stored component, never the wire identifier.** A project, a suite and a case are
+  stored as a folder holding a fixed marker (`project.json`, `suite.json`, `test-case.json`), so the `.json`
+  suffix their identifier carries is wire-only and the folder is what has to fit: a 255-byte name is stored, a
+  256-byte name is `400 invalid_request`, and a `GET /projects/{255-byte folder}.json` is a legal address that
+  answers `404` rather than `400`. Bounding the whole identifier instead would have made a project or suite the
+  API had just created under a 251–255-byte folder unreachable, since the suffix is required to address it.
+- **A run, a milestone and a configuration are documents, so their name has five bytes less room.** Each is
+  stored as the file `{name}.json` in its project's collection, so the file name is the wire id verbatim: a
+  250-byte name is stored (a 255-byte component) and reads back, and a 251-byte name — a 256-byte component —
+  is refused `400 invalid_request`.
+- **A 256-byte path identifier is `400 invalid_id`, not `500` and not `404`.** A test case is addressed by its
+  identifier verbatim, so a 255-byte one answers `404` (nothing is stored under it) and a 256-byte one is
+  refused on read and on delete alike. A project addressed by a 256-byte folder name in its `.json`
+  identifier, and a run, a milestone or a configuration addressed by a 256-byte identifier, hit the same bound
+  and draw the same answer.
+- **Attachment filenames are bounded too.** An upload is stored as `{suffix}-{original name}`, so the component
+  the store writes is longer than the client's filename; the case-level and the step-level upload route both
+  refuse a name that would push that component past the limit with `400 invalid_request`, and nothing is
+  recorded or written for it. Reading or deleting a filename longer than the limit keeps the `404 not_found` it
+  always answered: the component rules have always read an unusable attachment name as not-found, and this
+  change does not alter that.
+- **The auth store's grant paths validate both halves.** `grant_path` composes `{folder}.json` from a project
+  identifier, so it checks the folder and the composed document name; an over-long identifier in a role-grant
+  request is answered as a client error through `require_role` rather than as a storage failure.
+- **What this changes for a client.** No request that used to succeed is refused and nothing that was storable
+  becomes unstorable: a name or identifier that composes an over-long component and used to fail the write as
+  `500 storage_error` is now `400 invalid_request` or `400 invalid_id`. Two answers for requests that already
+  failed still move. An over-long identifier in a path used to be addressed past the store — the walk's
+  `is_file()` saw nothing under a name the platform refused to resolve — and answered `404 not_found`; it is
+  now `400 invalid_id` before the walk, so `GET /test_cases/{256-byte id}`,
+  `GET /projects/{256-byte folder}.json` and `GET /test_runs/{251-byte name}.json` moved from `404` to `400`.
+  A `PUT` body carrying a *differing* over-long identity is now `400 invalid_id` where it was
+  `400 invalid_request`, because the value is judged unusable before it is judged foreign. Both remain client
+  errors, and these error-code changes for requests that already failed are the deviation, recorded in the
+  accounting below and in `openapi.json`.
+- Deviation recorded with tests in
+  `tests/service.rs::an_over_long_name_is_a_client_error_not_a_storage_failure`,
+  `::an_over_long_identifier_in_a_path_is_a_client_error_not_a_storage_failure`,
+  `tests/attachments.rs::an_over_long_attachment_name_is_a_client_error_not_a_storage_failure`, and the unit
+  tests beside the rules in `src/storage/layout.rs`
+  (`::an_over_long_component_is_refused_at_the_name_limit`,
+  `::an_over_long_identifier_is_refused_before_any_path_is_built`) and `src/auth/store.rs`
+  (`::an_over_long_project_identifier_is_refused_as_a_client_error`).
 
 ## Breaking change accounting
 
@@ -1545,11 +1603,13 @@ contract, and this section records them.
   mattered most for `tags`, declared `Option<Vec<String>>` and published as
   `{"type":"array","items":{"type":"string"}}`: a document stored with `"tags": "smoke"` was served back as
   valid while the documented `GET /projects?tags=smoke` silently never matched it. The partial payloads the API
-  has always accepted, a `null` field, and the unknown-key rejection are all unchanged, and stored documents are
-  still never re-validated or rewritten, so a document persisted with an old wrong-typed field keeps answering
-  `GET`. The check is driven by the models — a `Default` instance is serialised and each present field is probed
-  against it — so a field renamed in `src/models.rs` cannot drift out of the check. Deviation recorded with
-  tests in `tests/validation.rs` and `tests/tags.rs::a_wrong_typed_scalar_is_rejected_with_the_field_named`.
+  has always accepted, a `null` field, and the unknown-key rejection are all unchanged, and no write
+  re-validates or rewrites a stored document, so a document persisted with an old wrong-typed field is left
+  exactly as it is on disk. Since Issue #326 such a document is refused when it is read — `500 storage_error` —
+  rather than served as raw JSON, and the `PUT` that merges into it still repairs it. The check is driven by the
+  models — a `Default` instance is serialised and each present field is probed against it — so a field renamed
+  in `src/models.rs` cannot drift out of the check. Deviation recorded with tests in `tests/validation.rs` and
+  `tests/tags.rs::a_wrong_typed_scalar_is_rejected_with_the_field_named`.
 - **JUnit XML result import added** (Issue #85, plan above). `POST /test_runs/{id}/import/junit` and its
   `ImportSummary` / `ImportCounts` schemas are new; the route writes the same `TestCaseResult` the results route
   already does, so no stored document shape changed and no response that existed before was altered. Additive
@@ -1851,6 +1911,31 @@ contract, and this section records them.
   `::removing_an_absent_result_is_not_found`) and `src/domain/service/tests.rs`
   (`::a_result_is_replaced_by_the_case_the_route_addresses`,
   `::replacing_or_removing_an_absent_result_is_not_found`).
+- **An over-long stored component is a client error rather than a storage failure** (Issue #324, plan above).
+  `MAX_COMPONENT_BYTES` (`255`) is now enforced in `validate_component`, so a name or identifier that composes
+  a longer component — including the `{suffix}-{original name}` an attachment is stored under — is answered
+  `400 invalid_request`, or `400 invalid_id` when it arrives in a path, instead of the `500 storage_error` the
+  filesystem's `ENAMETOOLONG` produced. An over-long identifier in a path also moves from the `404 not_found`
+  the walk answered for a name the platform could not resolve to `400 invalid_id`, and a `PUT` body carrying a
+  differing over-long identity moves from `400 invalid_request` to `400 invalid_id`. No request that used to
+  succeed is refused and no stored document changes shape; the deviation is the error code a request that
+  already failed now receives. Deviation recorded with tests in `tests/service.rs`, `tests/attachments.rs`,
+  `src/storage/layout.rs` and `src/auth/store.rs` as listed in the plan.
+- **Stored documents are shape-checked on read** (Issue #326). A document that parses as JSON but does not
+  deserialise into the model its route declares is no longer served: the read answers the stable
+  `500 storage_error` envelope with the message `Stored JSON is invalid`, instead of handing a client the raw
+  stored value. The reported case is a case folder holding `[1,2,3]`, so `GET /test_cases/TC-COPY-1` answered
+  `200` with `[1,2,3]`; the same now holds for any stored `TestCase`, `Project`, `TestSuite`, `TestRun`,
+  `Milestone` or `TestConfiguration` whose shape contradicts its model. The three malformed variants the
+  storage layer already refused — truncated JSON, invalid UTF-8 and an oversized blob — are unchanged, and this
+  closes the fourth: valid JSON of the wrong shape. The narrowing is deliberate. The Issue #71 and Issue #121
+  entries above promised that stored documents are never re-validated, and the read path now deserialises a
+  stored document to decide whether it may be served. What is *not* narrowed: the stored bytes are never
+  rewritten, so a refused read leaves the file byte-identical; no write is refused because of the shape already
+  on disk, because the write gate judges only the supplied body, so a legacy document is still repairable by the
+  `PUT` that merges into it; listings read identifiers rather than bodies and still answer; and no documented
+  success response shape changed. Deviation recorded with tests in `tests/validation.rs` and
+  `tests/security_tests.rs::a_wrong_shaped_stored_document_is_refused_and_preserved`.
 
 - **Release and environment listings added** (Issue #262). `GET /releases` and `GET /environments` are new
   guarded read operations answering `200` with a JSON array of strings — the distinct, byte-wise sorted `name`

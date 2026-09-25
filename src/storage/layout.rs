@@ -22,6 +22,16 @@ use std::time::{SystemTime, UNIX_EPOCH};
 /// resource it is not, so the name is refused instead.
 pub const RESERVED_PROJECT_CHILDREN: [&str; 3] = ["test_runs", "milestones", "configurations"];
 
+/// Longest name one stored component may have, counted in bytes.
+///
+/// The bound is the filesystem's own limit on a single name (`NAME_MAX`), so it
+/// holds for every component the tree stores: a project or suite folder, a
+/// document, or an attachment file. Refusing a longer component here, beside
+/// the other component rules, keeps an over-long identifier a client error
+/// instead of a write the filesystem rejects with `ENAMETOOLONG` — which would
+/// reach the client as a storage failure.
+pub const MAX_COMPONENT_BYTES: usize = 255;
+
 /// A resource collection known to the storage layout.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Resource {
@@ -363,7 +373,8 @@ pub fn step_attachment_path(
     Ok(path)
 }
 
-/// Reject anything that is not a single, plain path component.
+/// Reject anything that is not a single, plain path component, or that is too
+/// long for the filesystem to hold as one name ([`MAX_COMPONENT_BYTES`]).
 pub fn validate_component(component: &str) -> io::Result<()> {
     if component.is_empty()
         || component == "."
@@ -375,6 +386,12 @@ pub fn validate_component(component: &str) -> io::Result<()> {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
             "invalid path component",
+        ));
+    }
+    if component.len() > MAX_COMPONENT_BYTES {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "path component is too long",
         ));
     }
     Ok(())
@@ -913,6 +930,93 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn an_over_long_component_is_refused_at_the_name_limit() {
+        let at_limit = "n".repeat(MAX_COMPONENT_BYTES);
+        assert!(validate_component(&at_limit).is_ok());
+        let past_limit = "n".repeat(MAX_COMPONENT_BYTES + 1);
+        let error = validate_component(&past_limit).expect_err("refused");
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+    }
+
+    #[test]
+    fn an_over_long_identifier_is_refused_before_any_path_is_built() {
+        let directory = TempDir::new().expect("temp dir");
+        let root = directory.path();
+        let parent = Parent::Project("checkout.json".to_owned());
+
+        // A name-derived wire id carries `.json`, so the longest name a client
+        // may send is five bytes shorter than one acceptable component, and a
+        // 251-byte name composes the 256-byte identifier the audit named.
+        let longest_name = "n".repeat(MAX_COMPONENT_BYTES - ".json".len());
+        let refused_name = "n".repeat(MAX_COMPONENT_BYTES - ".json".len() + 1);
+        let longest_id = format!("{longest_name}.json");
+        let refused_id = format!("{refused_name}.json");
+        assert_eq!(longest_id.len(), MAX_COMPONENT_BYTES);
+        assert_eq!(refused_id.len(), MAX_COMPONENT_BYTES + 1);
+
+        assert!(validate_document_id(Resource::Runs, &longest_id).is_ok());
+        assert!(project_dir(root, &longest_id).is_ok());
+
+        // An attachment is stored under a name the caller composes from the
+        // upload, so these two add no suffix: the component they build is the
+        // name they are handed, and the full limit is where the bound bites.
+        let longest_component = "n".repeat(MAX_COMPONENT_BYTES);
+        let over_long_component = "n".repeat(MAX_COMPONENT_BYTES + 1);
+        assert!(attachment_path(root, &parent, "TC-001", &longest_component).is_ok());
+        assert!(step_attachment_path(root, &parent, "TC-001", 0, &longest_component).is_ok());
+
+        for resource in [
+            Resource::Runs,
+            Resource::Milestones,
+            Resource::Configurations,
+            Resource::Cases,
+            Resource::Projects,
+            Resource::Suites,
+        ] {
+            let error = validate_document_id(resource, &refused_id).expect_err("refused");
+            assert_eq!(error.kind(), io::ErrorKind::InvalidInput, "{resource:?}");
+        }
+        assert_eq!(
+            attachment_path(root, &parent, "TC-001", &over_long_component)
+                .expect_err("refused")
+                .kind(),
+            io::ErrorKind::InvalidInput
+        );
+        assert_eq!(
+            step_attachment_path(root, &parent, "TC-001", 0, &over_long_component)
+                .expect_err("refused")
+                .kind(),
+            io::ErrorKind::InvalidInput
+        );
+
+        // A project and a suite are stored as folders, so the folder name — not
+        // the wire identifier — is the component the bound holds to. The
+        // `refused_id` above is refused for them because `validate_document_id`
+        // judges the raw identifier; the bound itself bites on the folder the
+        // identifier names, so a 255-byte folder stays legal whatever the
+        // length of the identifier that carries it.
+        for resource in [Resource::Projects, Resource::Suites] {
+            let error =
+                node_folder(resource, &format!("{over_long_component}.json")).expect_err("refused");
+            assert_eq!(error.kind(), io::ErrorKind::InvalidInput, "{resource:?}");
+            assert!(
+                node_folder(resource, &format!("{longest_component}.json")).is_ok(),
+                "{resource:?}"
+            );
+        }
+        assert_eq!(
+            project_dir(root, &format!("{over_long_component}.json"))
+                .expect_err("refused")
+                .kind(),
+            io::ErrorKind::InvalidInput
+        );
+        assert!(project_dir(root, &format!("{longest_component}.json")).is_ok());
+        let error = node_folder(Resource::Cases, &over_long_component).expect_err("refused");
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+        assert!(node_folder(Resource::Cases, &longest_component).is_ok());
     }
 
     #[test]

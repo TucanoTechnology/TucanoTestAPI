@@ -22,7 +22,9 @@ use crate::models::{
     CaseHistoryEntry, CoverageReport, DefectLink, ImportCounts, ImportSummary, Milestone,
     MilestoneProgress, SummaryReport, TestCase, TestConfiguration, TestRun, TestSuite,
 };
-use crate::storage::{Parent, Placement, Repository, Resource, StorageProbe, unique_suffix};
+use crate::storage::{
+    MAX_COMPONENT_BYTES, Parent, Placement, Repository, Resource, StorageProbe, unique_suffix,
+};
 
 use super::duplicate::{self, DuplicateSpec};
 use super::error::{self, DomainError};
@@ -157,12 +159,16 @@ impl<R: Repository> TestService<R> {
     /// Used where a route needs a resource's own fields — the projects a run or
     /// a milestone references — and not the tree below it. The home is resolved
     /// the same way a `GET` resolves it, so an identifier two projects hold is
-    /// a conflict here too.
+    /// a conflict here too, and a stored document whose shape contradicts its
+    /// model is refused rather than returned.
     pub fn document(&self, resource: Resource, id: &str) -> Result<Value, DomainError> {
         let parent = self.owner_for_write(resource, id, entity_missing_message(resource))?;
-        self.repository
+        let document = self
+            .repository
             .read_at(resource, parent.as_ref(), id)
-            .map_err(|error| error::load_error(error, entity_missing_message(resource)))
+            .map_err(|error| error::load_error(error, entity_missing_message(resource)))?;
+        Self::check_stored_shape(resource, &document)?;
+        Ok(document)
     }
 
     /// Reads the occurrence stored in `parent`, without resolving globally.
@@ -415,6 +421,10 @@ impl<R: Repository> TestService<R> {
     }
 
     /// Reads one stored document and reports `missing` when it is absent.
+    ///
+    /// A document that parses as JSON but does not deserialise into the model
+    /// its resource declares is refused rather than served, so a client never
+    /// receives content no route in the contract produces.
     fn read_document(
         &self,
         resource: Resource,
@@ -422,9 +432,25 @@ impl<R: Repository> TestService<R> {
         id: &str,
         missing: &str,
     ) -> Result<Value, DomainError> {
-        self.repository
+        let document = self
+            .repository
             .read_at(resource, parent, id)
-            .map_err(|error| error::document_error(error, missing))
+            .map_err(|error| error::document_error(error, missing))?;
+        Self::check_stored_shape(resource, &document)?;
+        Ok(document)
+    }
+
+    /// Refuses a stored document that does not deserialise into its model.
+    ///
+    /// The message is the fixed one the malformed variants already answer with,
+    /// so a client cannot tell a wrong shape from unreadable bytes and no serde
+    /// detail reaches it.
+    fn check_stored_shape(resource: Resource, document: &Value) -> Result<(), DomainError> {
+        if validation::document_matches_model(resource, document) {
+            Ok(())
+        } else {
+            Err(DomainError::Internal("Stored JSON is invalid".to_owned()))
+        }
     }
 
     /// The identifier and the document of the first occurrence, for filters
