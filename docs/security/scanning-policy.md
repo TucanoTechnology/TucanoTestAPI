@@ -46,7 +46,19 @@ The following security scans run automatically on every PR and push to main:
 ## Dependency Management
 
 ### Version Pinning
-- All dependencies are pinned to specific versions in `Cargo.toml`
+- Version requirements for direct dependencies are declared in `Cargo.toml`; the committed
+  `Cargo.lock` is what fixes the versions a build resolves, transitive crates included. No
+  requirement is an exact pin: Cargo derives a caret range from a bare `version`, so
+  `serde = "1.0.229"` means `>=1.0.229, <2.0.0`, and no dependency uses the `=` operator.
+- The `[dependencies]` block (`Cargo.toml:8-23`) mixes precisions. Eight crates name a full
+  `major.minor.patch` version — `serde`, `serde_json`, `axum`, `tokio`, `tower-http`,
+  `tracing-subscriber`, `fs2`, `roxmltree` — which sets the range's floor at that patch release,
+  while eight name only a major/minor line — `tracing = "0.1"`, `aes-gcm = "0.11"`,
+  `argon2 = "0.5"`, `base64 = "0.22"`, `getrandom = "0.2"`, `hmac = "0.12"`, `rand = "0.8"`,
+  `sha2 = "0.10"` — which sets the floor at that line's `.0` release. Every `[dev-dependencies]`
+  entry (`Cargo.toml:26-30`) names a full `major.minor.patch` version.
+- Because every requirement is a range, a newer release can satisfy it and `cargo update` can move
+  a resolved version with no `Cargo.toml` change; the `Cargo.lock` diff is the review signal.
 - Use `cargo update` deliberately and review changes before committing
 - Lock file (`Cargo.lock`) is committed to ensure reproducible builds
 
