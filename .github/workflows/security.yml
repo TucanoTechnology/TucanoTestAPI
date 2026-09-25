@@ -54,42 +54,21 @@ jobs:
     runs-on: [self-hosted, Linux, X64]
     steps:
       - uses: actions/checkout@v5
-      - name: Scan repository for secrets
-        # Scans the git *index* rather than the working tree. The container runs
-        # as its own uid (1000) and cannot read a tracked file whose mode denies
-        # it — `.qwen/settings.json` is 0600 and tracked — and gitleaks' walker
-        # skips such a file silently rather than failing, so a mode change could
-        # shrink the scan without any signal. `git archive` writes the tracked
-        # tree out, `chmod` opens the extraction for the container's uid, and
-        # what is scanned is then exactly what git tracks — no more (untracked
-        # scratch files in the workspace can never fail the job) and no less.
-        # The file-count guard makes that claim checkable: if an extraction or
-        # permission problem ever stops a tracked file from being scanned, the
-        # job fails instead of passing over a smaller tree.
-        #
-        # The extraction lives under the workspace rather than in $TMPDIR: the
-        # runner's Docker only accepts bind mounts from paths it is configured
-        # to share, and the host's /tmp is not one of them (`mounts denied`).
-        # `git archive` writes out tracked paths only, so nothing extracted can
-        # collide with the checkout's own untracked scratch files.
-        run: |
-          set -euo pipefail
-          SCAN_DIR="$PWD/.scan-extract"
-          rm -rf "$SCAN_DIR"
-          mkdir -p "$SCAN_DIR"
-          git archive --format=tar HEAD | tar -x -C "$SCAN_DIR"
-          chmod -R a+rX "$SCAN_DIR"
-          SCAN_FILES=$(find "$SCAN_DIR" -type f | wc -l)
-          TRACKED_FILES=$(git ls-files | wc -l)
-          echo "SCAN_MODE=index scan_files=${SCAN_FILES} tracked_files=${TRACKED_FILES}"
-          if [ "$SCAN_FILES" -lt "$TRACKED_FILES" ]; then
-            echo "::error::extracted ${SCAN_FILES} of ${TRACKED_FILES} tracked files"
-            exit 1
-          fi
-          rc=0
-          docker run --rm -v "$SCAN_DIR:/repo:ro" zricethezav/gitleaks:v8.9.0 detect --source /repo --no-git --redact || rc=$?
-          rm -rf "$SCAN_DIR"
-          exit "$rc"
+        with:
+          fetch-depth: 0
+      - name: Scan repository history for secrets
+        # Scans the real git history, which is what scanning-policy.md claims:
+        # with --no-git gitleaks walked only the checked-out files, so a secret
+        # that any later commit deleted was invisible (issue #334). The rules
+        # are the pinned image's default set plus the committed `.gitleaks.toml`
+        # allow-list — four exact strings, each a human-reviewed synthetic
+        # fixture (unit-test constants in src/config/mod.rs, the fake PEM in a
+        # policy recipe, one audit-report sentinel); no other value is allowed,
+        # in any blob of any commit. The config is committed at the repository
+        # root rather than passed with `-c` because this gitleaks version's git
+        # mode loads its config from the scan source and refuses to run when
+        # none is present. Full history (fetch-depth: 0) is what the scan reads.
+        run: docker run --rm -v "$PWD:/repo:ro" zricethezav/gitleaks:v8.9.0 detect --source /repo --redact
 
   container-scan:
     runs-on: [self-hosted, Linux, X64]
