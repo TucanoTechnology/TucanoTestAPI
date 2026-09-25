@@ -70,8 +70,18 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     auth::ensure_bootstrap_user(&store, &auth_config, now_seconds())?;
     let authentication = api::auth::AuthState::new(store, auth_config);
 
+    let guardrails = api::guardrails::Guardrails {
+        max_body_bytes: max_body_bytes(),
+        request_timeout: request_timeout(),
+        max_concurrency: max_concurrency(),
+    };
+
     let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{port}")).await?;
-    axum::serve(listener, api::router(repository, authentication)).await?;
+    axum::serve(
+        listener,
+        api::router_with_guardrails(repository, authentication, guardrails),
+    )
+    .await?;
     Ok(())
 }
 
@@ -124,6 +134,67 @@ fn lock_timeout_from(raw: Option<&str>) -> Duration {
         .parse()
         .unwrap_or_else(|_| panic!("TUCANO_LOCK_TIMEOUT_MS is not a valid u64: {raw:?}"));
     Duration::from_millis(millis)
+}
+
+/// Largest accepted request body, environment-only like the other startup
+/// bounds. `TUCANO_MAX_BODY_BYTES`, default 50 MiB (`api::MAX_BODY_BYTES`);
+/// unset or empty keeps the default, a non-numeric or zero value is a startup
+/// refusal rather than a silently unbounded or unusable server (#103).
+fn max_body_bytes() -> usize {
+    max_body_bytes_from(std::env::var("TUCANO_MAX_BODY_BYTES").ok().as_deref())
+}
+
+fn max_body_bytes_from(raw: Option<&str>) -> usize {
+    let Some(raw) = raw.map(str::trim).filter(|raw| !raw.is_empty()) else {
+        return api::MAX_BODY_BYTES;
+    };
+    let bytes: u64 = raw
+        .parse()
+        .unwrap_or_else(|_| panic!("TUCANO_MAX_BODY_BYTES is not a valid u64: {raw:?}"));
+    assert!(
+        bytes > 0,
+        "TUCANO_MAX_BODY_BYTES must be a positive byte count"
+    );
+    bytes as usize
+}
+
+/// How long a request may run before the guardrail cuts it off with a 504.
+/// `TUCANO_REQUEST_TIMEOUT_MS`, default 300 000 (five minutes); an explicit
+/// `0` disables the timeout for operators who say so on purpose. Unset or
+/// empty keeps the default; a non-numeric value is a startup refusal, exactly
+/// like the lock timeout's (#103).
+fn request_timeout() -> Option<Duration> {
+    request_timeout_from(std::env::var("TUCANO_REQUEST_TIMEOUT_MS").ok().as_deref())
+}
+
+fn request_timeout_from(raw: Option<&str>) -> Option<Duration> {
+    let Some(raw) = raw.map(str::trim).filter(|raw| !raw.is_empty()) else {
+        return Some(Duration::from_millis(
+            api::guardrails::DEFAULT_REQUEST_TIMEOUT_MS,
+        ));
+    };
+    let millis: u64 = raw
+        .parse()
+        .unwrap_or_else(|_| panic!("TUCANO_REQUEST_TIMEOUT_MS is not a valid u64: {raw:?}"));
+    (millis > 0).then(|| Duration::from_millis(millis))
+}
+
+/// How many requests may be in flight before new ones are refused with a 503
+/// and a `Retry-After`. `TUCANO_MAX_CONCURRENCY`, default 128; an explicit
+/// `0` removes the cap. Unset or empty keeps the default; a non-numeric value
+/// is a startup refusal (#103).
+fn max_concurrency() -> Option<usize> {
+    max_concurrency_from(std::env::var("TUCANO_MAX_CONCURRENCY").ok().as_deref())
+}
+
+fn max_concurrency_from(raw: Option<&str>) -> Option<usize> {
+    let Some(raw) = raw.map(str::trim).filter(|raw| !raw.is_empty()) else {
+        return Some(api::guardrails::DEFAULT_MAX_CONCURRENCY);
+    };
+    let cap: u64 = raw
+        .parse()
+        .unwrap_or_else(|_| panic!("TUCANO_MAX_CONCURRENCY is not a valid u64: {raw:?}"));
+    (cap > 0).then_some(cap as usize)
 }
 
 /// The directive set an unset, empty or blank `TUCANO_LOG` resolves to.
@@ -462,6 +533,55 @@ mod tests {
                 "{raw:?} should keep the default"
             );
         }
+    }
+
+    #[test]
+    fn guardrail_defaults_match_the_documented_numbers_when_unset_or_blank() {
+        assert_eq!(max_body_bytes_from(None), api::MAX_BODY_BYTES);
+        assert_eq!(max_body_bytes_from(Some("")), api::MAX_BODY_BYTES);
+        assert_eq!(request_timeout_from(None).unwrap().as_millis(), 300_000);
+        assert_eq!(
+            request_timeout_from(Some("  ")),
+            Some(Duration::from_millis(300_000))
+        );
+        assert_eq!(max_concurrency_from(None), Some(128));
+        assert_eq!(max_concurrency_from(Some("")), Some(128));
+    }
+
+    #[test]
+    fn an_explicit_zero_switches_off_the_timeout_and_the_concurrency_cap() {
+        assert_eq!(request_timeout_from(Some("0")), None);
+        assert_eq!(max_concurrency_from(Some("0")), None);
+        assert_eq!(
+            request_timeout_from(Some("15000")),
+            Some(Duration::from_millis(15_000))
+        );
+        assert_eq!(max_concurrency_from(Some("7")), Some(7));
+        assert_eq!(max_body_bytes_from(Some("4096")), 4096);
+    }
+
+    #[test]
+    #[should_panic(expected = "TUCANO_MAX_BODY_BYTES is not a valid u64")]
+    fn a_non_numeric_body_cap_stops_startup() {
+        max_body_bytes_from(Some("huge"));
+    }
+
+    #[test]
+    #[should_panic(expected = "TUCANO_MAX_BODY_BYTES must be a positive byte count")]
+    fn a_zero_body_cap_is_refused_not_literal() {
+        max_body_bytes_from(Some("0"));
+    }
+
+    #[test]
+    #[should_panic(expected = "TUCANO_REQUEST_TIMEOUT_MS is not a valid u64")]
+    fn a_non_numeric_timeout_stops_startup() {
+        request_timeout_from(Some("soon"));
+    }
+
+    #[test]
+    #[should_panic(expected = "TUCANO_MAX_CONCURRENCY is not a valid u64")]
+    fn a_non_numeric_concurrency_cap_stops_startup() {
+        max_concurrency_from(Some("plenty"));
     }
 
     #[test]
