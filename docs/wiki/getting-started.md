@@ -16,7 +16,7 @@ The Compose file defines two containers:
 | Service | Host port | Container port | Built from |
 | --- | --- | --- | --- |
 | `api` | `3100` | `3000` | this repository's `Dockerfile` |
-| `gui` | `8080` | `8080` | a sibling `../Tucano-Test-GUI` checkout |
+| `gui` | `8080` | `8080` | a sibling `../TucanoTestGUI` checkout |
 
 > **The port and the container port are different numbers, and that is expected.** Inside the
 > container the API listens on `3000` (the `PORT` environment variable); Compose publishes it on
@@ -29,7 +29,7 @@ The Compose file defines two containers:
 - **Docker Engine 24 or newer** and the **Docker Compose v2** plugin (`docker compose`, not the
   legacy `docker-compose`).
 - A checkout of this repository.
-- For the `gui` service only: a sibling checkout of TucanoTestGUI at `../Tucano-Test-GUI` relative
+- For the `gui` service only: a sibling checkout of TucanoTestGUI at `../TucanoTestGUI` relative
   to this repository. Without it, start the API alone.
 
 Building the binary yourself additionally needs the Rust toolchain pinned by `rust-toolchain.toml`
