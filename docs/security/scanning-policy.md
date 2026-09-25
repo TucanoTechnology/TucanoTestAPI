@@ -31,18 +31,21 @@ The allow-list is reviewed with each dependency change; widening it is a policy 
 belongs in the PR that needs it.
 
 ### 2. Secret Scanning (`gitleaks`)
-- Scans the tracked tree for accidentally committed secrets — every file `git ls-files`
-  reports, extracted with `git archive` and scanned from a temporary directory so that the
-  container's own uid can always read it
+- Scans the **full commit history** with gitleaks in git mode over a full-depth
+  (`fetch-depth: 0`) checkout: a secret that a later commit deleted is still detected, because
+  `git clone` delivers history along with the tip — the gap the S4 audit recorded as F-179-5 and
+  #334 closed
 - Detects API keys, passwords, tokens, and other sensitive data
 - **Fails the build** if any secrets are detected
-- Does **not** walk commit history, and does not scan untracked or ignored files. A secret
-  committed and later deleted still lives in history, where `git clone` delivers it; closing
-  that gap is [finding F-179-5](audit-s4-dependencies-and-supply-chain.md#f-179-5-run-the-secret-scan-over-history-or-correct-the-claim-that-it-does)
-  in the S4 audit report
-- A value that a security report needs to quote verbatim, such as a probe's sentinel, must be
-  written in a form the detector's entropy rule does not mistake for a credential; a flagged
-  sentinel is a false positive to be reworded, not a leak to be allowlisted
+- The rules are the pinned image's default set plus the committed `.gitleaks.toml`, whose
+  `[allowlist]` holds a handful of exact strings, each a human-reviewed synthetic fixture
+  already in history (unit-test constants, a fake PEM in a documentation recipe, an
+  audit-report sentinel). Allow-listing is per *value*, never per path or commit, and only
+  after the string is confirmed not to be a real credential
+- A value that a security report needs to quote verbatim, such as a probe's sentinel, should
+  still be written in a form the detector's entropy rule does not mistake for a credential:
+  an allow-list entry is the reviewed record of a fixture that already reached `main`, not a
+  shortcut for shipping a new credential-shaped string
 - The same applies to this policy and its instructions: a credential shape written literally
   into a tracked document — including one quoted as an example of what to scan for — is a
   finding, so examples assemble the shape from parts instead
@@ -152,37 +155,30 @@ When a vulnerability is discovered:
 ## Testing Security Controls
 
 To verify CI security controls are working, run the job's own body. For the secret scan the
-fixture must be **inside the tracked tree** — an untracked file is deliberately not scanned —
-and it must be removed before committing:
+fixture must be inside a **commit** — git mode reads history, and the working tree alone proves
+nothing. Do it on a scratch clone or a scratch branch, never on anything that reaches `main`:
 
 ```bash
 # Test dependency audit
 cargo audit
 
-# Test secret scanning (should detect the fixture)
-# The fixture must be a credential shape the pinned detector's rule set still
-# ships. The well-known AWS example key this used to quote
-# (`wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY`) is not detected by gitleaks
-# v8.9.0, so that "test" exited 0 while proving nothing.
-#
-# Build it from parts rather than writing the header out here: this document is
-# itself tracked, so a literal credential shape in the prose above makes the
-# scan fail on this file. An assembled one has no single line for the rule to
-# match, while the fixture it writes still does.
+# Test secret scanning (should detect the fixture). The fixture must be a
+# credential shape the pinned detector's rule set still ships: the well-known
+# AWS example key this used to quote is not detected by gitleaks v8.9.0, so a
+# test with it exited 0 while proving nothing.
+# Assemble the header from parts rather than writing it out in a tracked
+# document: this file itself is tracked, and git mode would now flag a literal
+# credential shape anywhere in history.
 HEADER='-----BEGIN RSA PRIVATE KEY'"${EMPTY}"''
 printf '%s\n' "$HEADER" 'MIIEowIBAAKCAQEA1234567890abcdefghijklmnopqrstuvwxyz' '-----END RSA PRIVATE KEY-----' > tracked_secret_fixture.txt
 git add tracked_secret_fixture.txt
 git commit -m "scratch: prove the secret scan fails"
-SCAN_DIR="$PWD/.scan-extract"
-rm -rf "$SCAN_DIR"
-mkdir -p "$SCAN_DIR"
-git archive --format=tar HEAD | tar -x -C "$SCAN_DIR"
-chmod -R a+rX "$SCAN_DIR"
-docker run --rm -v "$SCAN_DIR:/repo:ro" zricethezav/gitleaks:v8.9.0 detect --source /repo --no-git --redact
-# expect: WRN leaks found: 1 and a non-zero exit
-# The extraction lives under the workspace, not in $TMPDIR: the runner's Docker
-# only accepts bind mounts from paths it is configured to share. `git archive`
-# exports the committed tree, so the fixture has to be committed to be scanned.
+git rm tracked_secret_fixture.txt
+git commit -m "scratch: delete it again"
+docker run --rm -v "$PWD:/repo:ro" zricethezav/gitleaks:v8.9.0 detect --source /repo --redact
+# expect: WRN leaks found: 1 and a non-zero exit — the file is gone from every
+# tree but lives in the two scratch commits, which is exactly what the old
+# --no-git mode could not see and what F-179-5 (#334) closed.
 
 # Test container scanning (the security.yml job's local build)
 docker build -t tucano-test .
