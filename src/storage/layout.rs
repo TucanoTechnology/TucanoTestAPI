@@ -447,14 +447,48 @@ pub fn unique_suffix() -> u128 {
         .as_nanos()
 }
 
-/// Restrict a freshly created file so the host user can read and write it.
-pub fn set_private_permissions(file: &File) -> io::Result<()> {
+/// Mode a stored file is created with: readable and writable by its owner only.
+pub const PRIVATE_FILE_MODE: u32 = 0o600;
+
+/// Mode a stored directory is created with: owner-only traversal and listing.
+pub const PRIVATE_DIR_MODE: u32 = 0o700;
+
+/// Confine a freshly created file to its owner by setting it to `mode`.
+///
+/// The mode is a required argument rather than a default baked into the helper:
+/// every call site names what it wants, so a new one cannot silently reintroduce
+/// a world-writable mode. Stored documents, revisions and attachments pass
+/// [`PRIVATE_FILE_MODE`].
+pub fn set_private_permissions(file: &File, mode: u32) -> io::Result<()> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        file.set_permissions(std::fs::Permissions::from_mode(0o666))?;
+        file.set_permissions(std::fs::Permissions::from_mode(mode))?;
     }
+    #[cfg(not(unix))]
+    let _ = (file, mode);
     Ok(())
+}
+
+/// Create a directory and any missing parents, owner-only.
+///
+/// `create_dir_all` would create each component with the process umask — under
+/// the usual `022`, `0755`, which lets any local account list what the store
+/// holds — and it leaves an existing directory's mode alone. Every directory the
+/// store creates is owner-only instead, so no other uid can traverse the tree.
+pub fn create_private_dir_all(path: &Path) -> io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        fs::DirBuilder::new()
+            .recursive(true)
+            .mode(PRIVATE_DIR_MODE)
+            .create(path)
+    }
+    #[cfg(not(unix))]
+    {
+        fs::create_dir_all(path)
+    }
 }
 
 #[cfg(test)]
