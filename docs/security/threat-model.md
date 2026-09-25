@@ -96,11 +96,22 @@ These decisions must be resolved before the HTTP compatibility layer is exposed 
 - ✅ Negative security fixtures created (`compatibility/endpoints/`)
 - ✅ Unknown field rejection implemented via `deny_unknown_fields`
 - ✅ Atomic write semantics implemented in repository layer
-- ✅ Container image scanning in CI (security workflow `container-scan` job)
-- ✅ SBOM generation for release artifacts (security workflow `sbom` job)
+- ✅ Container image scanning in CI (security workflow `container-scan` job) — temporarily skipped
+  since PR #349 (runner saturation, 2026-09-24); re-enabling it and its required status check is
+  tracked in #362. The release-time scan of the published digest (`release.yml`, #330) still runs.
+- ✅ SBOM generation for release artifacts (security workflow `sbom` job) — temporarily skipped by
+  the same PR #349, restored by the same #362; publishing the SBOM with the artifact is #331
+  (audit finding F-178-5).
 - ✅ Authentication and authorization implemented (#130): HS256 access tokens, rotating refresh
   tokens, Argon2id password hashes, and project-scoped RBAC enforced in every guarded handler.
   Passwords and refresh tokens are stored only as hashes; the auth matrix is `tests/auth.rs`.
+- ✅ The shipped Compose stack authenticates by default (#278, merged 2026-09-17): the shipped
+  `docker-compose.yml` resolves `TUCANO_AUTH_REQUIRED` to `true` unless the operator overrides it,
+  so the shipped configuration no longer combines an all-interfaces publish with authentication
+  off — the exposure audit finding F-178-1 measured in
+  [audit-s3-container-and-deployment.md](audit-s3-container-and-deployment.md). The service-level
+  default when the variable is absent entirely remains off (`src/auth/config.rs`), so a deployment
+  that does not use the shipped file must turn authentication on explicitly.
 
 ### Decided (documented, not yet implemented)
 
