@@ -279,6 +279,18 @@ further on its own.
 
 ### F-179-4: Reconcile the dependency-pinning claim with `Cargo.toml`
 
+> **Resolved after the audited revision (note added post-audit; the finding text below
+> describes `61b02b9` and nothing has been edited away).** [#335](https://github.com/TucanoTechnology/TucanoTestAPI/issues/335)
+> narrowed the `scanning-policy.md` claim to what the manifest actually does — exact versions
+> where `Cargo.toml` says so, the committed `Cargo.lock` enforcing the rest — so the quoted
+> sentence (*“All dependencies are pinned to specific versions in `Cargo.toml`”*) no longer
+> exists in the policy. The enumeration below is likewise scoped to the audited revision: the
+> current `[dependencies]` block carries sixteen direct requirements — eight full
+> `major.minor.patch` and eight coarse, since `aes-gcm = "0.11"` and `getrandom = "0.2"` were
+> added after `61b02b9` and float on a major/minor line exactly like the six counted here;
+> `[dev-dependencies]` remains fully patch-pinned and nothing uses the `=` operator. See the
+> F-179-4 row of [audit-summary-s1-s4.md](audit-summary-s1-s4.md) for the tracking status.
+
 - **Severity:** Info
 - **In scope:** S4 — the dependency inventory and its advisories; the divergence is between the
   documented control and the manifest.
