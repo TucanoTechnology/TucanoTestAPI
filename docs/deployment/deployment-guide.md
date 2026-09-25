@@ -16,7 +16,7 @@ the TucanoTestGUI repository:
 | Service | Image | Dockerfile | Host port |
 | --- | --- | --- | --- |
 | API | `ghcr.io/tucanotechnology/tucanotestapi` (released); `tucano-test-api:local` (Compose build) | [`Dockerfile`](../../Dockerfile) | `3100` → container `3000` |
-| GUI | `tucano-test-gui:local` | `../Tucano-Test-GUI/Dockerfile` | `8080` → container `8080` |
+| GUI | `tucano-test-gui:local` | `../TucanoTestGUI/Dockerfile` | `8080` → container `8080` |
 
 The two `…:local` names are **local build outputs, not release tags**: `docker compose up --build`
 retags them on every build, so whatever ran before loses the name. A rollback that targets one of
