@@ -28,7 +28,7 @@ jobs:
   audit:
     runs-on: [self-hosted, Linux, X64]
     container:
-      image: rust:1.98.0-bookworm
+      image: rust:1.98.0-bookworm@sha256:82150a52ec202c1b14d7817e14516c392bb7f5cfebd88f1ed531cb37ebd39922
       # Shares the cached crates.io downloads with the other container jobs so
       # `cargo install cargo-audit` does not have to fetch them again; see the
       # note in the build-and-test job in ci.yml and issue #123.
@@ -44,7 +44,7 @@ jobs:
       # toolchain keeps that call local; this job uses neither component.
       RUSTUP_TOOLCHAIN: "1.98.0"
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
       - name: Install cargo-audit
         run: cargo install cargo-audit --locked
       - name: Audit dependencies
@@ -53,7 +53,7 @@ jobs:
   secret-scan:
     runs-on: [self-hosted, Linux, X64]
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
       - name: Scan repository for secrets
         # Scans the git *index* rather than the working tree. The container runs
         # as its own uid (1000) and cannot read a tracked file whose mode denies
@@ -87,17 +87,17 @@ jobs:
             exit 1
           fi
           rc=0
-          docker run --rm -v "$SCAN_DIR:/repo:ro" zricethezav/gitleaks:v8.9.0 detect --source /repo --no-git --redact || rc=$?
+          docker run --rm -v "$SCAN_DIR:/repo:ro" zricethezav/gitleaks:v8.9.0@sha256:b2d25f43943b27b4b6f38f75cfb8a85ba68c802da54d4aabd74f1d006f122dc2 detect --source /repo --no-git --redact || rc=$?
           rm -rf "$SCAN_DIR"
           exit "$rc"
 
   container-scan:
     runs-on: [self-hosted, Linux, X64]
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
       - name: Build application image
         run: docker build --file Dockerfile --tag tucano-test .
-      - uses: aquasecurity/trivy-action@v0.36.0
+      - uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: tucano-test
           format: table
@@ -108,7 +108,7 @@ jobs:
   sbom:
     runs-on: [self-hosted, Linux, X64]
     container:
-      image: rust:1.98.0-bookworm
+      image: rust:1.98.0-bookworm@sha256:82150a52ec202c1b14d7817e14516c392bb7f5cfebd88f1ed531cb37ebd39922
       # Shares the cached crates.io downloads with the other container jobs so
       # `cargo install cargo-cyclonedx` and the dependency resolution behind
       # `cargo cyclonedx` do not have to fetch them again; see the note in the
@@ -125,7 +125,7 @@ jobs:
       # toolchain keeps that call local; this job uses neither component.
       RUSTUP_TOOLCHAIN: "1.98.0"
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
       - name: Install cargo-cyclonedx
         run: cargo install cargo-cyclonedx --locked
       - name: Generate SBOM
@@ -158,7 +158,7 @@ jobs:
           print(f"sbom.json: CycloneDX {document.get('specVersion')} with {len(components)} components")
           PY
       - name: Upload SBOM artifact
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
         with:
           name: sbom
           path: sbom.json

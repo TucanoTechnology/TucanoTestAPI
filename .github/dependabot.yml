@@ -1,0 +1,39 @@
+# Refresh path for the SHA/digest pins introduced in #333.
+#
+# Dependabot opens a PR when a pinned action commit or container image digest
+# falls behind the upstream release; CI on that PR validates the workflow with
+# the new pin, and a human merges. Pins never move silently.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "ci(deps)"
+    groups:
+      actions:
+        patterns:
+          - "*"
+
+  - package-ecosystem: docker
+    directories:
+      - "/"            # Dockerfile base images (already digest-pinned)
+      - "/.github/workflows"  # container: jobs and docker-run references
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "ci(deps)"
+
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "chore(deps)"
+    labels:
+      - dependencies
+    ignore:
+      # The toolchain is pinned by rust-toolchain.toml and the images carry
+      # the matching version; keep the two in lockstep by hand (#123).
+      - dependency-name: "rust"
