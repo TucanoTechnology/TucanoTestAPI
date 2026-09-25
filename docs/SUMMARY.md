@@ -58,6 +58,7 @@
 - [Audit: container and deployment (S3)](security/audit-s3-container-and-deployment.md)
 - [Audit: dependencies and supply chain (S4)](security/audit-s4-dependencies-and-supply-chain.md)
 - [Audit design: S1-S3 briefs](security/audit-design-176-178.md)
+- [Audit summary: S1-S4](security/audit-summary-s1-s4.md)
 
 # Testing
 
