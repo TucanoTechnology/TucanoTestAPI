@@ -151,6 +151,7 @@ services:
       TUCANO_DATA_DIR: /data
       PORT: 3000
       TUCANO_AUTH_REQUIRED: "${TUCANO_AUTH_REQUIRED:-true}"
+      TUCANO_LOCK_TIMEOUT_MS: "${TUCANO_LOCK_TIMEOUT_MS:-5000}"
       TUCANO_JWT_SECRET: "${TUCANO_JWT_SECRET:?TUCANO_JWT_SECRET is required and must be at least 32 bytes; copy .env.example to .env and set it}"
       TUCANO_BOOTSTRAP_USERNAME: "${TUCANO_BOOTSTRAP_USERNAME:-admin}"
       TUCANO_BOOTSTRAP_PASSWORD: "${TUCANO_BOOTSTRAP_PASSWORD:?TUCANO_BOOTSTRAP_PASSWORD is required; copy .env.example to .env and set it}"
@@ -174,8 +175,10 @@ services:
           memory: 512M
 ```
 
-(The checked-in file carries short explanatory comments above the image name and the four
-authentication variables; the values are reproduced above verbatim.)
+(The checked-in file carries short explanatory comments above the image name and several of the
+environment variables; the values are reproduced above verbatim. `TUCANO_LOCK_TIMEOUT_MS` bounds
+each write's wait for the data volume's advisory lock — the `503 lock_timeout` behaviour is
+described under Errors and request limits in the [storage and API reference](../reference/storage-and-api.md).)
 
 `TUCANO_DATA_DIR=/data` and the `./data:/data` mount together are the whole persistence story: the
 host directory `./data` is the state (Docker creates it on first run), and `.gitignore` excludes
