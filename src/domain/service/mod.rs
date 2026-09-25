@@ -22,7 +22,9 @@ use crate::models::{
     CaseHistoryEntry, CoverageReport, DefectLink, ImportCounts, ImportSummary, Milestone,
     MilestoneProgress, SummaryReport, TestCase, TestConfiguration, TestRun, TestSuite,
 };
-use crate::storage::{Parent, Placement, Repository, Resource, StorageProbe, unique_suffix};
+use crate::storage::{
+    MAX_COMPONENT_BYTES, Parent, Placement, Repository, Resource, StorageProbe, unique_suffix,
+};
 
 use super::duplicate::{self, DuplicateSpec};
 use super::error::{self, DomainError};

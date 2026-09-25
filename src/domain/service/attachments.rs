@@ -23,7 +23,7 @@ impl<R: Repository> TestService<R> {
             return Err(DomainError::PayloadTooLarge);
         }
 
-        let filename = format!("{}-{}", unique_suffix(), original_name);
+        let filename = stored_attachment_name(original_name)?;
         let entry = json!({
             "filename": filename,
             "originalName": original_name,
@@ -94,7 +94,7 @@ impl<R: Repository> TestService<R> {
         }
         self.structured_step(parent, id, step_index)?;
 
-        let filename = format!("{}-{}", unique_suffix(), original_name);
+        let filename = stored_attachment_name(original_name)?;
         let entry = json!({
             "filename": filename,
             "originalName": original_name,
@@ -192,4 +192,19 @@ impl<R: Repository> TestService<R> {
             ))),
         }
     }
+}
+
+/// Composes the name an upload is stored under and refuses one the filesystem
+/// could not hold as a single name.
+///
+/// The stored name prefixes the client's own, so a file name that is acceptable
+/// on its own can still compose a name past [`MAX_COMPONENT_BYTES`]. Refusing it
+/// here keeps the upload a bad request instead of a write the filesystem rejects
+/// with `ENAMETOOLONG`.
+fn stored_attachment_name(original_name: &str) -> Result<String, DomainError> {
+    let filename = format!("{}-{}", unique_suffix(), original_name);
+    if filename.len() > MAX_COMPONENT_BYTES {
+        return Err(DomainError::invalid_request("Attachment name is too long"));
+    }
+    Ok(filename)
 }
