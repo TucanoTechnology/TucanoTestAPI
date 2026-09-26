@@ -84,8 +84,23 @@ jobs:
     runs-on: [self-hosted, Linux, X64]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # The build is the queue dominator of every CI wave: a cold Dockerfile
+      # rebuild costs minutes, and the sources it recompiles rarely change.
+      # Build through buildx with the Actions cache backend under a scope of
+      # its own — the mechanism release.yml has proven on this fleet (#397) —
+      # and load the result into the daemon so trivy still scans the image by
+      # name; the CRITICAL/HIGH gate and exit-code policy are unchanged.
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
       - name: Build application image
-        run: docker build --file Dockerfile --tag tucano-test .
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: Dockerfile
+          push: false
+          load: true
+          tags: tucano-test
+          cache-from: type=gha,scope=container-scan
+          cache-to: type=gha,mode=max,scope=container-scan
       - uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: tucano-test
