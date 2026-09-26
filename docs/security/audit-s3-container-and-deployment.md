@@ -284,6 +284,20 @@ is deliberate.
 
 ### F-178-2: Record an image id the documented Compose rollback can actually restore
 
+> **Resolved after the audited revision (note added post-audit; the finding text below describes
+> `bb0ed235` and nothing has been edited away).** The remediation is [#329](https://github.com/TucanoTechnology/TucanoTestAPI/issues/329),
+> landed by PR [#350](https://github.com/TucanoTechnology/TucanoTestAPI/pull/350): Step 0 of
+> `canary-validation-and-rollback.md` now records the running container's image id and pins it
+> under a rollback-only tag before any rebuild, and the Rollback section restores by re-tagging
+> that recorded id onto the mutable `tucano-test-api:local` name, recreating with
+> `--no-build --force-recreate`, and asserting the inspected id still matches. The sentence
+> quoted below (`:140` — *“Rollback re-deploys `PREVIOUS` … it never moves a tag.”*) is absent
+> from the current tree precisely because that correction rewrote it: the claim did not hold for
+> the Compose local build, where `docker compose up` cannot select an image by id. The `Where:`
+> line addresses the audited revision — the quoted compose entries now sit at
+> `docker-compose.yml:4`–`:5` and `:11`. See the F-178-2 row of
+> [audit-summary-s1-s4.md](audit-summary-s1-s4.md) for the tracking status.
+
 - **Severity:** Low
 - **In scope:** S3 — "rollback to an immutable tag" ([audit-scope.md](audit-scope.md) § 2). The trust
   boundary is operational rather than one of the nine: the rollback procedure is a control the
