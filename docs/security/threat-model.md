@@ -152,6 +152,24 @@ These decisions must be resolved before the HTTP compatibility layer is exposed 
   the *environment* of the container, or the secret mount, still can. Encryption of the file raises
   the cost of a leaked backup or an accidental commit; it is not a control against host compromise,
   and it must not be described as one.
+- **The auto-merge path carries its authority in a personal access token.** The `Auto Merge`
+  workflow runs with `secrets.AUTO_MERGE_TOKEN || github.token`. When the secret is set, that arm
+  is a personal access token of the repository owner, and it can satisfy the pull request's
+  *review* requirement — the built-in `GITHUB_TOKEN` cannot. The project keeps this token
+  deliberately (owner decision recorded in #336, audit finding F-179-3): the repository is
+  owner-operated, and the trade buys merged-without-a-human-second-approval in exchange for the
+  full suite passing. Compensating gates, enforced by the workflow itself: it fires only as a
+  `workflow_run` after the PR's own CI, and it merges only when the head is a branch of this
+  repository, the base is the default branch, the author's collaborator permission is exactly
+  `admin`, the pull request is open, not a draft, and mergeable (a `behind` head is brought
+  up to date and retried, never parked silently), and every check run reported against the head
+  concluded `success`, `skipped`, or `neutral` — under `strict` branch protection that means all
+  required checks green on an up-to-date head. Unsetting the secret degrades gracefully to the
+  built-in token, which cannot bypass the review requirement — it is a downgrade, never an
+  escalation. Rotation belongs to org owners (repository secret); a leaked PAT is equivalent on
+  this repository to a compromised owner credential for the merge path, and the response is the
+  same: revoke at GitHub and rotate the secret. The token lives in CI only — it does not touch any
+  boundary, asset, or runtime surface of the deployed service.
 
 ### Pending
 
