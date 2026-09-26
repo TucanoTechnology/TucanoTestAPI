@@ -37,16 +37,26 @@ jobs:
         - tucanotestapi-cargo-registry:/usr/local/cargo/registry
         - tucanotestapi-cargo-git:/usr/local/cargo/git
         - tucanotestapi-rustup:/usr/local/rustup
+        # One persistent volume carries both the installed tool binaries
+        # (CARGO_HOME/bin below) and their registry, so the tool compile is
+        # paid once per fleet, not once per CI wave (#398). Deliberately a
+        # different volume from the crate-source cache, which the build jobs
+        # share for a different reason (#123).
+        - tucanotestapi-cargo-tools:/cargo
     env:
       # rust-toolchain.toml asks for the rustfmt and clippy components, which
       # this image does not ship, so rustup re-syncs the channel manifest from
       # static.rust-lang.org before the first cargo call. Naming the installed
       # toolchain keeps that call local; this job uses neither component.
       RUSTUP_TOOLCHAIN: "1.98.0"
+      CARGO_HOME: /cargo
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install cargo-audit
-        run: cargo install cargo-audit --locked
+        # Skipped once the tools volume holds the binary (first run pays it).
+        run: |
+          echo /cargo/bin >> "$GITHUB_PATH"
+          [ -x /cargo/bin/cargo-audit ] || cargo install cargo-audit --locked
       - name: Audit dependencies
         run: cargo audit
 
@@ -112,16 +122,25 @@ jobs:
         - tucanotestapi-cargo-registry:/usr/local/cargo/registry
         - tucanotestapi-cargo-git:/usr/local/cargo/git
         - tucanotestapi-rustup:/usr/local/rustup
+        # One persistent volume carries both the installed tool binaries
+        # (CARGO_HOME/bin below) and their registry, so the tool compile is
+        # paid once per fleet, not once per CI wave (#398). Deliberately a
+        # different volume from the crate-source cache, which the build jobs
+        # share for a different reason (#123).
+        - tucanotestapi-cargo-tools:/cargo
     env:
       # rust-toolchain.toml asks for the rustfmt and clippy components, which
       # this image does not ship, so rustup re-syncs the channel manifest from
       # static.rust-lang.org before the first cargo call. Naming the installed
       # toolchain keeps that call local; this job uses neither component.
       RUSTUP_TOOLCHAIN: "1.98.0"
+      CARGO_HOME: /cargo
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install cargo-cyclonedx
-        run: cargo install cargo-cyclonedx --locked
+        run: |
+          echo /cargo/bin >> "$GITHUB_PATH"
+          [ -x /cargo/bin/cargo-cyclonedx ] || cargo install cargo-cyclonedx --locked
       - name: Generate SBOM
         # cargo-cyclonedx prints nothing: it writes <crate>.cdx.json next to the
         # manifest, so `> sbom.json` captured an empty document and the job
@@ -174,11 +193,20 @@ jobs:
         - tucanotestapi-cargo-registry:/usr/local/cargo/registry
         - tucanotestapi-cargo-git:/usr/local/cargo/git
         - tucanotestapi-rustup:/usr/local/rustup
+        # One persistent volume carries both the installed tool binaries
+        # (CARGO_HOME/bin below) and their registry, so the tool compile is
+        # paid once per fleet, not once per CI wave (#398). Deliberately a
+        # different volume from the crate-source cache, which the build jobs
+        # share for a different reason (#123).
+        - tucanotestapi-cargo-tools:/cargo
     env:
       RUSTUP_TOOLCHAIN: "1.98.0"
+      CARGO_HOME: /cargo
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install cargo-deny
-        run: cargo install cargo-deny --locked
+        run: |
+          echo /cargo/bin >> "$GITHUB_PATH"
+          [ -x /cargo/bin/cargo-deny ] || cargo install cargo-deny --locked
       - name: Check the dependency graph against deny.toml
         run: cargo deny check advisories bans licenses sources
