@@ -24,6 +24,12 @@ updates:
       interval: weekly
     commit-message:
       prefix: "ci(deps)"
+    ignore:
+      # The Rust image is not free-floating: its version is the toolchain pin
+      # in rust-toolchain.toml, and the CI containers deliberately run the same
+      # version the toolchain file declares (see #123 for the cache coupling).
+      # A toolchain bump is one intentional PR changing all three together.
+      - dependency-name: "rust"
 
   - package-ecosystem: cargo
     directory: /
