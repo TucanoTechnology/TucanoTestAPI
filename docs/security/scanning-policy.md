@@ -176,16 +176,18 @@ cargo audit
 # credential shape the pinned detector's rule set still ships: the well-known
 # AWS example key this used to quote is not detected by gitleaks v8.9.0, so a
 # test with it exited 0 while proving nothing.
-# Assemble the header from parts rather than writing it out in a tracked
-# document: this file itself is tracked, and git mode would now flag a literal
-# credential shape anywhere in history.
-HEADER='-----BEGIN RSA PRIVATE KEY'"${EMPTY}"''
-printf '%s\n' "$HEADER" 'MIIEowIBAAKCAQEA1234567890abcdefghijklmnopqrstuvwxyz' '-----END RSA PRIVATE KEY-----' > tracked_secret_fixture.txt
+# Assemble the full marker from two adjacent quoted parts (shell concatenates
+# `''` at runtime) so no single tracked line here holds it, while the fixture
+# file the recipe writes does. git mode would flag a literal marker line in a
+# tracked document — and v8.30's stricter rules also *ignore* a malformed
+# marker, which is the bug this assembly must not reintroduce.
+HEADER='-----BEGIN RSA PRIVATE'' KEY-----'
+printf '%s\n' "$HEADER" 'MIIEowIBAAKCAQEA7GpZ8kQ3vX0qE4rN7tYwP1aS9dF2hL6cJ3kR8nM5bV1xZ4wQ2eT7yU0iO6pA3sD9fG4hJ7kL2mN5pQ8rT1vW4xY7zA0bC3dE6fG9hI2jK5lM8nO1p' '-----END RSA PRIVATE KEY-----' > tracked_secret_fixture.txt
 git add tracked_secret_fixture.txt
 git commit -m "scratch: prove the secret scan fails"
 git rm tracked_secret_fixture.txt
 git commit -m "scratch: delete it again"
-docker run --rm -v "$PWD:/repo:ro" zricethezav/gitleaks:v8.9.0 detect --source /repo --redact
+docker run --rm -v "$PWD:/repo:ro" zricethezav/gitleaks:v8.30.1 git /repo --redact
 # expect: WRN leaks found: 1 and a non-zero exit — the file is gone from every
 # tree but lives in the two scratch commits, which is exactly what the old
 # --no-git mode could not see and what F-179-5 (#334) closed.
