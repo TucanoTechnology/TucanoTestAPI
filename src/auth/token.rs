@@ -207,7 +207,7 @@ pub fn random_id() -> String {
 
 fn random_b64<const BYTES: usize>() -> String {
     let mut bytes = [0_u8; BYTES];
-    rand::thread_rng().fill_bytes(&mut bytes);
+    rand::rng().fill_bytes(&mut bytes);
     URL_SAFE_NO_PAD.encode(bytes)
 }
 
