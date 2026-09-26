@@ -112,7 +112,7 @@ full commit SHA with the release tag retained as a trailing comment, every workf
 container image and `docker run` reference carries its manifest digest, and the
 Dockerfile bases are digest-pinned. Dependabot (`.github/dependabot.yml`) opens weekly
 bump pull requests for actions, images, and crates; the pins only move when a bump PR
-passes the full suite and merges — no silent drift, and no rot. One residual trust:
+passes the full suite and merges — no silent drift, and no rot. Bump PRs that touch only dependency plumbing (workflow files, `Cargo.toml`/`Cargo.lock`, the Dockerfile, `deny.toml`) merge themselves once every required check is green (`Auto Merge Dependabot`, #399); anything wider still waits for a human. One residual trust:
 `trivy-action` downloads its scanner binary from the action's own pinned release at run
 time, so the action SHA pins the workflow logic while the trivy build artifact arrives over
 TLS from the same repository whose commit is pinned here.

@@ -1,0 +1,149 @@
+name: Auto Merge Dependabot
+
+on:
+  workflow_run:
+    workflows:
+      - Lint
+      - Docs
+      - Build and Test
+      - Security
+    types:
+      - completed
+
+# Scope of authority (threat model, Known limitations; F-179-3 lineage):
+# this job merges PRs opened by dependabot itself, and nothing else, after
+# the full check suite passed on an up-to-date head, and only when the PR
+# touches the inventory allow-list below — dependency manifests, workflow
+# pins, Dockerfile bases. That is strictly narrower than the admin-authored
+# `Auto Merge` path it mirrors (same trigger, same all-green gate, same
+# behind-branch repair), because it also constrains WHO the author is and WHAT
+# the diff may contain. The anti-escalation property of that workflow is
+# untouched: this one never merges a human-authored pull request, and it uses
+# the built-in token, which cannot satisfy a required review outside these
+# conditions.
+permissions:
+  contents: write
+  pull-requests: write
+  checks: read
+
+jobs:
+  merge-dependabot-pull-request:
+    name: Merge dependency bumps
+    if: github.event.workflow_run.event == 'pull_request'
+    runs-on: [self-hosted, Linux, X64]
+    concurrency:
+      group: auto-merge-dependabot-${{ github.event.workflow_run.head_sha }}
+      cancel-in-progress: false
+    steps:
+      - name: Merge when every required check has passed
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const sha = context.payload.workflow_run.head_sha;
+
+            // An ordinary file is one whose every changed path is dependency
+            // plumbing: workflow files and their pins, the manifests and the
+            // lockfile, the Dockerfile (its base images are Dependabot's to
+            // refresh, #333), and the policy files those manifests carry.
+            const ALLOWED =
+              /^(\.github\/|Cargo\.toml$|Cargo\.lock$|Dockerfile$|deny\.toml$)/;
+
+            const { data: info } = await github.rest.repos.get({ owner, repo });
+
+            const { data: candidates } =
+              await github.rest.repos.listPullRequestsAssociatedWithCommit({
+                owner,
+                repo,
+                commit_sha: sha,
+              });
+            const pr = candidates.find(
+              (candidate) =>
+                candidate.state === 'open' &&
+                candidate.user.login === 'dependabot[bot]' &&
+                candidate.head.repo.full_name === `${owner}/${repo}` &&
+                candidate.base.ref === info.default_branch,
+            );
+            if (!pr) {
+              core.info(`No open dependabot pull request at ${sha}.`);
+              return;
+            }
+            if (pr.draft) {
+              core.info(`#${pr.number} is a draft.`);
+              return;
+            }
+
+            const files = await github.paginate(github.rest.pulls.listFiles, {
+              owner,
+              repo,
+              pull_number: pr.number,
+              per_page: 100,
+            });
+            const outside = files.filter((file) => !ALLOWED.test(file.filename));
+            if (outside.length > 0) {
+              core.info(
+                `#${pr.number} touches ${outside.length} path(s) outside the allow-list (${outside
+                  .slice(0, 3)
+                  .map((file) => file.filename)
+                  .join(', ')}${outside.length > 3 ? ', …' : ''}); a human reviews this one.`,
+              );
+              return;
+            }
+
+            const { data: checks } = await github.rest.checks.listForRef({
+              owner,
+              repo,
+              ref: sha,
+              filter: 'latest',
+              per_page: 100,
+            });
+            const blocking = checks.check_runs.filter(
+              (run) =>
+                run.status !== 'completed' ||
+                !['success', 'skipped', 'neutral'].includes(run.conclusion),
+            );
+            if (blocking.length > 0) {
+              core.info(`#${pr.number} is still waiting on ${blocking.length} check(s).`);
+              return;
+            }
+
+            const { data: state } = await github.rest.pulls.get({
+              owner,
+              repo,
+              pull_number: pr.number,
+            });
+            // Same repair-or-park rule the owner path learned in #357: a
+            // behind head is transient, so bring it forward; anything that
+            // cannot be brought forward gets a visible park comment.
+            if (state.mergeable_state === 'behind') {
+              try {
+                await github.rest.pulls.updateBranch({
+                  owner,
+                  repo,
+                  pull_number: pr.number,
+                });
+                core.info(
+                  `#${pr.number} was behind ${info.default_branch}; updated the branch — the merge will be retried by the run on the new head sha.`,
+                );
+              } catch (error) {
+                core.info(`#${pr.number}: update-branch refused (${error.message}).`);
+              }
+              return;
+            }
+            if (state.mergeable !== true) {
+              core.info(`#${pr.number} is not mergeable (${state.mergeable_state}).`);
+              return;
+            }
+
+            try {
+              const { data: merged } = await github.rest.pulls.merge({
+                owner,
+                repo,
+                pull_number: pr.number,
+                merge_method: 'merge',
+              });
+              core.info(`#${pr.number}: ${merged.message}`);
+            } catch (error) {
+              core.info(`#${pr.number} cannot be merged yet: ${error.message}`);
+            }
