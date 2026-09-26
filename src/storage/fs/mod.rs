@@ -191,7 +191,11 @@ impl FileRepository {
     }
 
     fn read_json(&self, path: &Path) -> io::Result<Value> {
-        let contents = fs::read_to_string(path)?;
+        // Confined by the opened descriptor, not by the path (#366): an
+        // in-tree name may also name bytes kept outside the root, and only
+        // the file actually opened can betray that second link.
+        let contents = String::from_utf8(read_confined(&self.root, path)?)
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
         serde_json::from_str(&contents)
             .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
     }
@@ -400,11 +404,11 @@ impl FileRepository {
             create_private_dir_all(parent)?;
         }
         match mode {
-            Placement::Copy => copy_dir_all(&from, &to),
+            Placement::Copy => copy_dir_all(&self.root, &from, &to),
             Placement::Move => match fs::rename(&from, &to) {
                 Ok(()) => Ok(()),
                 Err(_) => {
-                    copy_dir_all(&from, &to)?;
+                    copy_dir_all(&self.root, &from, &to)?;
                     fs::remove_dir_all(&from)
                 }
             },
@@ -651,15 +655,28 @@ fn step_object_mut(document: &mut Value, step_index: usize) -> io::Result<&mut M
 }
 
 /// Recursively duplicate a folder, contents and all.
-fn copy_dir_all(from: &Path, to: &Path) -> io::Result<()> {
+///
+/// Every file crosses through the handle-confined reader (#366): `fs::copy`
+/// followed the path the walk produced, so a hardlink planted inside the
+/// source tree materialised outside bytes into the destination — the write
+/// mirror of the read-through the audit scored. The destination file is
+/// created in the same private mode every stored file carries.
+fn copy_dir_all(root: &Path, from: &Path, to: &Path) -> io::Result<()> {
     create_private_dir_all(to)?;
     for entry in fs::read_dir(from)? {
         let entry = entry?;
         let target = to.join(entry.file_name());
         if entry.file_type()?.is_dir() {
-            copy_dir_all(&entry.path(), &target)?;
+            copy_dir_all(root, &entry.path(), &target)?;
         } else {
-            fs::copy(entry.path(), &target)?;
+            let contents = read_confined(root, &entry.path())?;
+            let mut file = OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&target)?;
+            set_private_permissions(&file, PRIVATE_FILE_MODE)?;
+            file.write_all(&contents)?;
+            file.sync_all()?;
         }
     }
     Ok(())

@@ -220,6 +220,11 @@ refuses a descriptor whose link count exceeds one or whose device differs from t
 byte. A hardlink planted inside the attachment tree therefore answers the same safe `500 storage_error`
 envelope as a symlink escape; no documented response shape changes.
 
+The same handle confinement is no longer attachment-only (#366): document reads, revision-snapshot
+reads, the auth store's users and grants files, and the composition-copy walk all go through
+`read_confined`, so a hardlink planted at any of those in-tree names answers the same safe
+`500 storage_error` envelope. No documented response shape changes there either.
+
 ## Real-Parent Creation Plan (Issue #66)
 
 Issue: [#66](https://github.com/TucanoTechnology/TucanoTestAPI/issues/66) — creating a suite or case requires a

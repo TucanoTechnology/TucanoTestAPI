@@ -23,6 +23,7 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
+use crate::storage::layout::read_confined;
 use crate::storage::{
     PRIVATE_FILE_MODE, create_private_dir_all, ensure_within, folder_name, folder_wire_id,
     set_private_permissions, unique_suffix, validate_component,
@@ -184,7 +185,7 @@ impl AuthStore {
     }
 
     fn read_users_unlocked(&self) -> io::Result<Vec<User>> {
-        match fs::read_to_string(self.users_path()) {
+        match read_to_string_confined(&self.root, &self.users_path()) {
             Ok(contents) => {
                 let file: UserFile = serde_json::from_str(&contents)
                     .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
@@ -206,7 +207,7 @@ impl AuthStore {
     }
 
     fn read_grants_unlocked(&self, project_id: &str) -> io::Result<Grants> {
-        match fs::read_to_string(self.grant_path(project_id)?) {
+        match read_to_string_confined(&self.root, &self.grant_path(project_id)?) {
             Ok(contents) => serde_json::from_str(&contents)
                 .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error)),
             // A project nobody was granted is a project with no grants, which is
@@ -504,6 +505,15 @@ fn write_json_atomically(destination: &Path, value: &serde_json::Value) -> io::R
         let _ = fs::remove_file(&temporary);
     }
     result
+}
+
+/// A stored file read through the handle-confined reader, decoded as text
+/// exactly as `fs::read_to_string` would (#366): a hardlink or symlink at an
+/// in-tree name is refused from the opened descriptor, not approved by the
+/// path.
+fn read_to_string_confined(root: &Path, path: &Path) -> io::Result<String> {
+    String::from_utf8(read_confined(root, path)?)
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
 }
 
 #[cfg(test)]

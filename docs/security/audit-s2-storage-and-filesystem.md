@@ -1614,7 +1614,10 @@ correspond to the fixtures measured in entries 5–6 above; the symlinked-*attac
 names has since been planted and refused at the API — the attachment file, the dangling variant of it
 and the case folder itself (pass entries 18–19, O-177-13) — so S2-3 is no longer partial; its fixture 6
 (the outside-file hardlink) has since been planted as well, and it did **not** hold, which is why it
-appears in §4 as F-177-7 rather than on this list. `F-177-3` names
+appears in §4 as F-177-7 rather than on this list. F-177-7's remaining half —
+the same read-through one level above the attachment route, which is all this entry's write-side
+fixture never measured — was closed by #366: document, revision-snapshot, auth-store and composition-
+copy reads are handle-confined too, with planted-name regressions in `tests/security_tests.rs`. `F-177-3` names
 `test_concurrent_writes_do_not_corrupt` — now re-run green — as the place a durability regression test
 belongs, because the baseline as written cannot fail on an acknowledged-but-lost write; pass entry 24
 measures that loss on a disk-backed volume and `F-177-3`'s *Where* bullet localises it in the code.
