@@ -1,0 +1,27 @@
+{
+  "expectedResult": "session issued",
+  "lastModified": "2026-09-26T20:08:01Z",
+  "priority": "High",
+  "steps": [
+    "open the login page",
+    {
+      "action": "submit credentials",
+      "expectedResult": "redirect to dashboard"
+    }
+  ],
+  "tags": [
+    "smoke"
+  ],
+  "testCaseId": "TC-100",
+  "title": "login works end to end",
+  "version": 2,
+  "attachments": [
+    {
+      "filename": "1-expected.png",
+      "originalName": "expected.png",
+      "mimeType": "image/png",
+      "size": 22,
+      "uploadedAt": "2026-09-26T12:00:00Z"
+    }
+  ]
+}
