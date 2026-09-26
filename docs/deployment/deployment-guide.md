@@ -68,6 +68,10 @@ and the container holds nothing that must survive a restart:
   folders are created, and the store never re-permissions what is already there: a volume written by
   an earlier build keeps the modes its existing directories have until they are recreated, while a
   document the service rewrites becomes owner-only from that write on.
+  A bind mount that does not meet this ownership fails startup loudly: the refusal names the path
+  and the uid the process ran as — `could not prepare the data directory at /data as uid 10001 …`
+  — instead of the bare `Permission denied (os error 13)` that used to repeat on every restart
+  (#355).
 
 This is the property that makes both scaling and rollback possible: two containers pointed at the
 same `TUCANO_DATA_DIR` see the same data.
