@@ -1,0 +1,9 @@
+{
+  "description": "representative project",
+  "name": "fixture-app",
+  "projectId": "fixture-app.json",
+  "tags": [
+    "fixture"
+  ],
+  "testSuites": []
+}

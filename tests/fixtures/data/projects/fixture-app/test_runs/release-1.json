@@ -1,0 +1,68 @@
+{
+  "caseVersions": {
+    "TC-100": 2,
+    "TC-101": 1
+  },
+  "name": "release-1",
+  "results": [
+    {
+      "durationMs": 12,
+      "notes": "fixture result",
+      "status": "Passed",
+      "testCaseId": "TC-100",
+      "timestamp": "1790453281"
+    },
+    {
+      "defectLinks": [
+        {
+          "defectId": "42",
+          "defectUrl": "https://github.com/tucanotechnology/example/issues/42",
+          "linkId": "link-1790453281268787785",
+          "linkedAt": "1790453281",
+          "title": "direct case fails",
+          "trackerType": "github"
+        }
+      ],
+      "status": "Failed",
+      "testCaseId": "TC-101",
+      "timestamp": "1790453281"
+    }
+  ],
+  "testCases": [
+    {
+      "expectedResult": "listed",
+      "lastModified": "2026-09-26T20:08:01Z",
+      "testCaseId": "TC-101",
+      "title": "held directly by the project",
+      "version": 1
+    }
+  ],
+  "testRunId": "release-1.json",
+  "testSuites": [
+    {
+      "name": "release-suites",
+      "suiteId": "release-suites.json",
+      "testCases": [
+        {
+          "expectedResult": "session issued",
+          "lastModified": "2026-09-26T20:08:01Z",
+          "priority": "High",
+          "steps": [
+            "open the login page",
+            {
+              "action": "submit credentials",
+              "expectedResult": "redirect to dashboard"
+            }
+          ],
+          "tags": [
+            "smoke"
+          ],
+          "testCaseId": "TC-100",
+          "title": "login works end to end",
+          "version": 2
+        }
+      ]
+    }
+  ],
+  "timestamp": "1790453281"
+}
