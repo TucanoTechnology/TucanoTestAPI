@@ -29,11 +29,10 @@ snapshot: every finding is either remediated or tracked by an open fix ticket.
 | Remaining (open ticket) | 0 | 0 | 0 | 0 | 4 | **4** |
 
 The one Critical (F-178-1) and both Highs (F-176-1, F-177-6) are remediated; so is every Medium and
-every Low. The four remaining findings are all Info. Open remediations at this snapshot:
+every Low. The three remaining findings are all Info. Open remediations at this snapshot:
 [#331](https://github.com/TucanoTechnology/TucanoTestAPI/issues/331) (F-178-5),
-[#333](https://github.com/TucanoTechnology/TucanoTestAPI/issues/333) (F-179-2),
-[#334](https://github.com/TucanoTechnology/TucanoTestAPI/issues/334) (F-179-5),
-[#336](https://github.com/TucanoTechnology/TucanoTestAPI/issues/336) (F-179-3). Separately, the
+[#333](https://github.com/TucanoTechnology/TucanoTestAPI/issues/333) (F-179-2), and
+[#334](https://github.com/TucanoTechnology/TucanoTestAPI/issues/334) (F-179-5). Separately, the
 PR-time container-scan control that F-178-4's remediation relies on is temporarily out of service
 (PR [#349](https://github.com/TucanoTechnology/TucanoTestAPI/pull/349)) and its restoration is
 tracked by [#362](https://github.com/TucanoTechnology/TucanoTestAPI/issues/362) — see
@@ -91,7 +90,7 @@ pinned at revision `61b02b92f9227190ded969a66f071f1ce4a8c3e0`. Ticket:
 | --- | --- | --- | --- | --- |
 | **F-179-1** | Low | The Dockerfile's builder stage is not digest-pinned, so the audited image is not provably the built image | [#332](https://github.com/TucanoTechnology/TucanoTestAPI/issues/332) | merged |
 | **F-179-2** | Info | CI actions and images are referenced by mutable tag, not pinned by commit SHA or digest | [#333](https://github.com/TucanoTechnology/TucanoTestAPI/issues/333) | open |
-| **F-179-3** | Info | The auto-merge PAT's authority is not stated in the threat model | [#336](https://github.com/TucanoTechnology/TucanoTestAPI/issues/336) (needs an owner decision: state the authority, or drop the PAT) | open |
+| **F-179-3** | Info | The auto-merge PAT's authority is not stated in the threat model | [#336](https://github.com/TucanoTechnology/TucanoTestAPI/issues/336) — owner decision recorded there: the PAT stays (dropping it would park every owner PR behind a manual approval), and its authority, the workflow's compensating gates, and rotation ownership are now stated in [threat-model.md](threat-model.md) under *Known limitations* | merged |
 | **F-179-4** | Info | The scanning policy's dependency-pinning claim contradicts `Cargo.toml` | [#335](https://github.com/TucanoTechnology/TucanoTestAPI/issues/335) | merged |
 | **F-179-5** | Info | The secret scan claims to cover history but runs with `--no-git`, so it scans the working tree only | [#334](https://github.com/TucanoTechnology/TucanoTestAPI/issues/334) | open |
 
@@ -109,11 +108,12 @@ implemented, and are tracked so the board is complete.
 
 - Every child task (#175–#180) is closed, and all four surface reports plus the scope, design and
   triage records are on `main`.
-- Every finding is tracked: 16 are remediated (13 closed tickets covering 15 findings — #321 and
-  #324 each merged two findings — plus F-178-1 fixed pre-triage by #278), and the remaining 4
-  (F-178-5, F-179-2, F-179-3, F-179-5, all Info) are owned by open tickets #331, #333, #336 and
+- Every finding is tracked: 17 are remediated (14 closed tickets covering 16 findings — #321 and
+  #324 each merged two findings — plus F-178-1 fixed pre-triage by #278), and the remaining 3
+  (F-178-5, F-179-2, F-179-5, all Info) are owned by open tickets #331, #333 and
   #334. None was accepted as an untracked risk.
 - [threat-model.md](threat-model.md) reflects the audit where a landed remediation changed a status:
-  the auth-on-by-default fix for F-178-1 (#278) is recorded there, and the hardlink abuse case
-  carries the #327 open-handle confinement requirement. F-179-3's question — stating the
-  auto-merge PAT's authority in the threat model — is deliberately left to #336.
+  the auth-on-by-default fix for F-178-1 (#278) is recorded there, the hardlink abuse case
+  carries the #327 open-handle confinement requirement, and F-179-3's question — stating the
+  auto-merge PAT's authority — was settled by #336: the PAT stays, and its authority, the
+  workflow's compensating gates, and its rotation ownership are recorded under *Known limitations*.
