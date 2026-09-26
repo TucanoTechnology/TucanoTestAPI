@@ -507,6 +507,15 @@ fn write_json_atomically(destination: &Path, value: &serde_json::Value) -> io::R
     result
 }
 
+/// A stored file read through the handle-confined reader, decoded as text
+/// exactly as `fs::read_to_string` would (#366): a hardlink or symlink at an
+/// in-tree name is refused from the opened descriptor, not approved by the
+/// path.
+fn read_to_string_confined(root: &Path, path: &Path) -> io::Result<String> {
+    String::from_utf8(read_confined(root, path)?)
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -863,13 +872,4 @@ mod tests {
         assert!(Role::Owner > Role::Editor);
         assert!(Role::Editor > Role::Viewer);
     }
-}
-
-/// A stored file read through the handle-confined reader, decoded as text
-/// exactly as `fs::read_to_string` would (#366): a hardlink or symlink at an
-/// in-tree name is refused from the opened descriptor, not approved by the
-/// path.
-fn read_to_string_confined(root: &Path, path: &Path) -> io::Result<String> {
-    String::from_utf8(read_confined(root, path)?)
-        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
 }
