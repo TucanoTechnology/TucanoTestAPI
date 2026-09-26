@@ -9,7 +9,7 @@ use std::error::Error;
 use std::fmt::{self, Display, Formatter};
 
 use argon2::Argon2;
-use argon2::password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString};
+use argon2::password_hash::{PasswordHasher, PasswordVerifier, phc::PasswordHash};
 use rand::RngCore;
 
 /// Salt length, in bytes, for a freshly hashed credential.
@@ -38,9 +38,11 @@ impl Error for HashError {}
 pub fn hash_password(password: &str) -> Result<String, HashError> {
     let mut salt_bytes = [0_u8; SALT_BYTES];
     rand::thread_rng().fill_bytes(&mut salt_bytes);
-    let salt = SaltString::encode_b64(&salt_bytes).map_err(|_| HashError)?;
+    // password-hash 0.6 takes the raw salt bytes and encodes them into the PHC
+    // string itself; the stored form is unchanged across the upgrade, so
+    // records hashed under 0.5 verify exactly as before.
     Argon2::default()
-        .hash_password(password.as_bytes(), &salt)
+        .hash_password_with_salt(password.as_bytes(), &salt_bytes)
         .map(|hash| hash.to_string())
         .map_err(|_| HashError)
 }
