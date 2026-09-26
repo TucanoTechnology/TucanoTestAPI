@@ -117,3 +117,42 @@ fn a_wrong_typed_jwt_secret_names_the_setting_and_never_the_value() {
         "must never echo the value inside the refused field: {stderr}"
     );
 }
+
+/// The data directory refusal is the one startup failure whose fix lives on
+/// the host — an unwritable bind mount owned by a uid the container does not
+/// run as — so the message must name the path and the uid (#355). A regular
+/// file standing where a directory must be fails `create_dir_all` under every
+/// uid, including root, which keeps this deterministic in CI containers.
+#[test]
+fn an_unusable_data_directory_names_the_path_and_the_uid() {
+    let directory = TempDir::new().expect("temp dir");
+    let blocker = directory.path().join("not-a-directory");
+    std::fs::write(&blocker, b"x").expect("write blocker");
+    let data_dir = blocker.join("deep");
+
+    let output = std::process::Command::new(BINARY)
+        .env("TUCANO_DATA_DIR", &data_dir)
+        .env("TUCANO_LOG", "error")
+        .env_remove("TUCANO_CONFIG_FILE")
+        .env_remove("TUCANO_CONFIG_KEY_FILE")
+        .output()
+        .expect("the built binary should be runnable");
+    assert!(
+        !output.status.success(),
+        "an unusable data directory must refuse startup"
+    );
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("not-a-directory"),
+        "the refusal must name the path: {stderr}"
+    );
+    assert!(
+        stderr.contains("data directory"),
+        "the refusal must say what failed: {stderr}"
+    );
+    assert!(
+        stderr.contains("uid"),
+        "the refusal must name the uid context: {stderr}"
+    );
+}
