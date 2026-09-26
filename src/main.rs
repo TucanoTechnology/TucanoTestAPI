@@ -62,12 +62,27 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let data_dir = data_dir();
     let port = port();
     let lock_timeout = lock_timeout();
-    let repository =
-        repository::FileRepository::new(data_dir.clone())?.with_lock_timeout(lock_timeout);
+    let repository = repository::FileRepository::new(data_dir.clone())
+        .map_err(startup_failure(
+            "prepare the data directory",
+            &data_dir.display().to_string(),
+        ))?
+        .with_lock_timeout(lock_timeout);
 
     let auth_config = auth::AuthConfig::from_env_and_file(file.as_ref())?;
-    let store = auth::AuthStore::new(&data_dir)?.with_lock_timeout(lock_timeout);
-    auth::ensure_bootstrap_user(&store, &auth_config, now_seconds())?;
+    let store = auth::AuthStore::new(&data_dir)
+        .map_err(startup_failure(
+            "prepare the account store below the data directory",
+            &data_dir.display().to_string(),
+        ))?
+        .with_lock_timeout(lock_timeout);
+    auth::ensure_bootstrap_user(&store, &auth_config, now_seconds()).map_err(|error| {
+        format!(
+            "could not ensure the bootstrap account below {} as uid {}: {error}",
+            data_dir.display(),
+            current_uid(),
+        )
+    })?;
     let authentication = api::auth::AuthState::new(store, auth_config);
 
     let guardrails = api::guardrails::Guardrails {
@@ -76,7 +91,15 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         max_concurrency: max_concurrency(),
     };
 
-    let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{port}")).await?;
+    let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{port}"))
+        .await
+        .map_err(|error| {
+            format!(
+                "could not bind 0.0.0.0:{port} as uid {} — another process holds the port, \
+                 or a privileged port needs capabilities the service is not given: {error}",
+                current_uid(),
+            )
+        })?;
     axum::serve(
         listener,
         api::router_with_guardrails(repository, authentication, guardrails),
@@ -195,6 +218,37 @@ fn max_concurrency_from(raw: Option<&str>) -> Option<usize> {
         .parse()
         .unwrap_or_else(|_| panic!("TUCANO_MAX_CONCURRENCY is not a valid u64: {raw:?}"));
     (cap > 0).then_some(cap as usize)
+}
+
+/// Render an io failure during startup with the two facts an operator can act
+/// on: which directory the process was reaching for, and which uid it was
+/// doing it as (#355). The container ships `USER tucano` (uid 10001) against a
+/// bind-mounted `/data`, so ownership of the host directory is the overwhelmingly
+/// likely cause; the raw io error is kept last so the OS text survives.
+fn startup_failure(
+    action: &str,
+    path: &str,
+) -> impl Fn(std::io::Error) -> Box<dyn std::error::Error> {
+    let (action, path) = (action.to_owned(), path.to_owned());
+    move |error| -> Box<dyn std::error::Error> {
+        Box::<dyn std::error::Error>::from(format!(
+            "could not {action} at {path} as uid {} — for a container reading a bind-mounted \
+             volume, check the host directory is writable by this uid: {error}",
+            current_uid(),
+        ))
+    }
+}
+
+#[cfg(unix)]
+fn current_uid() -> u32 {
+    rustix::process::getuid().as_raw()
+}
+
+#[cfg(not(unix))]
+fn current_uid() -> u32 {
+    // Non-unix builds have no uid to name; the path and the io error still
+    // carry the diagnosis there.
+    0
 }
 
 /// The directive set an unset, empty or blank `TUCANO_LOG` resolves to.
@@ -582,6 +636,20 @@ mod tests {
     #[should_panic(expected = "TUCANO_MAX_CONCURRENCY is not a valid u64")]
     fn a_non_numeric_concurrency_cap_stops_startup() {
         max_concurrency_from(Some("plenty"));
+    }
+
+    #[test]
+    fn a_startup_io_failure_names_the_path_and_the_uid() {
+        let error = std::io::Error::from(std::io::ErrorKind::PermissionDenied);
+        let message =
+            startup_failure("prepare the data directory", "/srv/tucano/data")(error).to_string();
+        assert!(message.contains("/srv/tucano/data"), "{message}");
+        assert!(message.contains("uid"), "{message}");
+        assert!(
+            message.to_lowercase().contains("permission denied"),
+            "{message}"
+        );
+        assert!(message.contains("prepare the data directory"), "{message}");
     }
 
     #[test]

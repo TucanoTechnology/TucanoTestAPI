@@ -284,7 +284,7 @@ Causes and fixes:
 | Cause | Fix |
 | --- | --- |
 | The directory does not exist and the container cannot create it | Create it on the host: `mkdir -p ./data`. A bind mount does not create its source for you in every Docker version. |
-| The directory is not writable by the container's user (uid `10001`) | `sudo chown -R 10001:10001 ./data`. A root-owned `./data` created by a stray `sudo mkdir` is the usual culprit. |
+| The directory is not writable by the container's user (uid `10001`) | `sudo chown -R 10001:10001 ./data`. A root-owned `./data` created by a stray `sudo mkdir` is the usual culprit. Since #355 the startup log says exactly this — it names the path and the uid — so `docker logs` is self-diagnosing. |
 | A previously crashed writer left the advisory lock held | See *A replica reports the storage lock cannot be taken* below. |
 | A volume written by a pre-v3 build | Not a fault: the service is refusing a legacy layout on purpose. See [Storage layout v3 and legacy volumes](../deployment/deployment-guide.md#storage-layout-v3-and-legacy-volumes). |
 
