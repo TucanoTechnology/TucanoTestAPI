@@ -37,7 +37,7 @@ jobs:
         - tucanotestapi-cargo-git:/usr/local/cargo/git
         - tucanotestapi-rustup:/usr/local/rustup
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Sync Rust toolchain
         run: |
           for attempt in 1 2 3 4 5; do
@@ -86,7 +86,7 @@ jobs:
     runs-on: [self-hosted, Linux, X64]
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Check whether the wiki token is configured
         id: token
         env:
