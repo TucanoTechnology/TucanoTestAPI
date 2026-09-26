@@ -266,7 +266,7 @@ pub fn encrypt_value(
     let cipher = Aes256Gcm::new_from_slice(key).map_err(|_| SecretError::DecryptionFailed)?;
 
     let mut nonce_bytes = [0u8; NONCE_LENGTH];
-    getrandom::getrandom(&mut nonce_bytes).map_err(|_| SecretError::DecryptionFailed)?;
+    getrandom::fill(&mut nonce_bytes).map_err(|_| SecretError::DecryptionFailed)?;
     let nonce: Nonce<Aes256Gcm> = nonce_bytes.into();
 
     let ciphertext = cipher
