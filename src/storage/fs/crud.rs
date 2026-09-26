@@ -175,7 +175,8 @@ impl FileRepository {
         parent: Option<&Parent>,
         id: &str,
     ) -> io::Result<Vec<u8>> {
-        std::fs::read(self.document(resource, parent, id)?)
+        // Descriptor confinement, not path approval (#366).
+        read_confined(&self.root, &self.document(resource, parent, id)?)
     }
 
     pub(super) fn transform_at<F>(
@@ -198,7 +199,7 @@ impl FileRepository {
                     "Resource not found",
                 ));
             }
-            let raw = std::fs::read(&path)?;
+            let raw = read_confined(&self.root, &path)?;
 
             if let Some(expected) = expected_etag {
                 let current = crate::storage::compute_etag(&raw);
