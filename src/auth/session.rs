@@ -341,7 +341,7 @@ mod tests {
     #[test]
     fn the_decoy_hash_parses_and_never_verifies() {
         assert!(
-            argon2::password_hash::PasswordHash::new(DECOY_HASH).is_ok(),
+            argon2::password_hash::phc::PasswordHash::new(DECOY_HASH).is_ok(),
             "the decoy must parse, or an unknown username would skip the work it is there to spend"
         );
         assert!(!verify_password(DECOY_HASH, PASSWORD));
