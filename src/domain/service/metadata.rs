@@ -18,7 +18,7 @@ impl<R: Repository + 'static> TestService<R> {
     /// outside it contributes nothing. A trusted caller passes `None` and sees
     /// every milestone.
     pub fn release_names(&self, reachable: Option<&[String]>) -> Result<Vec<String>, DomainError> {
-        self.distinct_names(Resource::Milestones, reachable)
+        self.cached_names("releases", Resource::Milestones, reachable)
     }
 
     /// The distinct, sorted `name` of every test configuration the caller can
@@ -32,7 +32,38 @@ impl<R: Repository + 'static> TestService<R> {
         &self,
         reachable: Option<&[String]>,
     ) -> Result<Vec<String>, DomainError> {
-        self.distinct_names(Resource::Configurations, reachable)
+        self.cached_names("environments", Resource::Configurations, reachable)
+    }
+
+    /// The context bar (#415): names derive from every document of one
+    /// resource, and the GUI fetches them on every navigation — served from
+    /// the derivation cache, keyed by the caller's scope, retired by every
+    /// local write and age-bounded across replicas.
+    fn cached_names(
+        &self,
+        kind: &str,
+        resource: Resource,
+        reachable: Option<&[String]>,
+    ) -> Result<Vec<String>, DomainError> {
+        let key = format!("{kind}|{}", super::cache::scope_key(reachable));
+        let value = self.cached_derivations(&key, || {
+            Ok(Value::Array(
+                self.distinct_names(resource, reachable)?
+                    .into_iter()
+                    .map(Value::String)
+                    .collect(),
+            ))
+        })?;
+        Ok(value
+            .as_array()
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .map(str::to_owned)
+                    .collect()
+            })
+            .unwrap_or_default())
     }
 
     /// Every `name` a reachable project stores for `resource`, deduplicated and

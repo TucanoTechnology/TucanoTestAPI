@@ -41,6 +41,7 @@ pub use audit::AUDIT_TARGET;
 // holds one cohesive slice of the inherent methods and nothing else.
 mod attachments;
 mod audit;
+mod cache;
 mod composition;
 mod crud;
 mod duplication;
@@ -88,6 +89,9 @@ impl Composed {
 /// CRUD, composition, duplication and reporting over a [`Repository`].
 pub struct TestService<R> {
     repository: R,
+    /// Derived answers (context bar, summaries, progress) retired by every
+    /// local write and bounded by age for cross-replica staleness (#415).
+    derivations: cache::DerivationCache,
 }
 
 /// Map an io::Error out of a single-lock read-modify-write.
@@ -118,7 +122,10 @@ fn map_mutation_error(error: io::Error, missing: &str) -> DomainError {
 impl<R: Repository + 'static> TestService<R> {
     /// Wraps a repository in the domain rules.
     pub fn new(repository: R) -> Self {
-        Self { repository }
+        Self {
+            repository,
+            derivations: cache::DerivationCache::default(),
+        }
     }
 
     /// The storage backend this service reads from and writes to.
@@ -228,6 +235,7 @@ impl<R: Repository + 'static> TestService<R> {
             self.create_marker(resource, parent, &id, value)?;
             Ok(Created { id: id.clone() })
         })
+        .inspect(|_| self.derivations.invalidate())
     }
 
     /// Applies the test-case version rules to a merged `PUT` document.
@@ -647,7 +655,26 @@ impl<R: Repository + 'static> TestService<R> {
             return Err(error);
         }
         outcome.map_err(|error| map_mutation_error(error, "Test run not found"))?;
+        self.derivations.invalidate();
         produced.ok_or_else(|| DomainError::Internal("run mutation produced no outcome".to_owned()))
+    }
+
+    /// Answers `compute` through the derivation cache (#415).
+    ///
+    /// `key` must name everything the value depends on besides the documents
+    /// themselves — the caller's scope, the filters — since a write anywhere
+    /// is the only other thing that retires an entry.
+    fn cached_derivations<F: FnOnce() -> Result<Value, DomainError>>(
+        &self,
+        key: &str,
+        compute: F,
+    ) -> Result<Value, DomainError> {
+        if let Some(hit) = self.derivations.get(key) {
+            return Ok(hit);
+        }
+        let value = compute()?;
+        self.derivations.put(key, &value);
+        Ok(value)
     }
 
     /// The parent a write addresses, for resources that live inside one.

@@ -799,3 +799,113 @@ async fn milestone_reference_arrays_are_bounded() {
     .await;
     assert_eq!(status, StatusCode::CREATED, "{created}");
 }
+
+/// #415: the derived endpoints are served from a cache that every local
+/// write retires — a client must never read a stale derived answer after a
+/// change it (or anyone in this process) made.
+#[tokio::test]
+async fn derived_answers_track_local_writes_immediately() {
+    let (_directory, app) = test_app();
+    let home = fixture_home(&app).await;
+
+    let (status, _) = send_json(
+        &app,
+        json_request(
+            "POST",
+            &format!("/projects/{home}/milestones"),
+            &json!({"milestoneId": "fresh.json", "name": "Fresh", "testRunIds": ["nope.json"]}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    // Warm the context-bar cache, then change the data behind it twice.
+    let (status, releases) = send_json(&app, get("/releases")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        releases
+            .as_array()
+            .is_some_and(|names| names.iter().any(|n| n == "Fresh")),
+        "{releases}"
+    );
+
+    send_json(
+        &app,
+        json_request("PUT", "/milestones/fresh.json", &json!({"name": "Renamed"})),
+    )
+    .await;
+    let (_, releases) = send_json(&app, get("/releases")).await;
+    assert!(
+        releases
+            .as_array()
+            .is_some_and(|names| names.iter().any(|n| n == "Renamed")),
+        "the update must be visible in the same second: {releases}"
+    );
+    assert!(
+        releases
+            .as_array()
+            .is_some_and(|names| !names.iter().any(|n| n == "Fresh")),
+        "the retired name must not answer from cache: {releases}"
+    );
+
+    send_json(&app, delete("/milestones/fresh.json")).await;
+    let (_, releases) = send_json(&app, get("/releases")).await;
+    assert!(
+        !releases
+            .as_array()
+            .unwrap_or(&Vec::new())
+            .iter()
+            .any(|n| n == "Renamed"),
+        "a delete must be reflected immediately: {releases}"
+    );
+}
+
+#[tokio::test]
+async fn summary_and_progress_track_result_writes_immediately() {
+    let (_directory, app) = test_app();
+    let home = fixture_home(&app).await;
+    let (status, created) = send_json(
+        &app,
+        json_request(
+            "POST",
+            &format!("/projects/{home}/test_runs"),
+            &json!({"name": "caching", "testCases": [common::case_body("TC-1")]}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{created}");
+    let run_id = created["id"].as_str().expect("run id").to_owned();
+    send_json(
+        &app,
+        json_request(
+            "POST",
+            &format!("/projects/{home}/milestones"),
+            &json!({"milestoneId": "P.json", "name": "P", "testRunIds": [run_id]}),
+        ),
+    )
+    .await;
+
+    let (_, before) = send_json(&app, get("/reports/summary")).await;
+    assert_eq!(before["total"], 0);
+    let (_, progress_before) = send_json(&app, get("/milestones/P.json/progress")).await;
+    assert_eq!(progress_before["passed"], 0);
+
+    let (status, recorded) = send_json(
+        &app,
+        json_request(
+            "POST",
+            &format!("/test_runs/{run_id}/results"),
+            &json!({"testCaseId": "TC-1", "status": "Passed"}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{recorded}");
+
+    let (_, after) = send_json(&app, get("/reports/summary")).await;
+    assert_eq!(after["total"], 1, "the recorded result must answer at once");
+    let (_, progress_after) = send_json(&app, get("/milestones/P.json/progress")).await;
+    assert_eq!(
+        progress_after["passed"], 1,
+        "progress must follow the write: {progress_after}"
+    );
+}

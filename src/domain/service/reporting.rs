@@ -13,6 +13,20 @@ impl<R: Repository + 'static> TestService<R> {
     /// that remain; one that two or more hold outside the home is refused,
     /// because an arbitrary pick would report a wrong number.
     pub fn milestone_progress(&self, id: &str) -> Result<MilestoneProgress, DomainError> {
+        // Polling endpoint of milestone dashboards, O(referenced runs) per
+        // answer (#415): the progress for one milestone is per-caller
+        // identical — authorisation happens in the route's guard before this
+        // runs — so one key serves it, retired by any local write and aged
+        // out across replicas.
+        let key = format!("progress|{}", id);
+        let value = self.cached_derivations(&key, || {
+            serde_json::to_value(self.milestone_progress_uncached(id)?)
+                .map_err(|error| DomainError::Internal(error.to_string()))
+        })?;
+        serde_json::from_value(value).map_err(|error| DomainError::Internal(error.to_string()))
+    }
+
+    fn milestone_progress_uncached(&self, id: &str) -> Result<MilestoneProgress, DomainError> {
         let home = self.resolve(Resource::Milestones, id, None, "Milestone not found")?;
         let value = self
             .repository
@@ -130,6 +144,32 @@ impl<R: Repository + 'static> TestService<R> {
     /// project outside it is skipped even though it would otherwise be in scope.
     /// A trusted caller passes `None` and sees every run.
     pub fn summary_report(
+        &self,
+        filters: &reports::SummaryFilters,
+        reachable: Option<&[String]>,
+    ) -> Result<SummaryReport, DomainError> {
+        // Reads and deserializes EVERY run in scope per call (#415): keyed
+        // by scope and filters — two callers never share an answer their
+        // authorisation would differ on. Validation failures (an unknown
+        // `project_id` filter answers 404) are not cached either way:
+        // `compute` runs them before anything is stored.
+        let key = format!(
+            "summary|{}|{}|{}|{}|{}|{}",
+            super::cache::scope_key(reachable),
+            super::cache::optional_key(filters.project_id.as_deref()),
+            super::cache::optional_key(filters.milestone_id.as_deref()),
+            super::cache::optional_key(filters.configuration_id.as_deref()),
+            super::cache::optional_key(filters.from.as_deref()),
+            super::cache::optional_key(filters.to.as_deref()),
+        );
+        let value = self.cached_derivations(&key, || {
+            serde_json::to_value(self.summary_report_uncached(filters, reachable)?)
+                .map_err(|error| DomainError::Internal(error.to_string()))
+        })?;
+        serde_json::from_value(value).map_err(|error| DomainError::Internal(error.to_string()))
+    }
+
+    fn summary_report_uncached(
         &self,
         filters: &reports::SummaryFilters,
         reachable: Option<&[String]>,
