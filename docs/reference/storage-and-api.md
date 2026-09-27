@@ -299,6 +299,12 @@ document too. Documents stored before the limit read unchanged — only writes a
 bound exists because every later reader (scope-filtered listings, milestone progress, the
 reachability guards) pays per reference, so an unbounded array is a permanent tax on the store.
 
+Every `500` additionally writes one `error`-level line naming the cause the client must not see —
+the surviving `io::Error` kind and message, or the internal explanation — joined to the response by
+the same request id, so a full volume, a remounted read-only directory and a dying disk are three
+distinct log lines rather than one undifferentiable envelope (#417). The client answer is
+unchanged: the fixed `storage_error` envelope, never the cause.
+
 The full reconciliation of the documented error contract and schema strictness is recorded in
 [docs/contracts/api-compatibility.md](../contracts/api-compatibility.md).
 
