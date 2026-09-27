@@ -440,14 +440,24 @@ impl AuthStore {
     /// A project that never had a grant file is already forgotten.
     pub fn remove_project_grants(&self, project_id: &str) -> io::Result<bool> {
         let _lock = self.acquire_lock()?;
-        match fs::remove_file(self.grant_path(project_id)?) {
+        let path = self.grant_path(project_id)?;
+        let removed = match fs::remove_file(&path) {
             // `true`: there was a grant file and it is gone. `false`: there
             // was nothing to forget — the caller's audit line distinguishes a
             // revocation from a no-op (#408).
-            Ok(()) => Ok(true),
-            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
-            Err(error) => Err(error),
+            Ok(()) => true,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => false,
+            Err(error) => return Err(error),
+        };
+        // A delete that a crash un-deletes resurrects access: the unlink is
+        // not durable until its directory is synced (#423).
+        if removed
+            && let Some(directory) = path.parent()
+            && let Ok(handle) = std::fs::File::open(directory)
+        {
+            let _ = handle.sync_all();
         }
+        Ok(removed)
     }
 
     /// Wire identifiers of the projects `user_id` holds a role in, sorted.
@@ -517,7 +527,13 @@ fn write_json_atomically(destination: &Path, value: &serde_json::Value) -> io::R
             .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
         file.write_all(b"\n")?;
         file.sync_all()?;
-        fs::rename(&temporary, destination)
+        fs::rename(&temporary, destination)?;
+        // Same rule as every other publish (#423): the rename is an edit
+        // to the directory; sync it or a crash rewrites history.
+        if let Ok(handle) = std::fs::File::open(directory) {
+            let _ = handle.sync_all();
+        }
+        Ok(())
     })();
     if result.is_err() {
         let _ = fs::remove_file(&temporary);

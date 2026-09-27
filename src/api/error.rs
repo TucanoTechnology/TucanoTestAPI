@@ -92,14 +92,53 @@ impl IntoResponse for DomainError {
                 "payload_too_large",
                 "Attachment exceeds 50 MiB",
             ),
+            // A 500 is the operator's problem, and until now the operator
+            // saw nothing: the cause was either a fixed string or an
+            // `io::Error` that the conversion had already digested. Both
+            // 500 shapes now log at `error` level with the request id and
+            // the cause, server-side only — the response contract is
+            // unchanged (#417).
             DomainError::Internal(message) => {
+                tracing::error!(
+                    request_id = request_id::current()
+                        .unwrap_or_else(|| "-".to_owned())
+                        .as_str(),
+                    code = "storage_error",
+                    cause = message.as_str(),
+                    "request failed with a server-side cause"
+                );
                 envelope(StatusCode::INTERNAL_SERVER_ERROR, "storage_error", &message)
             }
-            DomainError::Storage => envelope(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "storage_error",
-                "Storage operation failed",
-            ),
+            DomainError::Storage => {
+                tracing::error!(
+                    request_id = request_id::current()
+                        .unwrap_or_else(|| "-".to_owned())
+                        .as_str(),
+                    code = "storage_error",
+                    cause = "no cause recorded",
+                    "request failed with a server-side cause"
+                );
+                envelope(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "storage_error",
+                    "Storage operation failed",
+                )
+            }
+            DomainError::StorageWithCause(cause) => {
+                tracing::error!(
+                    request_id = request_id::current()
+                        .unwrap_or_else(|| "-".to_owned())
+                        .as_str(),
+                    code = "storage_error",
+                    cause = cause.as_str(),
+                    "request failed with a server-side cause"
+                );
+                envelope(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "storage_error",
+                    "Storage operation failed",
+                )
+            }
             DomainError::LockTimeout => {
                 let mut response = envelope(
                     StatusCode::SERVICE_UNAVAILABLE,
