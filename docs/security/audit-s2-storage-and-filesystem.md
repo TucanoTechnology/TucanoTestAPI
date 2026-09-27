@@ -645,6 +645,18 @@ every mutating call site, with the one deliberate exception above named rather t
   `TUCANO_AUTH_REQUIRED` set — that is any client that can reach the listener; under
   `TUCANO_AUTH_REQUIRED=true` it is a client holding write access on that case.
 
+**Addendum — pass entry 24, durability half closed (#423, 2026-09-27).** The acknowledged-but-
+discarded WRITE race this entry localised was fixed transactionally by #406. The entry also noted
+what never happened: no torn document, no leftover temp — the atomic-rename discipline held. What
+this checkpoint left open was the crash half of that same discipline: a rename that is durable for
+processes but not for power, because the *directory* holding the new name was never synced. #423
+closes it: after every publish rename, move rename, delete unlink, and attachment creation, the
+owning directory is fsynced best-effort (platforms that refuse a directory open keep exactly the
+previous guarantee, documented at the helper), and the ordering rule for access is stated: a
+grant revocation is synced to disk **before** the project folder it frees is deleted, so a crash
+can never roll back a forget and resurrect access. Additive to this record — every measurement
+above stays point-in-time true for revision `c5e9943`.
+
 ### F-177-4: An identifier longer than the filesystem's name limit is accepted and then fails as `500 storage_error`
 
 - **Severity:** **Low** — Moderate × Limited. *Exploitability:* **Moderate**, on the rubric's "or one

@@ -5,7 +5,7 @@ use common::{
     assert_error_envelope, content_disposition, content_type, create_test_case, delete, get,
     json_request, multipart_request, multipart_without_file, send, send_full, send_json, test_app,
 };
-use serde_json::json;
+use serde_json::{Value, json};
 
 #[tokio::test]
 async fn attachments_support_upload_download_and_delete() {
@@ -1046,4 +1046,31 @@ async fn a_parent_scoped_attachment_route_requires_the_named_parent_to_hold_the_
     )
     .await;
     assert_eq!(status, StatusCode::CREATED);
+}
+
+/// The failure-path twin of the happy upload matrix (#421): a frame whose
+/// final boundary never arrives — the exact shape a connection that died
+/// mid-upload produces — is refused as `invalid_multipart`, and NOTHING is
+/// recorded for the case.
+#[tokio::test]
+async fn a_truncated_multipart_frame_is_refused_and_records_nothing() {
+    let (_directory, app) = test_app();
+    common::create_test_case(&app, "TC-cut").await;
+
+    let (status, body) = send_json(
+        &app,
+        common::multipart_truncated("/test_cases/TC-cut/attachments"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_error_envelope(&body, "invalid_multipart");
+
+    let (_, document) = send_json(&app, get("/test_cases/TC-cut")).await;
+    assert!(
+        document
+            .get("attachments")
+            .and_then(Value::as_array)
+            .is_none_or(Vec::is_empty),
+        "a refused upload must leave nothing behind: {document}"
+    );
 }

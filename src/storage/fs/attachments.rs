@@ -28,6 +28,12 @@ impl FileRepository {
             set_private_permissions(&file, PRIVATE_FILE_MODE)?;
             file.write_all(contents)?;
             file.sync_all()?;
+            // The name itself is a directory entry: sync the folder so an
+            // uploaded attachment does not vanish at power loss while its
+            // marker still advertises it (#423).
+            if let Some(directory) = path.parent() {
+                super::FileRepository::sync_directory(directory);
+            }
             if let Err(error) = self.record_attachment(&marker, entry) {
                 let _ = fs::remove_file(&path);
                 return Err(error);
@@ -92,6 +98,9 @@ impl FileRepository {
             set_private_permissions(&file, PRIVATE_FILE_MODE)?;
             file.write_all(contents)?;
             file.sync_all()?;
+            if let Some(directory) = path.parent() {
+                super::FileRepository::sync_directory(directory);
+            }
             if let Err(error) = self.record_step_attachment(&marker, step_index, entry) {
                 let _ = fs::remove_file(&path);
                 return Err(error);

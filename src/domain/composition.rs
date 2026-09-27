@@ -158,8 +158,11 @@ pub fn detach_configuration_from_run(
 /// value in the end.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Patch<T> {
+    /// The stored value stands; the request said nothing about it.
     Keep,
+    /// The request asked for the value to be removed.
     Clear,
+    /// The request supplies a replacement value.
     Set(T),
 }
 
@@ -184,10 +187,15 @@ impl<T> Patch<T> {
 /// fields the request decides, so re-recording keeps what it cannot see.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResultUpdate {
+    /// The case the result belongs to, addressed verbatim.
     pub test_case_id: String,
+    /// The recorded status: one of the five buckets.
     pub status: String,
+    /// When the execution happened, stored verbatim.
     pub timestamp: String,
+    /// A `Patch`: omission keeps the stored value, `Clear` nulls it.
     pub notes: Patch<String>,
+    /// Milliseconds the case took, as a `Patch` for the same reason.
     pub duration_ms: Patch<u64>,
 }
 
