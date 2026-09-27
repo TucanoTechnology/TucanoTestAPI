@@ -110,6 +110,8 @@ pub fn request_span(request: &Request) -> tracing::Span {
         path = %request.uri().path(),
         query = tracing::field::Empty,
         request_id = %id,
+        // Recorded at response time by the actor layer's callback (#416).
+        user = tracing::field::Empty,
         status = tracing::field::Empty,
         duration_ms = tracing::field::Empty,
     );

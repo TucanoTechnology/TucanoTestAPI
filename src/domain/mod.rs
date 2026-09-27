@@ -19,7 +19,10 @@ pub mod service;
 pub mod validation;
 
 pub use error::DomainError;
-pub use service::{AUDIT_TARGET, ChildExpansion, Composed, TestService};
+pub use service::{
+    AUDIT_TARGET, ChildExpansion, Composed, TestService, current_actor, with_actor,
+    with_request_actor,
+};
 
 use serde::Deserialize;
 use serde_json::Value;
