@@ -314,12 +314,54 @@ pub(crate) fn guard_get<R: Repository + 'static>(
     principal: &Principal,
     resource: Resource,
     id: &str,
-) -> Result<(), DomainError> {
-    if !state.auth().config.required {
-        return Ok(());
+) -> Result<ReadOutcome, DomainError> {
+    // The read guard IS the read (#412): resolving the home, reading the
+    // document and digesting its bytes used to happen once per concern —
+    // three whole-tree scans and two file reads per GET. One resolution now
+    // serves authz, the body, and the ETag, and the handler consumes the
+    // result instead of reading again. `not_found` preserves the exact 404
+    // text each path published before: the resource-named message when the
+    // authz resolution is what 404s, the generic one when the read answers
+    // for itself (a project, addressed without any resolve, or any resource
+    // on a deployment that authorises nothing).
+    let not_found = if state.auth().config.required && resource != Resource::Projects {
+        missing(resource)
+    } else {
+        "Resource not found"
+    };
+    // A project is addressed by its own name, so its guard never needed a
+    // resolve to authorise: the OLD order was authorise, then read, and both
+    // an existing and a nonexistent project answered 403 to a caller with no
+    // grant there. Reading first would turn that into 404-vs-403 — an
+    // existence oracle. Projects therefore keep authorise-before-read.
+    if state.auth().config.required && resource == Resource::Projects {
+        require_every(state.auth(), principal, &[id.to_owned()], Role::Viewer)?;
     }
-    let projects = projects_of(state, resource, id)?;
-    require_every(state.auth(), principal, &projects, Role::Viewer)
+    let home = state.resolve_home(resource, id, not_found)?;
+    let (document, etag) = state.get_and_etag(resource, id, home.as_ref(), not_found)?;
+    if !state.auth().config.required {
+        return Ok(ReadOutcome { document, etag });
+    }
+    let projects = match resource {
+        Resource::Projects => vec![id.to_owned()],
+        // A run or a milestone reaches several projects; their reference
+        // resolution keeps its own path for now (#415 generalises it).
+        Resource::Runs | Resource::Milestones => projects_of(state, resource, id)?,
+        _ => vec![
+            home.as_ref()
+                .expect("every stored resource but a project has a home")
+                .project()
+                .to_owned(),
+        ],
+    };
+    require_every(state.auth(), principal, &projects, Role::Viewer)?;
+    Ok(ReadOutcome { document, etag })
+}
+
+/// The document a guard already read, digested from the very bytes served.
+pub(crate) struct ReadOutcome {
+    pub document: Value,
+    pub etag: String,
 }
 
 /// Authorizes creating `resource` from `body`.
