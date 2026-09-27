@@ -1972,6 +1972,45 @@ async fn an_identifier_two_projects_hold_links_from_the_run_own_project() {
     );
 }
 
+/// #409: rotation spends the refresh token as an exclusive, reported action.
+/// Eight concurrent rotations of ONE token must produce exactly one session:
+/// before the fix every one of them could pass the lookup and mint its own
+/// pair, making "a token can be exchanged at most once" — the theft-detection
+/// property of rotation — false under any contention.
+#[test]
+fn a_refresh_token_exchanges_at_most_once_under_concurrent_replay() {
+    let directory = tempfile::tempdir().expect("temp dir");
+    let store = AuthStore::new(directory.path()).expect("store");
+    store.insert_user(&account()).expect("insert the account");
+    let session = login(&store, &config(), USERNAME, PASSWORD, NOW).expect("sign in");
+    let spent = session.refresh_token.clone();
+
+    let winners = std::sync::atomic::AtomicUsize::new(0);
+    std::thread::scope(|scope| {
+        for _ in 0..8 {
+            let store = &store;
+            let spent = &spent;
+            let winners = &winners;
+            scope.spawn(move || {
+                if refresh(store, &config(), spent, NOW + 1).is_ok() {
+                    winners.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                }
+            });
+        }
+    });
+    assert_eq!(
+        winners.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "exactly one concurrent rotation may consume the token"
+    );
+
+    // The spent token can never exchange again, and the winner's replacement
+    // still can — once.
+    let replay = refresh(&store, &config(), &spent, NOW + 2);
+    let error = replay.expect_err("a spent token must never exchange again");
+    assert_eq!(error.code(), "invalid_refresh_token", "{error:?}");
+}
+
 /// #408: the grants a deleted project leaves behind resurrect every old role
 /// the moment the identifier is re-created — authorisation reads the file, and
 /// nothing else would ever write it again. Delete now forgets them.
