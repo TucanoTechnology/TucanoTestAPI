@@ -144,6 +144,13 @@ These decisions must be resolved before the HTTP compatibility layer is exposed 
   project it names before it loads the resource, a restricted caller can receive `403` where an
   anonymous-old deployment would have answered `404` for an identifier that does not exist. With
   `TUCANO_AUTH_REQUIRED` off every guard returns, so behaviour is unchanged.
+  The one place where a FILTER parameter — not a path — resolved across the whole store used to
+  complete the oracle the other way: `milestoneId`/`configurationId` on `/reports/summary` answered
+  `404`/`409` for identifiers living in tenants the caller cannot see, which distinguishes
+  "exists somewhere" from "nowhere". #422 closed it: an out-of-scope resolution failure now answers
+  the empty report — byte-identical to a filter that matched nothing — for restricted callers,
+  while a caller who CAN see one of the homes keeps the documented `409` ambiguity and a trusted
+  deployment keeps every genuine `404`.
 - **There is no grant-administration endpoint.** Accounts and grants are read from
   `TUCANO_DATA_DIR/auth/`, which must be provisioned out of band; creating a project does not grant
   its creator a role, so a project can exist with no grant-holder until an administrator adds one.

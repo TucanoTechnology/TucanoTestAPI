@@ -323,6 +323,12 @@ and retired by every local write — exact within a replica. Across replicas tho
 out at 45 seconds; document routes are never cached and stay strongly consistent (see
 [the compatibility note](../contracts/api-compatibility.md)).
 
+Report and context filters (`milestoneId`, `configurationId`) resolve identifiers across the whole
+store, so for a restricted caller an unresolvable or wholly out-of-scope identifier answers the
+EMPTY report — identical to a filter that matched nothing — rather than the `404`/`409` that would
+disclose existence in tenants the caller cannot see (#422). Ambiguity within reach stays the
+documented `409`, and a trusted deployment keeps every genuine `404`.
+
 The API process is stateless: replicas do not keep sessions or in-memory records. Horizontal scaling
 requires a shared persistent POSIX volume mounted at the same `TUCANO_DATA_DIR` for every replica.
 Repository mutations use an advisory lock file and atomic same-directory renames. A write that
