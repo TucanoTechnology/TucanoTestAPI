@@ -81,7 +81,10 @@ where
     F: FnOnce() -> Result<T, DomainError> + Send + 'static,
     T: Send + 'static,
 {
-    tokio::task::spawn_blocking(work)
+    // The audit actor does not cross threads on its own; capture it here and
+    // reinstall it inside the blocking closure (#416).
+    let actor = crate::domain::current_actor();
+    tokio::task::spawn_blocking(move || crate::domain::with_actor(actor, work))
         .await
         // A panic inside the synchronous phase surfaces as the ordinary
         // storage failure (trace on stderr from the pool thread itself);
@@ -97,7 +100,55 @@ where
     F: FnOnce() -> T + Send + 'static,
     T: Send + 'static,
 {
-    tokio::task::spawn_blocking(work).await.unwrap_or(fallback)
+    let actor = crate::domain::current_actor();
+    tokio::task::spawn_blocking(move || crate::domain::with_actor(actor, work))
+        .await
+        .unwrap_or(fallback)
+}
+
+/// The authenticated subject, carried on the response to reach the span
+/// recording that runs at response time inside the trace layer.
+#[derive(Clone, Debug)]
+pub(crate) struct RequestActor(pub String);
+
+/// Installs the acting subject for the request (#416).
+///
+/// Runs the same extractor a protected handler runs, once, here: it records
+/// the verified account on the request span (via the trace layer's response
+/// callback, the one place holding the span handle) and holds the actor in
+/// a task-local that `on_blocking` re-establishes on the pool thread — so
+/// the `audited()` line a write emits names WHO performed it even though
+/// the write happens off the request task. A request with no (or an
+/// invalid) token keeps no actor: writes possible without one happen on a
+/// deployment that enforces no authentication and are honestly attributed
+/// to `-`.
+async fn audit_actor<R: crate::storage::Repository + 'static>(
+    State(state): State<AppState<R>>,
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    let (mut parts, body) = request.into_parts();
+    let actor = <crate::auth::Principal as axum::extract::FromRequestParts<AppState<R>>>::from_request_parts(
+        &mut parts,
+        &state,
+    )
+    .await
+    .ok();
+    let request = axum::extract::Request::from_parts(parts, body);
+    // An enforced token or nothing: on a trusted deployment the extractor
+    // answers an anonymous principal whose subject is empty, and the audit
+    // trail attributes such writes to the documented `-` rather than an
+    // empty string pretending to be an identity.
+    match actor.filter(|principal| !principal.user_id.is_empty()) {
+        Some(principal) => {
+            let user = principal.user_id;
+            let mut response =
+                crate::domain::with_request_actor(user.clone(), next.run(request)).await;
+            response.extensions_mut().insert(RequestActor(user));
+            response
+        }
+        None => next.run(request).await,
+    }
 }
 
 /// Largest request body the API accepts, in bytes. Uploads beyond this are
@@ -321,6 +372,14 @@ where
         .layer(middleware::from_fn_with_state(
             state.clone(),
             guardrails::concurrency::<R>,
+        ))
+        // An EARLIER `.layer` sits CLOSER to the routes: this must run
+        // INSIDE the trace layer, because the span recording rides the
+        // trace layer's response callback, which fires on the way out
+        // before an outer layer could annotate the response (#416).
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            audit_actor::<R>,
         ))
         .layer(
             TraceLayer::new_for_http()
