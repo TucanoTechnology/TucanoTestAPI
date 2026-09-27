@@ -11,8 +11,10 @@
 //      reader, which is the defect issue #236 reports.
 //   2. Every page under docs/ is listed in docs/SUMMARY.md, the mdBook table of
 //      contents. A page that is not in the book is invisible to a reader.
-//   3. Every page under docs/ is listed in the README documentation table, so a
-//      new page cannot be added without being discoverable.
+//   3. The README is a quick-start, not an index (issue #405): its job is to
+//      link the canonical indexes — docs/SUMMARY.md, the wiki index,
+//      CONTRIBUTING and AGENTS — which must therefore exist and be linked.
+//      Page-level completeness is rule 2's job (SUMMARY), not the README's.
 //   5. Every Rust module under src/ is named — as a `file.rs` — in README.md or
 //      AGENTS.md, so the architecture tables cannot rot into fiction when a
 //      module is added, renamed, or split (issue #424's presence assertion:
@@ -117,12 +119,18 @@ function checkSummary(pages) {
   }
 }
 
-/** Rule 3 — every docs page appears in the README documentation table. */
-function checkReadmeTable(pages) {
+/** Rule 3 (retargeted by issue #405) — the README links the canonical indexes. */
+function checkReadmeIndex() {
   const readme = readFileSync(readmePath, "utf8");
-  for (const page of pages) {
-    const linked = new RegExp(`\\]\\(${escapeRegExp(page)}\\)`).test(readme);
-    if (!linked) violations.push(`README.md: documentation table does not link ${page}`);
+  for (const index of [
+    "docs/SUMMARY.md",
+    "docs/wiki/README.md",
+    "CONTRIBUTING.md",
+    "AGENTS.md",
+  ]) {
+    if (!readme.includes(`](${index})`)) {
+      violations.push(`README.md: no longer links the canonical index ${index} (issue #405 moved the table to docs/SUMMARY.md)`);
+    }
   }
 }
 
@@ -158,8 +166,9 @@ function escapeRegExp(text) {
 }
 
 // Rule 5 (issue #424): every module under src/ must be NAMED somewhere in the
-// two architecture documents. The check is by file name (`guardrails.rs`),
-// because the tables describe files by name; mod.rs is the directory itself
+// architecture documents (the README table, AGENTS, and the delivered-tree
+// table in docs/architecture/rust-service-core.md). The check is by file name
+// (`guardrails.rs`), because the tables describe files by name; mod.rs is the directory itself
 // and main.rs/lib.rs are crate surfaces, so they are exempt, as is anything
 // named tests.rs. A new module that no doc mentions fails CI — the drift this
 // rule exists to catch was exactly `fs.rs` outliving its split into `fs/`.
@@ -168,7 +177,9 @@ function checkModulesNamed() {
     recursive: true,
     encoding: "utf8",
   });
-  const haystack = [readFileSync(join(repoRoot, "README.md"), "utf8"), readFileSync(join(repoRoot, "AGENTS.md"), "utf8")].join("\n");
+  const haystack = ["README.md", "AGENTS.md", "docs/architecture/rust-service-core.md"].map((f) =>
+    readFileSync(join(repoRoot, f), "utf8"),
+  ).join("\n");
   for (const entry of listing) {
     if (!entry.endsWith(".rs")) continue;
     const name = entry.split("/").pop();
@@ -183,7 +194,7 @@ const pages = docsPages();
 
 for (const page of [...pages, "README.md", "AGENTS.md"]) checkLinks(page);
 checkSummary(pages);
-checkReadmeTable(pages);
+checkReadmeIndex();
 checkWikiIndex(pages);
 checkModulesNamed();
 

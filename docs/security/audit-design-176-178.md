@@ -273,7 +273,7 @@ Each report is a standalone document with this skeleton:
 
 **PR mechanics.** `gh pr create --base main --title "docs(security): S<n> audit report (#<n>)"`, body
 linking the task, the epic `#166`, and this design document; **assign `ECiurleo`**
-(`gh pr edit <pr> --add-assignee ECiurleo`); add the report row to the README documentation table
+(`gh pr edit <pr> --add-assignee ECiurleo`); add the report row to `docs/SUMMARY.md`
 (`README.md` lines 704–709 hold the security table, where the S4 report is already listed) as the task's
 DoD requires; do not merge. One PR per audit, or one stacked PR if the executor prefers — see the closing
 section.
@@ -734,7 +734,7 @@ Each sub-task states the probe, the command, the control that must hold, and the
   epic `#166`, the S1 sentence from `audit-scope.md` §2, and "It carries findings only; nothing here is
   fixed." Then §1–§7 exactly as the shared contract's §5 specifies. Findings are `F-176-<n>`.
 - **PR.** `gh pr create --base main --title "docs(security): S1 HTTP surface audit report (#176)"` linking
-  `#176`, `#166`, and this design; assign `ECiurleo`; add the report row to the README documentation table;
+  `#176`, `#166`, and this design; assign `ECiurleo`; add the report row to `docs/SUMMARY.md`;
   do not merge.
 - **Deliverable-specific extras the DoD requires.** The route classification table (S1-2) is part of the
   report, not an appendix to this design. The DoD's "extend `tests/security_tests.rs` and `tests/auth.rs`

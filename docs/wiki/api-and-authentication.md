@@ -10,6 +10,9 @@ Compose publishes; a plain `docker run` of the image listens on `3000` instead.
 
 ## The shortest path to an authenticated call
 
+The shipped Compose stack enforces authentication; the service binary's own default is open —
+the Compose file is the safe default, not the service ([getting started](getting-started.md)).
+
 **1. Check the service is up.** `/health` is public, so it is the one call that works before you
 have any credentials:
 

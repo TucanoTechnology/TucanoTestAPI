@@ -68,6 +68,25 @@ node scripts/check-matrix.mjs
 node scripts/check-docs-links.mjs
 ```
 
+## Editor setup
+
+Recommended VS Code extensions are listed in `.vscode/extensions.json` and VS Code will offer to
+install them when the workspace is opened:
+
+- `rust-lang.rust-analyzer` — Rust language support
+- `github.vscode-github-actions` — workflow authoring and validation
+- `redhat.vscode-yaml` — YAML schema validation
+- `tamasfe.even-better-toml` — `Cargo.toml` support
+
+`.vscode/settings.json` maps `.github/workflows/*.yml` to the SchemaStore GitHub Actions schema so
+workflow files validate correctly.
+
+The GitHub Actions extension may report `Context access might be invalid: GITHUB_TOKEN` on
+`.github/workflows/release.yml`. This is a known false positive: `GITHUB_TOKEN` is injected
+automatically by GitHub Actions and is not a user-defined repository secret, so the extension cannot
+resolve it while signed out. The workflows are validated in CI with `actionlint`, which reports no
+issues.
+
 ## Code Standards
 
 ### Architecture
