@@ -58,7 +58,12 @@ pub enum Composed {
     /// A new entity was created in the target parent.
     Created(Created),
     /// An existing entity was copied or moved into the target parent.
-    Placed { id: String, mode: Placement },
+    Placed {
+        /// The identifier of the entity that arrived in the target parent.
+        id: String,
+        /// Whether it was copied or moved to get there.
+        mode: Placement,
+    },
 }
 
 impl Composed {

@@ -15,12 +15,20 @@ pub enum DomainError {
     /// The requested resource does not exist.
     NotFound(String),
     /// The request was malformed; `code` is the stable machine-readable code.
-    InvalidRequest { code: &'static str, message: String },
+    InvalidRequest {
+        /// The stable machine-readable code the client is answered with.
+        code: &'static str,
+        /// The human-readable message rendered into the envelope.
+        message: String,
+    },
     /// The request conflicts with existing state.
     Conflict(String),
     /// The `If-Match` ETag does not match the stored document; another writer
     /// changed it between the client's read and its update.
-    PreconditionFailed { current_etag: String },
+    PreconditionFailed {
+        /// The digest the stored document carries NOW, for the client's retry.
+        current_etag: String,
+    },
     /// The uploaded attachment is larger than [`crate::domain::MAX_ATTACHMENT_BYTES`].
     PayloadTooLarge,
     /// An unexpected internal failure carrying a specific message.
@@ -38,7 +46,12 @@ pub enum DomainError {
     /// The advisory lock could not be acquired within the configured timeout.
     LockTimeout,
     /// The request carried no usable credential; `code` names what was wrong.
-    Unauthenticated { code: &'static str, message: String },
+    Unauthenticated {
+        /// Which of `missing_token`, `invalid_token` or `token_expired` this is.
+        code: &'static str,
+        /// The message rendered into the envelope.
+        message: String,
+    },
     /// The credential is valid, but the caller may not perform this request.
     Forbidden(String),
 }
