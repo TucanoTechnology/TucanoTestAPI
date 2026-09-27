@@ -45,6 +45,7 @@
 - [Deployment guide](deployment/deployment-guide.md)
 - [Configuration reference](deployment/configuration-reference.md)
 - [Canary validation and rollback](deployment/canary-validation-and-rollback.md)
+- [Logging and metrics](deployment/logging-and-metrics.md)
 - [Off-box mirror and backup](deployment/off-box-mirror-runbook.md)
 
 # Security
@@ -66,3 +67,4 @@
 - [Seed dataset specification](testing/seed-dataset-spec.md)
 - [Test-data generator guide](testing/test-data-generator-guide.md)
 - [Fuzz and property tests](testing/fuzz-and-property-tests.md)
+- [Testing guide](testing/testing-guide.md)

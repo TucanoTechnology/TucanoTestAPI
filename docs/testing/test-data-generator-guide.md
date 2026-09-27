@@ -334,3 +334,38 @@ a deployment that no longer has the feature.
 bring a stack up, seed it, run `scripts/smoke.sh`, then validate — and
 [`scripts/check-matrix.mjs`](../../scripts/check-matrix.mjs) is the static half CI runs, which
 catches a route that reaches no matrix row without starting anything.
+
+## At a glance
+
+`scripts/seed.mjs` builds a complete demo environment against a running deployment over HTTP, and
+`scripts/teardown.mjs` removes exactly what the seed created. The dataset is generated, never stored
+— it cannot drift from the API.
+
+```sh
+# Start a deployment with auth enforced, then seed:
+node scripts/seed.mjs http://localhost:3100
+
+# Remove exactly what the seed created:
+node scripts/teardown.mjs http://localhost:3100
+```
+
+The full usage guide — the three audiences, environment variables, the auth exception, extending the
+generator when a feature lands, and the validation step — is in the this guide. The dataset contract is the [seed dataset specification](seed-dataset-spec.md).
+
+## The scripts in `scripts/`
+
+
+| Path | Role |
+| --- | --- |
+| `demo.sh` | Brings up a Compose stack, seeds it, runs `smoke.sh`, then validates the dataset with `validate-seed.mjs` |
+| `smoke.sh` | Scratch CRUD round trip against a running API, for validating a candidate build |
+| `seed.mjs` | Builds the demo dataset of `docs/testing/seed-dataset-spec.md` over HTTP |
+| `validate-seed.mjs` | Asserts the seeded dataset through the API, including the refusals a non-admin receives |
+| `teardown.mjs` | Removes exactly what `seed.mjs` created, by identifier, and reports anything it leaves in place |
+| `check-matrix.mjs` | Fails when a route in `openapi.json` and a row of the dataset's coverage matrix disagree |
+| `generate-operations-reference.mjs` | Renders `docs/generated/operations-reference.md` from `openapi.json`; `--check` fails on any drift |
+| `check-docs-links.mjs` | Fails when a documentation link breaks, a page is missing from `SUMMARY.md` or the README table, or the wiki index is incomplete |
+| `sync-github-wiki.mjs` | Stages `docs/wiki/` as GitHub Wiki pages (`--out <dir>`); `--check` verifies the flat-namespace mapping |
+| `clear-data.mjs` | Unscoped wipe: empties every sample collection a run or seed left behind |
+| `fixtures/` | The small files the seed uploads: a case attachment, a step attachment, and the JUnit report it imports |
+

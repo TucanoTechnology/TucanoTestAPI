@@ -41,6 +41,10 @@ The build number also fills the `BUILD_NUMBER` build argument, which the Dockerf
 overwritten (see *Release numbering policy* in [`AGENTS.md`](../../AGENTS.md)); the commit SHA is the
 audit identity. Pull requests build and test but publish no release artifact.
 
+To cut a release: update the Cargo package version in `Cargo.toml`, then tag `vMAJOR.MINOR.PATCH`;
+the tag must be protected, and release tags are immutable and never reused — the release workflow
+publishes under both tag forms described above.
+
 ## The JSON volume mount is the only state
 
 `TUCANO_DATA_DIR` is the entire persistent state of the service. The image sets it to `/data`
