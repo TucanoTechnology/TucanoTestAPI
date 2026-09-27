@@ -57,17 +57,15 @@ macro_rules! crud_handlers {
         ) -> Result<(HeaderMap, Json<Value>), DomainError> {
             // Storage phase parked on the blocking pool (#410).
             super::on_blocking(move || -> Result<(HeaderMap, Json<Value>), DomainError> {
-                access::guard_get(&state, &principal, $resource, &id)?;
-                let document = state.get($resource, &id)?;
+                // One resolution, one read, one digest of the served bytes
+                // (#412): the guard returns the document it authorised.
+                let read = access::guard_get(&state, &principal, $resource, &id)?;
                 let mut headers = HeaderMap::new();
-                if let Some(hash) = state.etag($resource, &id) {
-                    let etag = format!("\"{hash}\"");
-                    if let Ok(value) = HeaderValue::from_str(&etag) {
-                        headers.insert(ETAG, value);
-                    }
+                let etag = format!("\"{}\"", read.etag);
+                if let Ok(value) = HeaderValue::from_str(&etag) {
+                    headers.insert(ETAG, value);
                 }
-                Ok((headers, Json(document)))
-
+                Ok((headers, Json(read.document)))
             }).await
         }
 

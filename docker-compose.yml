@@ -44,6 +44,9 @@ services:
     cap_drop:
       - ALL
     restart: unless-stopped
+    # SIGTERM drains (#411): the server finishes the requests it is working
+    # and exits by itself; give that drain real room before the SIGKILL.
+    stop_grace_period: 30s
     deploy:
       replicas: 1
       resources:

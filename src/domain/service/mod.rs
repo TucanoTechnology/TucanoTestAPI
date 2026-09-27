@@ -347,10 +347,83 @@ impl<R: Repository + 'static> TestService<R> {
 
     /// Reads a document the way a `GET` would, assembling its children.
     fn assembled(&self, resource: Resource, id: &str, missing: &str) -> Result<Value, DomainError> {
+        let home = self.resolve_home(resource, id, missing)?;
+        self.assembled_with(resource, id, missing, home.as_ref())
+    }
+
+    /// The project folder that addresses `id` for reading purposes: `None`
+    /// only for a project itself, which lives at the top.
+    ///
+    /// Exposed for the read guard (#412): one resolution per request serves
+    /// authorisation, the read, and the digest alike — each was previously a
+    /// `locate` of its own.
+    pub fn resolve_home(
+        &self,
+        resource: Resource,
+        id: &str,
+        missing: &str,
+    ) -> Result<Option<Parent>, DomainError> {
+        match resource {
+            Resource::Projects => Ok(None),
+            _ => self.parent_of(resource, id, missing).map(Some),
+        }
+    }
+
+    /// Assembles a document whose home is already known.
+    fn assembled_with(
+        &self,
+        resource: Resource,
+        id: &str,
+        missing: &str,
+        home: Option<&Parent>,
+    ) -> Result<Value, DomainError> {
+        let document = self.read_document(resource, home, id, missing)?;
+        self.hydrate(resource, id, home, document, missing)
+    }
+
+    /// Reads a document and digests the very bytes it parsed (#412).
+    ///
+    /// A `GET` that resolved, read the body, then read AGAIN for its `ETag`
+    /// could pair a body with a digest of newer bytes — a client following
+    /// with `If-Match` then drew a 412 for a change it had already seen, and
+    /// every bare-id route paid a tree scan per step. One home, one read,
+    /// one digest of the served bytes.
+    pub fn get_and_etag(
+        &self,
+        resource: Resource,
+        id: &str,
+        home: Option<&Parent>,
+        missing: &str,
+    ) -> Result<(Value, String), DomainError> {
+        let raw = self
+            .repository
+            .read_raw_at(resource, home, id)
+            .map_err(|error| error::document_error(error, missing))?;
+        let document: Value = serde_json::from_slice(&raw)
+            .map_err(|error| DomainError::Internal(error.to_string()))?;
+        Self::check_stored_shape(resource, &document)?;
+        let hydrated = self.hydrate(resource, id, home, document.clone(), missing)?;
+        Ok((hydrated, crate::storage::compute_etag(&raw)))
+    }
+
+    /// Expands a stored document into the shape a `GET` serves: a project
+    /// grows its suites and directly-held cases, a suite grows its cases;
+    /// everything else is complete on disk.
+    ///
+    /// Hydration takes the already-parsed document, so the read that produced
+    /// it and the digest computed from its bytes stay one and the same
+    /// version (#412).
+    fn hydrate(
+        &self,
+        resource: Resource,
+        id: &str,
+        home: Option<&Parent>,
+        mut document: Value,
+        missing: &str,
+    ) -> Result<Value, DomainError> {
         match resource {
             Resource::Projects => {
                 let parent = Parent::Project(id.to_owned());
-                let mut document = self.read_document(resource, None, id, missing)?;
                 let suites = self.child_suites(&parent)?;
                 let cases = self.child_documents(&parent, Resource::Cases)?;
                 if let Some(object) = document.as_object_mut() {
@@ -361,27 +434,23 @@ impl<R: Repository + 'static> TestService<R> {
                         object.insert("testCases".to_owned(), Value::Array(cases));
                     }
                 }
-                Ok(document)
             }
             Resource::Suites => {
-                // `locate` reports the suite's home, which is the project that
-                // holds it; the suite's own children hang off the suite folder.
-                let project = self.parent_of(Resource::Suites, id, missing)?;
-                self.assemble_suite(&project, id, missing)
+                // A suite's home names its project; the suite's own children
+                // hang off the suite folder.
+                let project = home.ok_or_else(|| DomainError::NotFound(missing.to_owned()))?;
+                let suite = Parent::Suite {
+                    project: project.project().to_owned(),
+                    suite: id.to_owned(),
+                };
+                let cases = self.child_documents(&suite, Resource::Cases)?;
+                if let Some(object) = document.as_object_mut() {
+                    object.insert("testCases".to_owned(), Value::Array(cases));
+                }
             }
-            Resource::Cases => {
-                let parent = self.parent_of(Resource::Cases, id, missing)?;
-                self.read_document(resource, Some(&parent), id, missing)
-            }
-            // A run, a milestone and a configuration are read from the project
-            // that owns them, so a bare identifier two projects hold is
-            // ambiguous exactly as it already is for a suite or a case. A `GET`
-            // names no home to prefer, so the identifier resolves globally.
-            Resource::Runs | Resource::Milestones | Resource::Configurations => {
-                let parent = self.parent_of(resource, id, missing)?;
-                self.read_document(resource, Some(&parent), id, missing)
-            }
+            _ => {}
         }
+        Ok(document)
     }
 
     /// Assembles every suite a project owns, each with the cases it holds.

@@ -248,9 +248,17 @@ impl AuthStore {
         Ok(projects)
     }
 
+    ///
+    /// Authorisation reads take NO advisory lock (#413): both the accounts
+    /// file and the grant files are published only through `write_json` —
+    /// same-directory temp, flush, atomic rename — so a lockless reader sees
+    /// a whole older or whole newer file, never a mixture. The lock never
+    /// bounded visibility ACROSS replicas either (advisory flock does not
+    /// flush remote caches), so dropping it on the read paths removes the
+    /// convoy — every guarded GET previously queued behind every writer's
+    /// fsync — and weakens no guarantee.
     /// Every stored account, in the order the file lists them.
     pub fn users(&self) -> io::Result<Vec<User>> {
-        let _lock = self.acquire_lock()?;
         self.read_users_unlocked()
     }
 
@@ -318,7 +326,8 @@ impl AuthStore {
         &self,
         hash: &str,
     ) -> io::Result<Option<(User, StoredRefreshToken)>> {
-        let _lock = self.acquire_lock()?;
+        // Lockless lookup (#413); the consumption gate in refresh() remains
+        // the exclusive revoke, so a racing replay still loses.
         for user in self.read_users_unlocked()? {
             if let Some(token) = user
                 .refresh_tokens
@@ -385,8 +394,15 @@ impl AuthStore {
     }
 
     /// The grants recorded for one project.
+    ///
+    /// Authorisation reads take NO advisory lock (#413): accounts and grant
+    /// files are published only through `write_json` — same-directory temp,
+    /// flush, atomic rename — so a lockless reader sees a whole older or
+    /// whole newer file, never a mixture. The lock never bounded visibility
+    /// across replicas either (advisory flock does not flush remote caches),
+    /// so dropping it on read paths removes the convoy — every guarded GET
+    /// previously queued behind every writer's fsync — and weakens nothing.
     pub fn grants(&self, project_id: &str) -> io::Result<Grants> {
-        let _lock = self.acquire_lock()?;
         self.read_grants_unlocked(project_id)
     }
 
@@ -436,7 +452,6 @@ impl AuthStore {
 
     /// Wire identifiers of the projects `user_id` holds a role in, sorted.
     pub fn projects_for_user(&self, user_id: &str) -> io::Result<Vec<String>> {
-        let _lock = self.acquire_lock()?;
         let mut projects = Vec::new();
         for (project_id, grants) in self.read_all_grants_unlocked()? {
             if grants.grants.contains_key(user_id) {
@@ -876,5 +891,64 @@ mod tests {
     fn roles_rank_by_privilege() {
         assert!(Role::Owner > Role::Editor);
         assert!(Role::Editor > Role::Viewer);
+    }
+
+    /// #413: authorisation reads must not queue behind the writer lock.
+    /// Deterministic on purpose: with a foreign holder and a 50 ms timeout,
+    /// the pre-#413 lock-taking reads return `WouldBlock`; the lockless reads
+    /// succeed. No timing sleeps involved.
+    #[test]
+    fn authorization_reads_stay_available_while_a_writer_holds_the_lock() {
+        use fs2::FileExt as _;
+        let directory = TempDir::new().expect("temp dir");
+        let store = AuthStore::new(directory.path())
+            .expect("store")
+            .with_lock_timeout(std::time::Duration::from_millis(50));
+        store.insert_user(&account("u1", "reader")).expect("user");
+        store
+            .set_role("held.json", "u1", Role::Editor)
+            .expect("grant");
+
+        let lock = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(directory.path().join(".tucano.lock"))
+            .expect("lock file");
+        lock.lock_exclusive()
+            .expect("foreign holder takes the lock");
+
+        assert!(
+            store.users().is_ok(),
+            "users() must not queue behind a writer"
+        );
+        assert!(
+            store
+                .grants("held.json")
+                .map(|g| g.grants.len())
+                .expect("grants() must read")
+                == 1,
+            "the grant must be visible"
+        );
+        assert!(
+            store
+                .projects_for_user("u1")
+                .expect("projects_for_user() must read")
+                == ["held.json".to_string()],
+            "the user's scope must resolve"
+        );
+        assert!(
+            store
+                .user_by_refresh_hash("not-a-real-digest")
+                .expect("hash lookup must read")
+                .is_none(),
+            "lookups succeed too"
+        );
+
+        lock.unlock().expect("release");
+        // Writers still function once the lock is free.
+        store
+            .set_role("held.json", "u2", Role::Viewer)
+            .expect("writers still lock");
     }
 }

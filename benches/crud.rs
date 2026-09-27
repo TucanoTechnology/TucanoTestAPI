@@ -18,6 +18,12 @@
 //! * `validate_large_case_payload` — validate a test-case body carrying a
 //!   hundred structured steps and a thousand tags, without persisting it.
 //!   Exercises the payload validator in isolation from I/O.
+//! * `hydrate_project_wide` — read a project that holds many suites and
+//!   cases. Exercises the hydration path #412 made single-resolution.
+//! * `resolve_bare_id_wide_tree` — resolve a bare case identifier across a
+//!   seeded forest. Exercises the `locate` scan whose count per GET #412
+//!   cut from three to one.
+//!
 //! * `attachment_upload_delete` — store and delete a fixed-size attachment
 //!   against a persistent case. Exercises the atomic file write and the
 //!   marker-document re-serialisation that records the attachment metadata.
@@ -267,6 +273,75 @@ fn bench_attachment_upload_delete(c: &mut Criterion) {
 /// without touching each bench function.
 const _CONCURRENCY_CAP: usize = 100;
 
+/// Seeds a forest: `projects` projects each holding `suites_per` suites with
+/// `cases_per` cases, and returns one bare case id to resolve across it.
+fn seed_forest(
+    projects: usize,
+    suites_per: usize,
+    cases_per: usize,
+) -> (TempDir, TestService<FileRepository>, String) {
+    let (directory, service) = fresh_service();
+    let mut target = String::new();
+    for p in 0..projects {
+        let project = format!("bench-project-{p}.json");
+        service
+            .create(
+                Resource::Projects,
+                &json!({"name": format!("bench-project-{p}")}),
+            )
+            .expect("seed project");
+        for s in 0..suites_per {
+            let suite = format!("bench-suite-{p}-{s}.json");
+            service
+                .create_in(
+                    Resource::Suites,
+                    &Parent::Project(project.clone()),
+                    &json!({"name": format!("bench-suite-{p}-{s}")}),
+                )
+                .expect("seed suite");
+            for c in 0..cases_per {
+                let case = format!("TC-bench-{p}-{s}-{c}");
+                service
+                    .create_in(
+                        Resource::Cases,
+                        &Parent::Suite {
+                            project: project.clone(),
+                            suite: suite.clone(),
+                        },
+                        &json!({"testCaseId": case, "title": "bench", "expectedResult": "bench"}),
+                    )
+                    .expect("seed case");
+                if p == projects - 1 && s == suites_per - 1 && c == cases_per - 1 {
+                    target = case;
+                }
+            }
+        }
+    }
+    (directory, service, target)
+}
+
+/// Hydrating a project read: the #412 change cut its per-request `locate`
+/// scans from three to one and its own-document reads from two to one.
+fn bench_hydrate_project_wide(criterion: &mut Criterion) {
+    let (_dir, service, _target) = seed_forest(4, 5, 10);
+    criterion.bench_function("hydrate_project_wide", |bencher| {
+        bencher.iter(|| {
+            service
+                .get(Resource::Projects, "bench-project-3.json")
+                .expect("hydrate")
+        })
+    });
+}
+
+/// Bare-identifier resolution against the whole forest: the linear scan a
+/// single GET used to pay three times.
+fn bench_resolve_bare_id_wide_tree(criterion: &mut Criterion) {
+    let (_dir, service, target) = seed_forest(6, 4, 8);
+    criterion.bench_function("resolve_bare_id_wide_tree", |bencher| {
+        bencher.iter(|| service.get(Resource::Cases, &target).expect("resolve"))
+    });
+}
+
 criterion_group!(
     benches,
     bench_crud_case_full_cycle,
@@ -274,5 +349,7 @@ criterion_group!(
     bench_list_cases_in_suite,
     bench_validate_large_case,
     bench_attachment_upload_delete,
+    bench_hydrate_project_wide,
+    bench_resolve_bare_id_wide_tree,
 );
 criterion_main!(benches);
