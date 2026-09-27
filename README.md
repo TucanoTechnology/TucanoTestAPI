@@ -100,6 +100,14 @@ The `api` service sets `TUCANO_AUTH_REQUIRED=true`, so every guarded route needs
 `POST /auth/login` — sign in with the bootstrap account from `.env`. That is the safe posture the
 shipped file is required to produce ([audit finding F-178-1](docs/security/audit-s3-container-and-deployment.md)).
 
+Four request-ceiling knobs refuse a broken boot rather than fail requests late, and an upgraded
+container that refuses to start usually means one of them: `TUCANO_MAX_BODY_BYTES` (default
+50 MiB — uploads at the limit), `TUCANO_REQUEST_TIMEOUT_MS` (default 300000; `0` disables),
+`TUCANO_MAX_CONCURRENCY` (default 128; `0` uncaps), `TUCANO_LOCK_TIMEOUT_MS` (default 5000 — keep
+it under the container `stop_grace_period`). All four validate at startup and refuse a nonsense
+value loudly rather than serve with it; the full contract is in
+[docs/reference/configuration.md](docs/deployment/configuration-reference.md).
+
 To run anonymously on a single-user machine, set `TUCANO_AUTH_REQUIRED=false` in `.env`. Do not do
 that on a machine anything else can reach; the API is published on every interface, so a deployment
 that needs to stay reachable should either keep authentication on or restrict the publish to
@@ -148,11 +156,11 @@ beneath it, and nothing below the HTTP layer knows about Axum:
 | Path | Role |
 | --- | --- |
 | `src/models.rs` | The stored documents (projects, suites, cases, runs, milestones, configurations) in their legacy JSON shapes |
-| `src/storage/` | The only code that touches the filesystem: the `Repository` trait, its `FileRepository` implementation (`fs.rs`), and the path layout and confinement rules (`layout.rs`) |
-| `src/domain/` | The business rules behind `TestService<R: Repository>`: validation, identifier derivation and required fields, composition, duplication, milestone progress, result import, defect links, coverage aggregation, and error translation |
-| `src/api/` | The HTTP layer: one module per resource (`projects`, `suites`, `cases`, `runs`, `milestones`, `configurations`), plus `reports.rs` for the coverage endpoint, `crud.rs` (the shared handler macros) and `error.rs` (the error envelope) |
+| `src/storage/` | The only code that touches the filesystem: the `Repository` trait and ETag types (`mod.rs`), the `FileRepository` implementation split across `storage/fs/` (`crud.rs` documents, `attachments.rs`, `revisions.rs`, `probe.rs` diagnostics), and the path layout and confinement rules (`layout.rs`) |
+| `src/domain/` | The business rules behind `TestService<R: Repository>`: `validation.rs`, identifier derivation and required fields (`resources.rs`), `composition.rs`, `duplication.rs`/`duplicate.rs`, `progress.rs`, `import.rs`, `defect.rs`, coverage and summary aggregation (`reports.rs`), error translation (`error.rs`), and the service itself in `service/` (`crud.rs`, `attachments.rs`, `audit.rs`, `cache.rs`, `history.rs`, `metadata.rs`, `reporting.rs`) |
+| `src/api/` | The HTTP layer: one module per resource (`projects.rs`, `suites.rs`, `cases.rs`, `runs.rs`, `milestones.rs`, `configurations.rs`), `reports.rs` (coverage and summary), `crud.rs` (the shared handler macros), `error.rs` (the envelope), `access.rs` (the per-project guards), `auth.rs` (the bearer extractor), `guardrails.rs` (timeout, concurrency and size ceilings), `metrics.rs` (counters and the span's response recording), `redact.rs` (what may never be logged), `request_id.rs` (the span and the id's journey) |
 | `src/auth/` | Authentication: `config.rs` (the settings contract and the environment-over-file precedence), `password.rs`, `token.rs`, `store.rs` (accounts, refresh tokens and grants below `auth/`), `session.rs` (the sign-in/refresh/sign-out rules), `bootstrap.rs` (the first account), and `seed.rs` (the demo accounts the seed dataset needs) |
-| `src/config.rs` | The optional startup configuration file: its versioned strict schema, the loader, and the environment-over-file precedence rule |
+| `src/config/` | The optional startup configuration file: its versioned strict schema, the loader, and the environment-over-file precedence rule (`mod.rs`), with the secret-file machinery in `secret.rs` |
 | `src/repository.rs` | Compatibility re-export of the storage types so existing imports keep resolving |
 
 `src/api.rs` no longer exists as a monolith: the HTTP surface lives in `src/api/`. The domain layer
