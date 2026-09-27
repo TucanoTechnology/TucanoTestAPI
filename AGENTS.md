@@ -82,7 +82,7 @@ When making decisions about features, architecture, or implementation:
 
 ### File structure
 
-- Layered source: `src/models.rs` (documents), `src/storage/` (the `Repository` trait and its filesystem implementation), `src/domain/` (rules behind `TestService`), `src/api/` (HTTP, one module per resource plus `crud.rs` and `error.rs`)
+- Layered source: `src/models.rs` (documents), `src/storage/` (the `Repository` trait, `storage/fs/` for the filesystem implementation, `layout.rs` for the path rules), `src/config/` (the startup configuration file, `secret.rs` for secret files), `src/domain/` (rules behind `TestService`, service halves in `domain/service/`), `src/api/` (HTTP: one module per resource, plus `crud.rs`, `error.rs`, `access.rs`, `auth.rs`, `guardrails.rs`, `metrics.rs`, `redact.rs`, `request_id.rs`); the README's layer table is the exhaustive version, and `check-docs-links` keeps every module named
 - Compatibility shim: `src/repository.rs` re-exports the storage types for existing imports
 - Library target: `src/lib.rs`; binary entry point: `src/main.rs`
 - OpenAPI contract: `openapi.json`; interactive UI: `swagger.html`
