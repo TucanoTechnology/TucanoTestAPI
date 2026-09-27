@@ -308,6 +308,20 @@ unchanged: the fixed `storage_error` envelope, never the cause.
 The full reconciliation of the documented error contract and schema strictness is recorded in
 [docs/contracts/api-compatibility.md](../contracts/api-compatibility.md).
 
+## Auditing
+
+Every operation that changes the store writes exactly one `tucano.audit` event: the `action`
+(`create`, `update`, `delete`, `duplicate`, `copy`, `move`, `record`, `import`, …), the `resource`
+noun, the `id` written, the `user` who wrote it, and the `outcome` — with the error `code` when the
+write was refused. `user` is the authenticated account the request carried; on a deployment that
+enforces no authentication it is the explicit `-`, never an empty string posing as an identity
+(#416). Session events go to the same target: `login` (success or failure, naming the username
+attempted), `refresh` (a spent or unknown token is recorded as `replay` — the theft signal), and
+`logout` (with whether a live token actually came down). The trail carries no bodies, tokens,
+passwords or hashes, so it can be kept without keeping a secret; route it anywhere with a
+`TUCANO_LOG` directive on the `tucano.audit` target, and the `http.request` span carries the same
+`user` so a request and its writes join on the request id.
+
 ## Scaling and statelessness
 
 Derived answers (the GUI context bar, `/reports/summary`, milestone progress) are cached in-process

@@ -35,7 +35,7 @@ use super::{
 };
 use audit::{ATTACHMENT_RESOURCE, audited, placement_action, resource_noun};
 
-pub use audit::AUDIT_TARGET;
+pub use audit::{AUDIT_TARGET, current_actor, with_actor, with_request_actor};
 
 // The `TestService` implementation is grouped by responsibility; each sub-module
 // holds one cohesive slice of the inherent methods and nothing else.

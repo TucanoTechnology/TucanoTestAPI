@@ -472,3 +472,221 @@ async fn a_storage_failure_logs_its_cause_and_answers_the_fixed_envelope() {
         "the error line and the client's id join"
     );
 }
+// --- #416: attributable audit lines and session events --------------------
+
+const OBS_SECRET: &[u8] = b"observability-actor-secret";
+const OBS_USERNAME: &str = "obs-actor";
+const OBS_PASSWORD: &str = "correct-horse-obs";
+const OBS_WRONG: &str = "wrong-horse-obs";
+const OBS_USER_ID: &str = "obs-user-1";
+
+/// A router that enforces authentication over an isolated directory, with
+/// one known account.
+fn enforcing_app() -> (tempfile::TempDir, axum::Router) {
+    let directory = tempfile::TempDir::new().expect("temp dir");
+    let repository = tucano_test::repository::FileRepository::new(directory.path()).expect("repo");
+    let store = tucano_test::auth::AuthStore::new(directory.path()).expect("auth store");
+    store
+        .insert_user(&tucano_test::auth::User {
+            id: OBS_USER_ID.to_owned(),
+            username: OBS_USERNAME.to_owned(),
+            password_hash: tucano_test::auth::hash_password(OBS_PASSWORD).expect("hash"),
+            system_admin: true,
+            created_at: 1_700_000_000,
+            refresh_tokens: Vec::new(),
+        })
+        .expect("seed account");
+    let config = tucano_test::auth::AuthConfig {
+        required: true,
+        jwt_secret: Some(OBS_SECRET.to_vec()),
+        access_ttl: std::time::Duration::from_secs(900),
+        refresh_ttl: std::time::Duration::from_secs(1_209_600),
+        bootstrap_username: None,
+        bootstrap_password: None,
+    };
+    (
+        directory,
+        tucano_test::api::router(
+            repository,
+            tucano_test::api::auth::AuthState::new(store, config),
+        ),
+    )
+}
+
+async fn sign_in(app: &axum::Router) -> (String, String) {
+    let (status, session) = common::send_json(
+        app,
+        common::json_request(
+            "POST",
+            "/auth/login",
+            &json!({"username": OBS_USERNAME, "password": OBS_PASSWORD}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{session}");
+    (
+        session["accessToken"].as_str().expect("token").to_owned(),
+        session["refreshToken"]
+            .as_str()
+            .expect("refresh")
+            .to_owned(),
+    )
+}
+
+fn authorized(method: &str, uri: &str, token: &str, body: serde_json::Value) -> Request<Body> {
+    Request::builder()
+        .method(method)
+        .uri(uri)
+        .header("authorization", format!("Bearer {token}"))
+        .header("content-type", "application/json")
+        .body(Body::from(body.to_string()))
+        .expect("request")
+}
+
+#[tokio::test]
+async fn audit_lines_and_the_request_span_name_the_acting_subject() {
+    let (_directory, app) = enforcing_app();
+    let capture = capture();
+    let (token, _refresh) = sign_in(&app).await;
+
+    let (status, created) = common::send_json(&app, {
+        let mut request = authorized("POST", "/projects", &token, json!({"name": "attributed"}));
+        request
+            .headers_mut()
+            .insert("x-request-id", "actor-span-1".parse().expect("header"));
+        request
+    })
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{created}");
+
+    let audit = &capture.audits("attributed.json")[0];
+    assert_eq!(
+        audit.field("user"),
+        Some(OBS_USER_ID),
+        "the trail must say who wrote: {audit:?}"
+    );
+    let span = capture.span(REQUEST_SPAN, "request_id", "actor-span-1");
+    assert_eq!(
+        capture.recorded(&span, "user").as_str(),
+        OBS_USER_ID,
+        "the request span must carry the subject too"
+    );
+
+    // A trusted deployment has no subject; the honest label is "-", not an
+    // omission a redaction could hide behind.
+    let (_directory, trusted) = common::test_app();
+    let (status, created) = common::send_json(
+        &trusted,
+        common::json_request("POST", "/projects", &json!({"name": "trusted-writer"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{created}");
+    assert_eq!(
+        capture.audits("trusted-writer.json")[0].field("user"),
+        Some("-"),
+        "trusted writes are attributed anonymously, explicitly"
+    );
+}
+
+#[tokio::test]
+async fn session_events_are_audited_and_never_name_a_secret() {
+    let (_directory, app) = enforcing_app();
+    let capture = capture();
+
+    // A failed sign-in is an event — and the one place the attempted
+    // username is recorded, which is what an operator asks after a burst.
+    let (status, _) = common::send_json(
+        &app,
+        common::json_request(
+            "POST",
+            "/auth/login",
+            &json!({"username": OBS_USERNAME, "password": OBS_WRONG}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    let failures: Vec<_> = capture
+        .audits(OBS_USERNAME)
+        .into_iter()
+        .filter(|line| line.field("outcome") == Some("failure"))
+        .collect();
+    assert_eq!(
+        failures.len(),
+        1,
+        "the attempt is audited once: {failures:?}"
+    );
+    assert_eq!(failures[0].field("action"), Some("login"));
+    assert_eq!(failures[0].field("code"), Some("invalid_credentials"));
+
+    let (access, refresh) = sign_in(&app).await;
+    let successes: Vec<_> = capture
+        .audits(OBS_USERNAME)
+        .into_iter()
+        .filter(|line| line.field("outcome") == Some("success"))
+        .collect();
+    assert!(!successes.is_empty(), "a real sign-in is audited");
+
+    // Rotation succeeds once; replaying the spent token is THE theft
+    // signal and is audited as `replay`.
+    let (status, rotated) = common::send_json(
+        &app,
+        common::json_request("POST", "/auth/refresh", &json!({"refreshToken": refresh})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{rotated}");
+    let (status, _) = common::send_json(
+        &app,
+        common::json_request("POST", "/auth/refresh", &json!({"refreshToken": refresh})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "spent tokens die once");
+    let refreshes: Vec<_> = capture
+        .audits("-")
+        .into_iter()
+        .filter(|line| line.field("action") == Some("refresh"))
+        .collect();
+    assert_eq!(
+        refreshes.len(),
+        2,
+        "one rotation and one replay: {refreshes:?}"
+    );
+    assert_eq!(refreshes[0].field("outcome"), Some("success"));
+    assert_eq!(refreshes[1].field("outcome"), Some("replay"));
+    assert_eq!(refreshes[1].field("code"), Some("invalid_refresh_token"));
+
+    // Logout names the account and records what really happened.
+    let (status, body) = common::send_json(
+        &app,
+        authorized(
+            "POST",
+            "/auth/logout",
+            &access,
+            json!({"refreshToken": rotated["refreshToken"]}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let logouts = capture
+        .audits(OBS_USER_ID)
+        .into_iter()
+        .filter(|line| line.field("action") == Some("logout"))
+        .collect::<Vec<_>>();
+    assert_eq!(logouts.len(), 1, "{logouts:?}");
+    assert_eq!(logouts[0].field("revoked"), Some("true"));
+
+    // The redaction half: none of the material that WAS in play appears.
+    let rendered = capture.rendered();
+    for secret in [
+        OBS_PASSWORD,
+        OBS_WRONG,
+        &access,
+        &refresh,
+        rotated["accessToken"].as_str().expect("token"),
+        rotated["refreshToken"].as_str().expect("refresh"),
+    ] {
+        assert!(
+            !rendered.contains(secret),
+            "the capture leaked a credential: {secret}"
+        );
+    }
+}
