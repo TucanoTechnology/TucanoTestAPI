@@ -25,8 +25,11 @@ use super::error::DomainError;
 /// `Untested` and `Retest` the API also stores.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ImportStatus {
+    /// Maps to a stored `Passed` result.
     Passed,
+    /// Maps to a stored `Failed` result.
     Failed,
+    /// Maps to a stored `Blocked` result.
     Blocked,
 }
 
@@ -44,16 +47,22 @@ impl ImportStatus {
 /// One testcase a report described, before it meets the run it lands in.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParsedCase {
+    /// The case the result belongs to, addressed verbatim.
     pub test_case_id: String,
+    /// The recorded status: one of the five buckets.
     pub status: ImportStatus,
+    /// A `Patch`: omission keeps the stored value, `Clear` nulls it.
     pub notes: Option<String>,
+    /// When the execution happened, stored verbatim.
     pub timestamp: Option<String>,
 }
 
 /// What a report contained: the cases it described and how many it could not.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParsedReport {
+    /// Every testcase the report described, in document order.
     pub cases: Vec<ParsedCase>,
+    /// Entries that could not be named and were not mapped.
     pub errors: usize,
 }
 
