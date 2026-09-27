@@ -5,7 +5,7 @@ use std::collections::BTreeSet;
 
 use super::*;
 
-impl<R: Repository> TestService<R> {
+impl<R: Repository + 'static> TestService<R> {
     // --- metadata ------------------------------------------------------
 
     /// The distinct, sorted `name` of every milestone the caller can reach.

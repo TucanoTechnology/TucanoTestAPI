@@ -137,3 +137,59 @@ async fn a_genuine_precondition_failure_answers_412_with_the_real_digest() {
     // instead of the stringified lock error.
     assert_eq!(body["error"]["code"], "conflict");
 }
+
+/// #410: a write parked on a held advisory lock must not starve the
+/// executor. Before the blocking-pool change the handler slept on an async
+/// worker thread; with a single-worker runtime that sleep blocked every
+/// other task — including `/health`, which by design touches no disk.
+/// After the change the wait happens on the blocking pool and the executor
+/// keeps serving.
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+async fn a_parked_writer_leaves_the_executor_serving_health() {
+    use std::fs::OpenOptions;
+    use std::time::Duration;
+
+    let directory = tempfile::TempDir::new().expect("temp dir");
+    let app = app(directory.path());
+    let (status, body) = send_json(
+        &app,
+        json_request("POST", "/projects", &json!({"name": "starved"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+
+    let guard = OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(directory.path().join(".tucano.lock"))
+        .expect("lock file");
+    guard.lock_exclusive().expect("hold the lock");
+
+    let writer = {
+        let app = app.clone();
+        tokio::spawn(async move {
+            send_json(
+                &app,
+                json_request(
+                    "PUT",
+                    "/projects/starved.json",
+                    &json!({"description": "queued"}),
+                ),
+            )
+            .await
+        })
+    };
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    let health = tokio::time::timeout(Duration::from_millis(120), async {
+        let (status, _) = send_json(&app, common::get("/health")).await;
+        status
+    })
+    .await
+    .expect("/health must answer while a writer is parked: executor starvation (#410)");
+    assert_eq!(health, StatusCode::OK);
+
+    guard.unlock().expect("release");
+    let (status, body) = writer.await.expect("task");
+    assert_eq!(status, StatusCode::OK, "{body}");
+}

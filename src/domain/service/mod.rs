@@ -115,7 +115,7 @@ fn map_mutation_error(error: io::Error, missing: &str) -> DomainError {
     }
 }
 
-impl<R: Repository> TestService<R> {
+impl<R: Repository + 'static> TestService<R> {
     /// Wraps a repository in the domain rules.
     pub fn new(repository: R) -> Self {
         Self { repository }

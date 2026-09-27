@@ -41,43 +41,59 @@ crud_handlers!(
 
 duplicate_handler!(duplicate_test_case, duplicate::CASE);
 
-async fn list_project_cases<R: Repository>(
+async fn list_project_cases<R: Repository + 'static>(
     State(service): State<AppState<R>>,
     principal: Principal,
     Path(id): Path<String>,
     Query(query): Query<ListQuery>,
 ) -> Result<Json<Value>, DomainError> {
-    access::require(&service, &principal, &id, Role::Viewer)?;
-    let items = service.list_children_matching(&Parent::Project(id), Resource::Cases, &query)?;
-    Ok(Json(json!(items)))
+    // The storage phase is synchronous by design; park it on the blocking
+    // pool so lock waits and fsyncs never occupy an async worker (#410).
+    super::on_blocking(move || -> Result<Json<Value>, DomainError> {
+        access::require(&service, &principal, &id, Role::Viewer)?;
+        let items =
+            service.list_children_matching(&Parent::Project(id), Resource::Cases, &query)?;
+        Ok(Json(json!(items)))
+    })
+    .await
 }
 
-async fn create_project_case<R: Repository>(
+async fn create_project_case<R: Repository + 'static>(
     State(service): State<AppState<R>>,
     principal: Principal,
     Path(id): Path<String>,
     Json(body): Json<Value>,
 ) -> Result<(StatusCode, Json<Value>), DomainError> {
-    access::guard_composition(
-        &service,
-        &principal,
-        Resource::Cases,
-        &id,
-        &body,
-        Role::Editor,
-    )?;
-    let composed = service.compose(Resource::Cases, &Parent::Project(id), &body)?;
-    Ok(composed_response(&composed, "Test case"))
+    // The storage phase is synchronous by design; park it on the blocking
+    // pool so lock waits and fsyncs never occupy an async worker (#410).
+    super::on_blocking(move || -> Result<(StatusCode, Json<Value>), DomainError> {
+        access::guard_composition(
+            &service,
+            &principal,
+            Resource::Cases,
+            &id,
+            &body,
+            Role::Editor,
+        )?;
+        let composed = service.compose(Resource::Cases, &Parent::Project(id), &body)?;
+        Ok(composed_response(&composed, "Test case"))
+    })
+    .await
 }
 
-async fn delete_project_case<R: Repository>(
+async fn delete_project_case<R: Repository + 'static>(
     State(service): State<AppState<R>>,
     principal: Principal,
     Path((id, case_id)): Path<(String, String)>,
 ) -> Result<Json<Value>, DomainError> {
-    access::require(&service, &principal, &id, Role::Editor)?;
-    service.delete_in(Resource::Cases, &Parent::Project(id), &case_id)?;
-    Ok(Json(json!({ "message": "Test case deleted" })))
+    // The storage phase is synchronous by design; park it on the blocking
+    // pool so lock waits and fsyncs never occupy an async worker (#410).
+    super::on_blocking(move || -> Result<Json<Value>, DomainError> {
+        access::require(&service, &principal, &id, Role::Editor)?;
+        service.delete_in(Resource::Cases, &Parent::Project(id), &case_id)?;
+        Ok(Json(json!({ "message": "Test case deleted" })))
+    })
+    .await
 }
 
 // --- attachments ------------------------------------------------------
@@ -88,7 +104,7 @@ async fn delete_project_case<R: Repository>(
 // that occurrence directly and always work. Both styles end in the same
 // `*_in` call once the parent is resolved.
 
-async fn upload_attachment<R: Repository>(
+async fn upload_attachment<R: Repository + 'static>(
     State(service): State<AppState<R>>,
     principal: Principal,
     Path(id): Path<String>,
@@ -99,7 +115,7 @@ async fn upload_attachment<R: Repository>(
     upload_case_attachment(&service, &parent, &id, multipart).await
 }
 
-async fn upload_project_case_attachment<R: Repository>(
+async fn upload_project_case_attachment<R: Repository + 'static>(
     State(service): State<AppState<R>>,
     principal: Principal,
     Path((id, case_id)): Path<(String, String)>,
@@ -109,7 +125,7 @@ async fn upload_project_case_attachment<R: Repository>(
     upload_case_attachment(&service, &parent, &case_id, multipart).await
 }
 
-async fn upload_suite_case_attachment<R: Repository>(
+async fn upload_suite_case_attachment<R: Repository + 'static>(
     State(service): State<AppState<R>>,
     principal: Principal,
     Path((id, case_id)): Path<(String, String)>,
@@ -119,101 +135,151 @@ async fn upload_suite_case_attachment<R: Repository>(
     upload_case_attachment(&service, &parent, &case_id, multipart).await
 }
 
-async fn download_attachment<R: Repository>(
+async fn download_attachment<R: Repository + 'static>(
     State(service): State<AppState<R>>,
     principal: Principal,
     Path((id, filename)): Path<(String, String)>,
 ) -> Result<Response, DomainError> {
-    let parent = service.require_test_case(&id)?;
-    access::require(&service, &principal, parent.project(), Role::Viewer)?;
-    attachment_response(&service, &parent, &id, &filename)
+    // The storage phase is synchronous by design; park it on the blocking
+    // pool so lock waits and fsyncs never occupy an async worker (#410).
+    super::on_blocking(move || -> Result<Response, DomainError> {
+        let parent = service.require_test_case(&id)?;
+        access::require(&service, &principal, parent.project(), Role::Viewer)?;
+        attachment_response(&service, &parent, &id, &filename)
+    })
+    .await
 }
 
-async fn download_project_case_attachment<R: Repository>(
+async fn download_project_case_attachment<R: Repository + 'static>(
     State(service): State<AppState<R>>,
     principal: Principal,
     Path((id, case_id, filename)): Path<(String, String, String)>,
 ) -> Result<Response, DomainError> {
-    let parent = case_in_project(&service, &principal, id, &case_id, Role::Viewer)?;
-    attachment_response(&service, &parent, &case_id, &filename)
+    // The storage phase is synchronous by design; park it on the blocking
+    // pool so lock waits and fsyncs never occupy an async worker (#410).
+    super::on_blocking(move || -> Result<Response, DomainError> {
+        let parent = case_in_project(&service, &principal, id, &case_id, Role::Viewer)?;
+        attachment_response(&service, &parent, &case_id, &filename)
+    })
+    .await
 }
 
-async fn download_suite_case_attachment<R: Repository>(
+async fn download_suite_case_attachment<R: Repository + 'static>(
     State(service): State<AppState<R>>,
     principal: Principal,
     Path((id, case_id, filename)): Path<(String, String, String)>,
 ) -> Result<Response, DomainError> {
-    let parent = case_in_suite(&service, &principal, &id, &case_id, Role::Viewer)?;
-    attachment_response(&service, &parent, &case_id, &filename)
+    // The storage phase is synchronous by design; park it on the blocking
+    // pool so lock waits and fsyncs never occupy an async worker (#410).
+    super::on_blocking(move || -> Result<Response, DomainError> {
+        let parent = case_in_suite(&service, &principal, &id, &case_id, Role::Viewer)?;
+        attachment_response(&service, &parent, &case_id, &filename)
+    })
+    .await
 }
 
-async fn delete_attachment<R: Repository>(
+async fn delete_attachment<R: Repository + 'static>(
     State(service): State<AppState<R>>,
     principal: Principal,
     Path((id, filename)): Path<(String, String)>,
 ) -> Result<Json<Value>, DomainError> {
-    let parent = service.require_test_case(&id)?;
-    access::require(&service, &principal, parent.project(), Role::Editor)?;
-    delete_case_attachment(&service, &parent, &id, &filename)
+    // The storage phase is synchronous by design; park it on the blocking
+    // pool so lock waits and fsyncs never occupy an async worker (#410).
+    super::on_blocking(move || -> Result<Json<Value>, DomainError> {
+        let parent = service.require_test_case(&id)?;
+        access::require(&service, &principal, parent.project(), Role::Editor)?;
+        delete_case_attachment(&service, &parent, &id, &filename)
+    })
+    .await
 }
 
-async fn delete_project_case_attachment<R: Repository>(
+async fn delete_project_case_attachment<R: Repository + 'static>(
     State(service): State<AppState<R>>,
     principal: Principal,
     Path((id, case_id, filename)): Path<(String, String, String)>,
 ) -> Result<Json<Value>, DomainError> {
-    let parent = case_in_project(&service, &principal, id, &case_id, Role::Editor)?;
-    delete_case_attachment(&service, &parent, &case_id, &filename)
+    // The storage phase is synchronous by design; park it on the blocking
+    // pool so lock waits and fsyncs never occupy an async worker (#410).
+    super::on_blocking(move || -> Result<Json<Value>, DomainError> {
+        let parent = case_in_project(&service, &principal, id, &case_id, Role::Editor)?;
+        delete_case_attachment(&service, &parent, &case_id, &filename)
+    })
+    .await
 }
 
-async fn delete_suite_case_attachment<R: Repository>(
+async fn delete_suite_case_attachment<R: Repository + 'static>(
     State(service): State<AppState<R>>,
     principal: Principal,
     Path((id, case_id, filename)): Path<(String, String, String)>,
 ) -> Result<Json<Value>, DomainError> {
-    let parent = case_in_suite(&service, &principal, &id, &case_id, Role::Editor)?;
-    delete_case_attachment(&service, &parent, &case_id, &filename)
+    // The storage phase is synchronous by design; park it on the blocking
+    // pool so lock waits and fsyncs never occupy an async worker (#410).
+    super::on_blocking(move || -> Result<Json<Value>, DomainError> {
+        let parent = case_in_suite(&service, &principal, &id, &case_id, Role::Editor)?;
+        delete_case_attachment(&service, &parent, &case_id, &filename)
+    })
+    .await
 }
 
-async fn list_step_attachments<R: Repository>(
+async fn list_step_attachments<R: Repository + 'static>(
     State(service): State<AppState<R>>,
     principal: Principal,
     Path((id, step_index)): Path<(String, String)>,
 ) -> Result<Json<Value>, DomainError> {
-    let parent = service.require_test_case(&id)?;
-    access::require(&service, &principal, parent.project(), Role::Viewer)?;
-    list_step_files(&service, &parent, &id, &step_index)
+    // The storage phase is synchronous by design; park it on the blocking
+    // pool so lock waits and fsyncs never occupy an async worker (#410).
+    super::on_blocking(move || -> Result<Json<Value>, DomainError> {
+        let parent = service.require_test_case(&id)?;
+        access::require(&service, &principal, parent.project(), Role::Viewer)?;
+        list_step_files(&service, &parent, &id, &step_index)
+    })
+    .await
 }
 
-async fn list_project_case_step_attachments<R: Repository>(
+async fn list_project_case_step_attachments<R: Repository + 'static>(
     State(service): State<AppState<R>>,
     principal: Principal,
     Path((id, case_id, step_index)): Path<(String, String, String)>,
 ) -> Result<Json<Value>, DomainError> {
-    let parent = case_in_project(&service, &principal, id, &case_id, Role::Viewer)?;
-    list_step_files(&service, &parent, &case_id, &step_index)
+    // The storage phase is synchronous by design; park it on the blocking
+    // pool so lock waits and fsyncs never occupy an async worker (#410).
+    super::on_blocking(move || -> Result<Json<Value>, DomainError> {
+        let parent = case_in_project(&service, &principal, id, &case_id, Role::Viewer)?;
+        list_step_files(&service, &parent, &case_id, &step_index)
+    })
+    .await
 }
 
-async fn list_suite_case_step_attachments<R: Repository>(
+async fn list_suite_case_step_attachments<R: Repository + 'static>(
     State(service): State<AppState<R>>,
     principal: Principal,
     Path((id, case_id, step_index)): Path<(String, String, String)>,
 ) -> Result<Json<Value>, DomainError> {
-    let parent = case_in_suite(&service, &principal, &id, &case_id, Role::Viewer)?;
-    list_step_files(&service, &parent, &case_id, &step_index)
+    // The storage phase is synchronous by design; park it on the blocking
+    // pool so lock waits and fsyncs never occupy an async worker (#410).
+    super::on_blocking(move || -> Result<Json<Value>, DomainError> {
+        let parent = case_in_suite(&service, &principal, &id, &case_id, Role::Viewer)?;
+        list_step_files(&service, &parent, &case_id, &step_index)
+    })
+    .await
 }
 
-async fn download_step_attachment<R: Repository>(
+async fn download_step_attachment<R: Repository + 'static>(
     State(service): State<AppState<R>>,
     principal: Principal,
     Path((id, step_index, filename)): Path<(String, String, String)>,
 ) -> Result<Response, DomainError> {
-    let parent = service.require_test_case(&id)?;
-    access::require(&service, &principal, parent.project(), Role::Viewer)?;
-    download_step_file(&service, &parent, &id, &step_index, &filename)
+    // The storage phase is synchronous by design; park it on the blocking
+    // pool so lock waits and fsyncs never occupy an async worker (#410).
+    super::on_blocking(move || -> Result<Response, DomainError> {
+        let parent = service.require_test_case(&id)?;
+        access::require(&service, &principal, parent.project(), Role::Viewer)?;
+        download_step_file(&service, &parent, &id, &step_index, &filename)
+    })
+    .await
 }
 
-async fn upload_step_attachment<R: Repository>(
+async fn upload_step_attachment<R: Repository + 'static>(
     State(service): State<AppState<R>>,
     principal: Principal,
     Path((id, step_index)): Path<(String, String)>,
@@ -224,7 +290,7 @@ async fn upload_step_attachment<R: Repository>(
     upload_step_file(&service, &parent, &id, &step_index, multipart).await
 }
 
-async fn upload_project_case_step_attachment<R: Repository>(
+async fn upload_project_case_step_attachment<R: Repository + 'static>(
     State(service): State<AppState<R>>,
     principal: Principal,
     Path((id, case_id, step_index)): Path<(String, String, String)>,
@@ -234,7 +300,7 @@ async fn upload_project_case_step_attachment<R: Repository>(
     upload_step_file(&service, &parent, &case_id, &step_index, multipart).await
 }
 
-async fn upload_suite_case_step_attachment<R: Repository>(
+async fn upload_suite_case_step_attachment<R: Repository + 'static>(
     State(service): State<AppState<R>>,
     principal: Principal,
     Path((id, case_id, step_index)): Path<(String, String, String)>,
@@ -244,32 +310,47 @@ async fn upload_suite_case_step_attachment<R: Repository>(
     upload_step_file(&service, &parent, &case_id, &step_index, multipart).await
 }
 
-async fn delete_step_attachment<R: Repository>(
+async fn delete_step_attachment<R: Repository + 'static>(
     State(service): State<AppState<R>>,
     principal: Principal,
     Path((id, step_index, filename)): Path<(String, String, String)>,
 ) -> Result<Json<Value>, DomainError> {
-    let parent = service.require_test_case(&id)?;
-    access::require(&service, &principal, parent.project(), Role::Editor)?;
-    delete_step_file(&service, &parent, &id, &step_index, &filename)
+    // The storage phase is synchronous by design; park it on the blocking
+    // pool so lock waits and fsyncs never occupy an async worker (#410).
+    super::on_blocking(move || -> Result<Json<Value>, DomainError> {
+        let parent = service.require_test_case(&id)?;
+        access::require(&service, &principal, parent.project(), Role::Editor)?;
+        delete_step_file(&service, &parent, &id, &step_index, &filename)
+    })
+    .await
 }
 
-async fn delete_project_case_step_attachment<R: Repository>(
+async fn delete_project_case_step_attachment<R: Repository + 'static>(
     State(service): State<AppState<R>>,
     principal: Principal,
     Path((id, case_id, step_index, filename)): Path<(String, String, String, String)>,
 ) -> Result<Json<Value>, DomainError> {
-    let parent = case_in_project(&service, &principal, id, &case_id, Role::Editor)?;
-    delete_step_file(&service, &parent, &case_id, &step_index, &filename)
+    // The storage phase is synchronous by design; park it on the blocking
+    // pool so lock waits and fsyncs never occupy an async worker (#410).
+    super::on_blocking(move || -> Result<Json<Value>, DomainError> {
+        let parent = case_in_project(&service, &principal, id, &case_id, Role::Editor)?;
+        delete_step_file(&service, &parent, &case_id, &step_index, &filename)
+    })
+    .await
 }
 
-async fn delete_suite_case_step_attachment<R: Repository>(
+async fn delete_suite_case_step_attachment<R: Repository + 'static>(
     State(service): State<AppState<R>>,
     principal: Principal,
     Path((id, case_id, step_index, filename)): Path<(String, String, String, String)>,
 ) -> Result<Json<Value>, DomainError> {
-    let parent = case_in_suite(&service, &principal, &id, &case_id, Role::Editor)?;
-    delete_step_file(&service, &parent, &case_id, &step_index, &filename)
+    // The storage phase is synchronous by design; park it on the blocking
+    // pool so lock waits and fsyncs never occupy an async worker (#410).
+    super::on_blocking(move || -> Result<Json<Value>, DomainError> {
+        let parent = case_in_suite(&service, &principal, &id, &case_id, Role::Editor)?;
+        delete_step_file(&service, &parent, &case_id, &step_index, &filename)
+    })
+    .await
 }
 
 /// The parent a parent-scoped case route names, once the caller's role in that
@@ -278,7 +359,7 @@ async fn delete_suite_case_step_attachment<R: Repository>(
 /// The case is read from the named parent rather than through the global
 /// lookup, so an identifier two parents hold is addressed unambiguously and one
 /// the parent does not hold is reported as absent.
-fn case_in<R: Repository>(
+fn case_in<R: Repository + 'static>(
     service: &AppState<R>,
     principal: &Principal,
     parent: Parent,
@@ -291,7 +372,7 @@ fn case_in<R: Repository>(
 }
 
 /// [`case_in`] for the routes that name a project.
-fn case_in_project<R: Repository>(
+fn case_in_project<R: Repository + 'static>(
     service: &AppState<R>,
     principal: &Principal,
     project: String,
@@ -309,7 +390,7 @@ fn case_in_project<R: Repository>(
 
 /// [`case_in`] for the routes that name a suite, which the role check needs in
 /// order to name the project the suite lives in.
-fn case_in_suite<R: Repository>(
+fn case_in_suite<R: Repository + 'static>(
     service: &AppState<R>,
     principal: &Principal,
     suite: &str,
@@ -321,19 +402,27 @@ fn case_in_suite<R: Repository>(
 }
 
 /// Stores an uploaded file in the addressed case folder.
-async fn upload_case_attachment<R: Repository>(
+async fn upload_case_attachment<R: Repository + 'static>(
     service: &AppState<R>,
     parent: &Parent,
     case_id: &str,
     mut multipart: Multipart,
 ) -> Result<(StatusCode, Json<Value>), DomainError> {
     let (original_name, contents) = uploaded_file(&mut multipart).await?;
-    let stored = service.store_attachment(parent, case_id, &original_name, &contents)?;
+    // Multipart extraction stays async; the store + document update below is
+    // one blocking-pool park (#410).
+    let service = service.clone();
+    let parent = parent.clone();
+    let case_id = case_id.to_owned();
+    let stored = super::on_blocking(move || {
+        service.store_attachment(&parent, &case_id, &original_name, &contents)
+    })
+    .await?;
     Ok(upload_response(stored))
 }
 
 /// Stores an uploaded file in the addressed step's folder.
-async fn upload_step_file<R: Repository>(
+async fn upload_step_file<R: Repository + 'static>(
     service: &AppState<R>,
     parent: &Parent,
     case_id: &str,
@@ -342,13 +431,18 @@ async fn upload_step_file<R: Repository>(
 ) -> Result<(StatusCode, Json<Value>), DomainError> {
     let (original_name, contents) = uploaded_file(&mut multipart).await?;
     let step_index = parse_step_index(step_index)?;
-    let stored =
-        service.store_step_attachment(parent, case_id, step_index, &original_name, &contents)?;
+    let service = service.clone();
+    let parent = parent.clone();
+    let case_id = case_id.to_owned();
+    let stored = super::on_blocking(move || {
+        service.store_step_attachment(&parent, &case_id, step_index, &original_name, &contents)
+    })
+    .await?;
     Ok(upload_response(stored))
 }
 
 /// Answers a case download with the stored bytes, shaped by [`bytes_response`].
-fn attachment_response<R: Repository>(
+fn attachment_response<R: Repository + 'static>(
     service: &AppState<R>,
     parent: &Parent,
     case_id: &str,
@@ -382,7 +476,7 @@ fn bytes_response(contents: Vec<u8>, filename: &str) -> Response {
 }
 
 /// Deletes one stored file from the addressed case folder.
-fn delete_case_attachment<R: Repository>(
+fn delete_case_attachment<R: Repository + 'static>(
     service: &AppState<R>,
     parent: &Parent,
     case_id: &str,
@@ -393,7 +487,7 @@ fn delete_case_attachment<R: Repository>(
 }
 
 /// Lists the attachments one step of the addressed case carries.
-fn list_step_files<R: Repository>(
+fn list_step_files<R: Repository + 'static>(
     service: &AppState<R>,
     parent: &Parent,
     case_id: &str,
@@ -405,7 +499,7 @@ fn list_step_files<R: Repository>(
 }
 
 /// Reads one stored file from the addressed step's folder.
-fn download_step_file<R: Repository>(
+fn download_step_file<R: Repository + 'static>(
     service: &AppState<R>,
     parent: &Parent,
     case_id: &str,
@@ -418,7 +512,7 @@ fn download_step_file<R: Repository>(
 }
 
 /// Deletes one stored file from the addressed step's folder.
-fn delete_step_file<R: Repository>(
+fn delete_step_file<R: Repository + 'static>(
     service: &AppState<R>,
     parent: &Parent,
     case_id: &str,
@@ -471,26 +565,36 @@ fn deleted_response() -> Json<Value> {
     Json(json!({ "message": "File deleted successfully" }))
 }
 
-async fn list_case_history<R: Repository>(
+async fn list_case_history<R: Repository + 'static>(
     State(service): State<AppState<R>>,
     principal: Principal,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, DomainError> {
-    let parent = service.require_test_case(&id)?;
-    access::require(&service, &principal, parent.project(), Role::Viewer)?;
-    let history = service.list_case_history(&parent, &id)?;
-    Ok(Json(json!(history)))
+    // The storage phase is synchronous by design; park it on the blocking
+    // pool so lock waits and fsyncs never occupy an async worker (#410).
+    super::on_blocking(move || -> Result<Json<Value>, DomainError> {
+        let parent = service.require_test_case(&id)?;
+        access::require(&service, &principal, parent.project(), Role::Viewer)?;
+        let history = service.list_case_history(&parent, &id)?;
+        Ok(Json(json!(history)))
+    })
+    .await
 }
 
-async fn read_case_revision<R: Repository>(
+async fn read_case_revision<R: Repository + 'static>(
     State(service): State<AppState<R>>,
     principal: Principal,
     Path((id, version)): Path<(String, String)>,
 ) -> Result<Json<Value>, DomainError> {
-    let parent = service.require_test_case(&id)?;
-    access::require(&service, &principal, parent.project(), Role::Viewer)?;
-    let version = parse_version(&version)?;
-    Ok(Json(service.read_case_revision(&parent, &id, version)?))
+    // The storage phase is synchronous by design; park it on the blocking
+    // pool so lock waits and fsyncs never occupy an async worker (#410).
+    super::on_blocking(move || -> Result<Json<Value>, DomainError> {
+        let parent = service.require_test_case(&id)?;
+        access::require(&service, &principal, parent.project(), Role::Viewer)?;
+        let version = parse_version(&version)?;
+        Ok(Json(service.read_case_revision(&parent, &id, version)?))
+    })
+    .await
 }
 
 pub(crate) fn routes<R: Repository + 'static>() -> Router<AppState<R>> {

@@ -35,46 +35,66 @@ crud_handlers!(
 
 duplicate_handler!(duplicate_milestone, duplicate::MILESTONE);
 
-async fn list_project_milestones<R: Repository>(
+async fn list_project_milestones<R: Repository + 'static>(
     State(service): State<AppState<R>>,
     principal: Principal,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, DomainError> {
-    access::require(&service, &principal, &id, Role::Viewer)?;
-    let items = service.list_children(&Parent::Project(id), Resource::Milestones)?;
-    Ok(Json(json!(items)))
+    // The storage phase is synchronous by design; park it on the blocking
+    // pool so lock waits and fsyncs never occupy an async worker (#410).
+    super::on_blocking(move || -> Result<Json<Value>, DomainError> {
+        access::require(&service, &principal, &id, Role::Viewer)?;
+        let items = service.list_children(&Parent::Project(id), Resource::Milestones)?;
+        Ok(Json(json!(items)))
+    })
+    .await
 }
 
-async fn create_project_milestone<R: Repository>(
+async fn create_project_milestone<R: Repository + 'static>(
     State(service): State<AppState<R>>,
     principal: Principal,
     Path(id): Path<String>,
     Json(body): Json<Value>,
 ) -> Result<(StatusCode, Json<Value>), DomainError> {
-    access::guard_project_create(&service, &principal, Resource::Milestones, &id, &body)?;
-    let created = service.create_in(Resource::Milestones, &Parent::Project(id), &body)?;
-    Ok(created_response("Milestone", created.id))
+    // The storage phase is synchronous by design; park it on the blocking
+    // pool so lock waits and fsyncs never occupy an async worker (#410).
+    super::on_blocking(move || -> Result<(StatusCode, Json<Value>), DomainError> {
+        access::guard_project_create(&service, &principal, Resource::Milestones, &id, &body)?;
+        let created = service.create_in(Resource::Milestones, &Parent::Project(id), &body)?;
+        Ok(created_response("Milestone", created.id))
+    })
+    .await
 }
 
 /// Removes the occurrence the caller named, so an identifier two projects hold
 /// is deleted from the one the path says.
-async fn delete_project_milestone<R: Repository>(
+async fn delete_project_milestone<R: Repository + 'static>(
     State(service): State<AppState<R>>,
     principal: Principal,
     Path((id, milestone_id)): Path<(String, String)>,
 ) -> Result<Json<Value>, DomainError> {
-    access::require(&service, &principal, &id, Role::Owner)?;
-    service.delete_in(Resource::Milestones, &Parent::Project(id), &milestone_id)?;
-    Ok(Json(json!({ "message": "Milestone deleted" })))
+    // The storage phase is synchronous by design; park it on the blocking
+    // pool so lock waits and fsyncs never occupy an async worker (#410).
+    super::on_blocking(move || -> Result<Json<Value>, DomainError> {
+        access::require(&service, &principal, &id, Role::Owner)?;
+        service.delete_in(Resource::Milestones, &Parent::Project(id), &milestone_id)?;
+        Ok(Json(json!({ "message": "Milestone deleted" })))
+    })
+    .await
 }
 
-async fn get_milestone_progress<R: Repository>(
+async fn get_milestone_progress<R: Repository + 'static>(
     State(service): State<AppState<R>>,
     principal: Principal,
     Path(id): Path<String>,
 ) -> Result<Json<MilestoneProgress>, DomainError> {
-    access::guard_get(&service, &principal, Resource::Milestones, &id)?;
-    Ok(Json(service.milestone_progress(&id)?))
+    // The storage phase is synchronous by design; park it on the blocking
+    // pool so lock waits and fsyncs never occupy an async worker (#410).
+    super::on_blocking(move || -> Result<Json<MilestoneProgress>, DomainError> {
+        access::guard_get(&service, &principal, Resource::Milestones, &id)?;
+        Ok(Json(service.milestone_progress(&id)?))
+    })
+    .await
 }
 
 /// The releases the caller can file a run under: the distinct names of every
@@ -82,13 +102,18 @@ async fn get_milestone_progress<R: Repository>(
 ///
 /// A listing, not a dereference, so a project outside the caller's grants is
 /// filtered out of the result rather than refusing the request.
-async fn list_releases<R: Repository>(
+async fn list_releases<R: Repository + 'static>(
     State(service): State<AppState<R>>,
     principal: Principal,
 ) -> Result<Json<Vec<String>>, DomainError> {
-    let reachable = access::scope(service.auth(), &principal)?;
-    let reachable: Option<Vec<String>> = reachable.map(|set| set.into_iter().collect());
-    Ok(Json(service.release_names(reachable.as_deref())?))
+    // The storage phase is synchronous by design; park it on the blocking
+    // pool so lock waits and fsyncs never occupy an async worker (#410).
+    super::on_blocking(move || -> Result<Json<Vec<String>>, DomainError> {
+        let reachable = access::scope(service.auth(), &principal)?;
+        let reachable: Option<Vec<String>> = reachable.map(|set| set.into_iter().collect());
+        Ok(Json(service.release_names(reachable.as_deref())?))
+    })
+    .await
 }
 
 pub(crate) fn routes<R: Repository + 'static>() -> Router<AppState<R>> {

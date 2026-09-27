@@ -2,7 +2,7 @@
 
 use super::*;
 
-impl<R: Repository> TestService<R> {
+impl<R: Repository + 'static> TestService<R> {
     // --- generic CRUD --------------------------------------------------
 
     /// Lists a resource, applying the optional substring and tag filters.

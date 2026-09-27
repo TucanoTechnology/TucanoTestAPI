@@ -33,37 +33,52 @@ crud_handlers!(
     Resource::Configurations
 );
 
-async fn list_project_configurations<R: Repository>(
+async fn list_project_configurations<R: Repository + 'static>(
     State(service): State<AppState<R>>,
     principal: Principal,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, DomainError> {
-    access::require(&service, &principal, &id, Role::Viewer)?;
-    let items = service.list_children(&Parent::Project(id), Resource::Configurations)?;
-    Ok(Json(json!(items)))
+    // The storage phase is synchronous by design; park it on the blocking
+    // pool so lock waits and fsyncs never occupy an async worker (#410).
+    super::on_blocking(move || -> Result<Json<Value>, DomainError> {
+        access::require(&service, &principal, &id, Role::Viewer)?;
+        let items = service.list_children(&Parent::Project(id), Resource::Configurations)?;
+        Ok(Json(json!(items)))
+    })
+    .await
 }
 
-async fn create_project_configuration<R: Repository>(
+async fn create_project_configuration<R: Repository + 'static>(
     State(service): State<AppState<R>>,
     principal: Principal,
     Path(id): Path<String>,
     Json(body): Json<Value>,
 ) -> Result<(StatusCode, Json<Value>), DomainError> {
-    access::guard_project_create(&service, &principal, Resource::Configurations, &id, &body)?;
-    let created = service.create_in(Resource::Configurations, &Parent::Project(id), &body)?;
-    Ok(created_response("Test configuration", created.id))
+    // The storage phase is synchronous by design; park it on the blocking
+    // pool so lock waits and fsyncs never occupy an async worker (#410).
+    super::on_blocking(move || -> Result<(StatusCode, Json<Value>), DomainError> {
+        access::guard_project_create(&service, &principal, Resource::Configurations, &id, &body)?;
+        let created = service.create_in(Resource::Configurations, &Parent::Project(id), &body)?;
+        Ok(created_response("Test configuration", created.id))
+    })
+    .await
 }
 
 /// Removes the occurrence the caller named, so an identifier two projects hold
 /// is deleted from the one the path says.
-async fn delete_project_configuration<R: Repository>(
+async fn delete_project_configuration<R: Repository + 'static>(
     State(service): State<AppState<R>>,
     principal: Principal,
     Path((id, config_id)): Path<(String, String)>,
 ) -> Result<Json<Value>, DomainError> {
-    access::require(&service, &principal, &id, Role::Editor)?;
-    service.delete_in(Resource::Configurations, &Parent::Project(id), &config_id)?;
-    Ok(Json(json!({ "message": "Test configuration deleted" })))
+    // The storage phase is synchronous by design; park it on the blocking
+    // pool so lock waits and fsyncs never occupy an async worker (#410).
+    super::on_blocking(move || -> Result<Json<Value>, DomainError> {
+        access::require(&service, &principal, &id, Role::Editor)?;
+        service.delete_in(Resource::Configurations, &Parent::Project(id), &config_id)?;
+        Ok(Json(json!({ "message": "Test configuration deleted" })))
+    })
+    .await
 }
 
 /// The environments the caller can execute a run against: the distinct names of
@@ -72,13 +87,18 @@ async fn delete_project_configuration<R: Repository>(
 ///
 /// A listing, not a dereference, so a project outside the caller's grants is
 /// filtered out of the result rather than refusing the request.
-async fn list_environments<R: Repository>(
+async fn list_environments<R: Repository + 'static>(
     State(service): State<AppState<R>>,
     principal: Principal,
 ) -> Result<Json<Vec<String>>, DomainError> {
-    let reachable = access::scope(service.auth(), &principal)?;
-    let reachable: Option<Vec<String>> = reachable.map(|set| set.into_iter().collect());
-    Ok(Json(service.environment_names(reachable.as_deref())?))
+    // The storage phase is synchronous by design; park it on the blocking
+    // pool so lock waits and fsyncs never occupy an async worker (#410).
+    super::on_blocking(move || -> Result<Json<Vec<String>>, DomainError> {
+        let reachable = access::scope(service.auth(), &principal)?;
+        let reachable: Option<Vec<String>> = reachable.map(|set| set.into_iter().collect());
+        Ok(Json(service.environment_names(reachable.as_deref())?))
+    })
+    .await
 }
 
 pub(crate) fn routes<R: Repository + 'static>() -> Router<AppState<R>> {

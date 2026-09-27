@@ -2,7 +2,7 @@
 
 use super::*;
 
-impl<R: Repository> TestService<R> {
+impl<R: Repository + 'static> TestService<R> {
     // --- case history ---
 
     /// Lists a case's recorded revisions, oldest first, each with the

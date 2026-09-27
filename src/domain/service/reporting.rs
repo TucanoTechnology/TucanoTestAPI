@@ -2,7 +2,7 @@
 
 use super::*;
 
-impl<R: Repository> TestService<R> {
+impl<R: Repository + 'static> TestService<R> {
     // --- reporting -----------------------------------------------------
 
     /// Reports a milestone's progress from the runs it references.

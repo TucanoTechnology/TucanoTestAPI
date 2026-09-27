@@ -2,7 +2,7 @@
 
 use super::*;
 
-impl<R: Repository> TestService<R> {
+impl<R: Repository + 'static> TestService<R> {
     // --- attachments ---------------------------------------------------
 
     /// Resolves the single test case named by `id`, so an attachment request

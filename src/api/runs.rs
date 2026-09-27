@@ -35,195 +35,270 @@ crud_handlers!(
 
 duplicate_handler!(duplicate_test_run, duplicate::RUN);
 
-async fn list_project_runs<R: Repository>(
+async fn list_project_runs<R: Repository + 'static>(
     State(service): State<AppState<R>>,
     principal: Principal,
     Path(id): Path<String>,
     Query(query): Query<ListQuery>,
 ) -> Result<Json<Value>, DomainError> {
-    access::require(&service, &principal, &id, Role::Viewer)?;
-    let items = service.list_children_matching(&Parent::Project(id), Resource::Runs, &query)?;
-    Ok(Json(json!(items)))
+    // The storage phase is synchronous by design; park it on the blocking
+    // pool so lock waits and fsyncs never occupy an async worker (#410).
+    super::on_blocking(move || -> Result<Json<Value>, DomainError> {
+        access::require(&service, &principal, &id, Role::Viewer)?;
+        let items = service.list_children_matching(&Parent::Project(id), Resource::Runs, &query)?;
+        Ok(Json(json!(items)))
+    })
+    .await
 }
 
-async fn create_project_run<R: Repository>(
+async fn create_project_run<R: Repository + 'static>(
     State(service): State<AppState<R>>,
     principal: Principal,
     Path(id): Path<String>,
     Json(body): Json<Value>,
 ) -> Result<(StatusCode, Json<Value>), DomainError> {
-    access::guard_project_create(&service, &principal, Resource::Runs, &id, &body)?;
-    let created = service.create_in(Resource::Runs, &Parent::Project(id), &body)?;
-    Ok(created_response("Test run", created.id))
+    // The storage phase is synchronous by design; park it on the blocking
+    // pool so lock waits and fsyncs never occupy an async worker (#410).
+    super::on_blocking(move || -> Result<(StatusCode, Json<Value>), DomainError> {
+        access::guard_project_create(&service, &principal, Resource::Runs, &id, &body)?;
+        let created = service.create_in(Resource::Runs, &Parent::Project(id), &body)?;
+        Ok(created_response("Test run", created.id))
+    })
+    .await
 }
 
 /// Removes the occurrence the caller named, so an identifier two projects hold
 /// is deleted from the one the path says.
-async fn delete_project_run<R: Repository>(
+async fn delete_project_run<R: Repository + 'static>(
     State(service): State<AppState<R>>,
     principal: Principal,
     Path((id, run_id)): Path<(String, String)>,
 ) -> Result<Json<Value>, DomainError> {
-    access::require(&service, &principal, &id, Role::Editor)?;
-    service.delete_in(Resource::Runs, &Parent::Project(id), &run_id)?;
-    Ok(Json(json!({ "message": "Test run deleted" })))
+    // The storage phase is synchronous by design; park it on the blocking
+    // pool so lock waits and fsyncs never occupy an async worker (#410).
+    super::on_blocking(move || -> Result<Json<Value>, DomainError> {
+        access::require(&service, &principal, &id, Role::Editor)?;
+        service.delete_in(Resource::Runs, &Parent::Project(id), &run_id)?;
+        Ok(Json(json!({ "message": "Test run deleted" })))
+    })
+    .await
 }
 
-async fn add_suite_to_run<R: Repository>(
+async fn add_suite_to_run<R: Repository + 'static>(
     State(service): State<AppState<R>>,
     principal: Principal,
     Path(id): Path<String>,
     Json(body): Json<Value>,
 ) -> Result<Json<Value>, DomainError> {
-    access::require_run_source(
-        &service,
-        &principal,
-        &id,
-        Resource::Suites,
-        body.get("suiteId").and_then(Value::as_str),
-        Role::Editor,
-    )?;
-    service.add_suite_to_run(&id, &body)?;
-    Ok(Json(json!({ "message": "Test suite added to test run" })))
+    // The storage phase is synchronous by design; park it on the blocking
+    // pool so lock waits and fsyncs never occupy an async worker (#410).
+    super::on_blocking(move || -> Result<Json<Value>, DomainError> {
+        access::require_run_source(
+            &service,
+            &principal,
+            &id,
+            Resource::Suites,
+            body.get("suiteId").and_then(Value::as_str),
+            Role::Editor,
+        )?;
+        service.add_suite_to_run(&id, &body)?;
+        Ok(Json(json!({ "message": "Test suite added to test run" })))
+    })
+    .await
 }
 
-async fn add_case_to_run<R: Repository>(
+async fn add_case_to_run<R: Repository + 'static>(
     State(service): State<AppState<R>>,
     principal: Principal,
     Path(id): Path<String>,
     Json(body): Json<Value>,
 ) -> Result<Json<Value>, DomainError> {
-    access::require_run_source(
-        &service,
-        &principal,
-        &id,
-        Resource::Cases,
-        body.get("testCaseId").and_then(Value::as_str),
-        Role::Editor,
-    )?;
-    service.add_case_to_run(&id, &body)?;
-    Ok(Json(json!({ "message": "Test case added to test run" })))
+    // The storage phase is synchronous by design; park it on the blocking
+    // pool so lock waits and fsyncs never occupy an async worker (#410).
+    super::on_blocking(move || -> Result<Json<Value>, DomainError> {
+        access::require_run_source(
+            &service,
+            &principal,
+            &id,
+            Resource::Cases,
+            body.get("testCaseId").and_then(Value::as_str),
+            Role::Editor,
+        )?;
+        service.add_case_to_run(&id, &body)?;
+        Ok(Json(json!({ "message": "Test case added to test run" })))
+    })
+    .await
 }
 
-async fn record_run_result<R: Repository>(
+async fn record_run_result<R: Repository + 'static>(
     State(service): State<AppState<R>>,
     principal: Principal,
     Path(id): Path<String>,
     Json(body): Json<Value>,
 ) -> Result<Json<Value>, DomainError> {
-    access::require_run(&service, &principal, &id, Role::Editor)?;
-    service.record_run_result(&id, &body)?;
-    Ok(Json(json!({ "message": "Test result recorded in run" })))
+    // The storage phase is synchronous by design; park it on the blocking
+    // pool so lock waits and fsyncs never occupy an async worker (#410).
+    super::on_blocking(move || -> Result<Json<Value>, DomainError> {
+        access::require_run(&service, &principal, &id, Role::Editor)?;
+        service.record_run_result(&id, &body)?;
+        Ok(Json(json!({ "message": "Test result recorded in run" })))
+    })
+    .await
 }
 
-async fn replace_run_result<R: Repository>(
+async fn replace_run_result<R: Repository + 'static>(
     State(service): State<AppState<R>>,
     principal: Principal,
     Path((id, case_id)): Path<(String, String)>,
     Json(body): Json<Value>,
 ) -> Result<Json<Value>, DomainError> {
-    access::require_run(&service, &principal, &id, Role::Editor)?;
-    service.replace_run_result(&id, &case_id, &body)?;
-    Ok(Json(json!({ "message": "Test result replaced in run" })))
+    // The storage phase is synchronous by design; park it on the blocking
+    // pool so lock waits and fsyncs never occupy an async worker (#410).
+    super::on_blocking(move || -> Result<Json<Value>, DomainError> {
+        access::require_run(&service, &principal, &id, Role::Editor)?;
+        service.replace_run_result(&id, &case_id, &body)?;
+        Ok(Json(json!({ "message": "Test result replaced in run" })))
+    })
+    .await
 }
 
-async fn delete_run_result<R: Repository>(
+async fn delete_run_result<R: Repository + 'static>(
     State(service): State<AppState<R>>,
     principal: Principal,
     Path((id, case_id)): Path<(String, String)>,
 ) -> Result<Json<Value>, DomainError> {
-    access::require_run(&service, &principal, &id, Role::Editor)?;
-    service.delete_run_result(&id, &case_id)?;
-    Ok(Json(json!({ "message": "Test result removed from run" })))
+    // The storage phase is synchronous by design; park it on the blocking
+    // pool so lock waits and fsyncs never occupy an async worker (#410).
+    super::on_blocking(move || -> Result<Json<Value>, DomainError> {
+        access::require_run(&service, &principal, &id, Role::Editor)?;
+        service.delete_run_result(&id, &case_id)?;
+        Ok(Json(json!({ "message": "Test result removed from run" })))
+    })
+    .await
 }
 
-async fn list_result_defects<R: Repository>(
+async fn list_result_defects<R: Repository + 'static>(
     State(service): State<AppState<R>>,
     principal: Principal,
     Path((id, case_id)): Path<(String, String)>,
 ) -> Result<Json<Value>, DomainError> {
-    access::require_run(&service, &principal, &id, Role::Viewer)?;
-    let defects = service.list_defects(&id, &case_id)?;
-    Ok(Json(json!({ "defects": defects })))
+    // The storage phase is synchronous by design; park it on the blocking
+    // pool so lock waits and fsyncs never occupy an async worker (#410).
+    super::on_blocking(move || -> Result<Json<Value>, DomainError> {
+        access::require_run(&service, &principal, &id, Role::Viewer)?;
+        let defects = service.list_defects(&id, &case_id)?;
+        Ok(Json(json!({ "defects": defects })))
+    })
+    .await
 }
 
-async fn link_result_defect<R: Repository>(
+async fn link_result_defect<R: Repository + 'static>(
     State(service): State<AppState<R>>,
     principal: Principal,
     Path((id, case_id)): Path<(String, String)>,
     Json(body): Json<Value>,
 ) -> Result<(StatusCode, Json<Value>), DomainError> {
-    access::require_run(&service, &principal, &id, Role::Editor)?;
-    let link = service.link_defect_to_result(&id, &case_id, &body)?;
-    Ok((
-        StatusCode::CREATED,
-        Json(json!({ "message": "Defect linked to test result", "id": link.link_id })),
-    ))
+    // The storage phase is synchronous by design; park it on the blocking
+    // pool so lock waits and fsyncs never occupy an async worker (#410).
+    super::on_blocking(move || -> Result<(StatusCode, Json<Value>), DomainError> {
+        access::require_run(&service, &principal, &id, Role::Editor)?;
+        let link = service.link_defect_to_result(&id, &case_id, &body)?;
+        Ok((
+            StatusCode::CREATED,
+            Json(json!({ "message": "Defect linked to test result", "id": link.link_id })),
+        ))
+    })
+    .await
 }
 
-async fn unlink_result_defect<R: Repository>(
+async fn unlink_result_defect<R: Repository + 'static>(
     State(service): State<AppState<R>>,
     principal: Principal,
     Path((id, case_id, link_id)): Path<(String, String, String)>,
 ) -> Result<Json<Value>, DomainError> {
-    access::require_run(&service, &principal, &id, Role::Editor)?;
-    service.unlink_defect_from_result(&id, &case_id, &link_id)?;
-    Ok(Json(
-        json!({ "message": "Defect unlinked from test result" }),
-    ))
+    // The storage phase is synchronous by design; park it on the blocking
+    // pool so lock waits and fsyncs never occupy an async worker (#410).
+    super::on_blocking(move || -> Result<Json<Value>, DomainError> {
+        access::require_run(&service, &principal, &id, Role::Editor)?;
+        service.unlink_defect_from_result(&id, &case_id, &link_id)?;
+        Ok(Json(
+            json!({ "message": "Defect unlinked from test result" }),
+        ))
+    })
+    .await
 }
 
-async fn import_junit_results<R: Repository>(
+async fn import_junit_results<R: Repository + 'static>(
     State(service): State<AppState<R>>,
     principal: Principal,
     Path(id): Path<String>,
     body: Bytes,
 ) -> Result<Json<ImportSummary>, DomainError> {
-    access::require_run(&service, &principal, &id, Role::Editor)?;
-    let xml = std::str::from_utf8(&body)
-        .map_err(|_| DomainError::invalid_request("JUnit XML must be valid UTF-8"))?;
-    Ok(Json(service.import_junit_results(&id, xml)?))
+    // The storage phase is synchronous by design; park it on the blocking
+    // pool so lock waits and fsyncs never occupy an async worker (#410).
+    super::on_blocking(move || -> Result<Json<ImportSummary>, DomainError> {
+        access::require_run(&service, &principal, &id, Role::Editor)?;
+        let xml = std::str::from_utf8(&body)
+            .map_err(|_| DomainError::invalid_request("JUnit XML must be valid UTF-8"))?;
+        Ok(Json(service.import_junit_results(&id, xml)?))
+    })
+    .await
 }
 
-async fn import_json_results<R: Repository>(
+async fn import_json_results<R: Repository + 'static>(
     State(service): State<AppState<R>>,
     principal: Principal,
     Path(id): Path<String>,
     body: Bytes,
 ) -> Result<Json<ImportSummary>, DomainError> {
-    access::require_run(&service, &principal, &id, Role::Editor)?;
-    Ok(Json(service.import_json_results(&id, &body)?))
+    // The storage phase is synchronous by design; park it on the blocking
+    // pool so lock waits and fsyncs never occupy an async worker (#410).
+    super::on_blocking(move || -> Result<Json<ImportSummary>, DomainError> {
+        access::require_run(&service, &principal, &id, Role::Editor)?;
+        Ok(Json(service.import_json_results(&id, &body)?))
+    })
+    .await
 }
 
-async fn link_run_configuration<R: Repository>(
+async fn link_run_configuration<R: Repository + 'static>(
     State(service): State<AppState<R>>,
     principal: Principal,
     Path(id): Path<String>,
     Json(body): Json<Value>,
 ) -> Result<Json<Value>, DomainError> {
-    access::require_run_configuration(
-        &service,
-        &principal,
-        &id,
-        body.get("configId").and_then(Value::as_str),
-        Role::Editor,
-    )?;
-    service.link_configuration_to_run(&id, &body)?;
-    Ok(Json(
-        json!({ "message": "Test configuration linked to test run" }),
-    ))
+    // The storage phase is synchronous by design; park it on the blocking
+    // pool so lock waits and fsyncs never occupy an async worker (#410).
+    super::on_blocking(move || -> Result<Json<Value>, DomainError> {
+        access::require_run_configuration(
+            &service,
+            &principal,
+            &id,
+            body.get("configId").and_then(Value::as_str),
+            Role::Editor,
+        )?;
+        service.link_configuration_to_run(&id, &body)?;
+        Ok(Json(
+            json!({ "message": "Test configuration linked to test run" }),
+        ))
+    })
+    .await
 }
 
-async fn unlink_run_configuration<R: Repository>(
+async fn unlink_run_configuration<R: Repository + 'static>(
     State(service): State<AppState<R>>,
     principal: Principal,
     Path((id, config_id)): Path<(String, String)>,
 ) -> Result<Json<Value>, DomainError> {
-    access::require_run(&service, &principal, &id, Role::Editor)?;
-    service.unlink_configuration_from_run(&id, &config_id)?;
-    Ok(Json(
-        json!({ "message": "Test configuration unlinked from test run" }),
-    ))
+    // The storage phase is synchronous by design; park it on the blocking
+    // pool so lock waits and fsyncs never occupy an async worker (#410).
+    super::on_blocking(move || -> Result<Json<Value>, DomainError> {
+        access::require_run(&service, &principal, &id, Role::Editor)?;
+        service.unlink_configuration_from_run(&id, &config_id)?;
+        Ok(Json(
+            json!({ "message": "Test configuration unlinked from test run" }),
+        ))
+    })
+    .await
 }
 
 pub(crate) fn routes<R: Repository + 'static>() -> Router<AppState<R>> {

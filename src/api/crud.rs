@@ -29,76 +29,103 @@ use crate::domain::duplicate::DuplicateSpec;
 /// the caller may reach the resource this request names.
 macro_rules! crud_handlers {
     ($list:ident, $get:ident, $create:ident, $update:ident, $delete:ident, $resource:expr) => {
-        pub(crate) async fn $list<R: Repository>(
+        pub(crate) async fn $list<R: Repository + 'static>(
             State(state): State<AppState<R>>,
             principal: Principal,
             Query(query): Query<ListQuery>,
         ) -> Result<Json<Value>, DomainError> {
-            let scope = access::scope(state.auth(), &principal)?;
-            let items = state.list($resource, &query)?;
-            Ok(Json(json!(access::filter_list(
-                &state,
-                $resource,
-                items,
-                scope.as_ref(),
-            )?)))
+            // Storage phase parked on the blocking pool (#410).
+            super::on_blocking(move || -> Result<Json<Value>, DomainError> {
+                let scope = access::scope(state.auth(), &principal)?;
+                let items = state.list($resource, &query)?;
+                Ok(Json(json!(access::filter_list(
+                    &state,
+                    $resource,
+                    items,
+                    scope.as_ref(),
+                )?)))
+
+            }).await
         }
 
-        pub(crate) async fn $get<R: Repository>(
+        pub(crate) async fn $get<R: Repository + 'static>(
             State(state): State<AppState<R>>,
             principal: Principal,
             Path(id): Path<String>,
         ) -> Result<(HeaderMap, Json<Value>), DomainError> {
-            access::guard_get(&state, &principal, $resource, &id)?;
-            let document = state.get($resource, &id)?;
-            let mut headers = HeaderMap::new();
-            if let Some(hash) = state.etag($resource, &id) {
-                let etag = format!("\"{hash}\"");
-                if let Ok(value) = HeaderValue::from_str(&etag) {
-                    headers.insert(ETAG, value);
+            // Storage phase parked on the blocking pool (#410).
+            super::on_blocking(move || -> Result<(HeaderMap, Json<Value>), DomainError> {
+                access::guard_get(&state, &principal, $resource, &id)?;
+                let document = state.get($resource, &id)?;
+                let mut headers = HeaderMap::new();
+                if let Some(hash) = state.etag($resource, &id) {
+                    let etag = format!("\"{hash}\"");
+                    if let Ok(value) = HeaderValue::from_str(&etag) {
+                        headers.insert(ETAG, value);
+                    }
                 }
-            }
-            Ok((headers, Json(document)))
+                Ok((headers, Json(document)))
+
+            }).await
         }
 
-        pub(crate) async fn $create<R: Repository>(
+        pub(crate) async fn $create<R: Repository + 'static>(
             State(state): State<AppState<R>>,
             principal: Principal,
             Json(body): Json<Value>,
         ) -> Result<(StatusCode, Json<Value>), DomainError> {
-            access::guard_create(&state, &principal, $resource, &body)?;
-            let created = state.create($resource, &body)?;
-            Ok((
-                StatusCode::CREATED,
-                Json(json!({ "message": "Resource created", "id": created.id })),
-            ))
+            // Storage phase parked on the blocking pool (#410).
+            super::on_blocking(move || -> Result<(StatusCode, Json<Value>), DomainError> {
+                access::guard_create(&state, &principal, $resource, &body)?;
+                let created = state.create($resource, &body)?;
+                Ok((
+                    StatusCode::CREATED,
+                    Json(json!({ "message": "Resource created", "id": created.id })),
+                ))
+
+            }).await
         }
 
-        pub(crate) async fn $update<R: Repository>(
+        pub(crate) async fn $update<R: Repository + 'static>(
             State(state): State<AppState<R>>,
             principal: Principal,
             Path(id): Path<String>,
             if_match: IfMatchHeader,
             Json(body): Json<Value>,
         ) -> Result<Json<Value>, DomainError> {
-            access::guard_update(&state, &principal, $resource, &id, &body)?;
-            let expected_etag = if if_match.0.is_empty() {
-                None
-            } else {
-                Some(if_match.0)
-            };
-            state.update_with_etag($resource, &id, &body, expected_etag)?;
-            Ok(Json(json!({ "message": "Resource updated" })))
+            // Storage phase parked on the blocking pool (#410).
+            super::on_blocking(move || -> Result<Json<Value>, DomainError> {
+                access::guard_update(&state, &principal, $resource, &id, &body)?;
+                let expected_etag = if if_match.0.is_empty() {
+                    None
+                } else {
+                    Some(if_match.0)
+                };
+                state.update_with_etag($resource, &id, &body, expected_etag)?;
+                Ok(Json(json!({ "message": "Resource updated" })))
+
+            }).await
         }
 
-        pub(crate) async fn $delete<R: Repository>(
+        pub(crate) async fn $delete<R: Repository + 'static>(
             State(state): State<AppState<R>>,
             principal: Principal,
             Path(id): Path<String>,
         ) -> Result<Json<Value>, DomainError> {
-            access::guard_delete(&state, &principal, $resource, &id)?;
-            state.delete($resource, &id)?;
-            Ok(Json(json!({ "message": "Resource deleted" })))
+            // Storage phase parked on the blocking pool (#410).
+            super::on_blocking(move || -> Result<Json<Value>, DomainError> {
+                access::guard_delete(&state, &principal, $resource, &id)?;
+                // Deleting a project also forgets its grants (#408), revoked
+                // first: a failed revocation leaves the project whole and the
+                // delete retryable, never a grant file a later create could
+                // resurrect.
+                if $resource == Resource::Projects {
+                    access::revoke_project_grants(&state, &id)?;
+                }
+                state.delete($resource, &id)?;
+                Ok(Json(json!({ "message": "Resource deleted" })))
+
+            }).await
         }
     };
 }
@@ -107,15 +134,19 @@ macro_rules! crud_handlers {
 /// before invoking it.
 macro_rules! duplicate_handler {
     ($handler:ident, $spec:expr) => {
-        pub(crate) async fn $handler<R: Repository>(
+        pub(crate) async fn $handler<R: Repository + 'static>(
             State(state): State<AppState<R>>,
             principal: Principal,
             Path(id): Path<String>,
             Json(body): Json<Value>,
         ) -> Result<(StatusCode, Json<Value>), DomainError> {
-            access::guard_duplicate(&state, &principal, $spec.resource, &id)?;
-            let new_id = state.duplicate(&$spec, &id, &body)?;
-            Ok($crate::api::crud::duplicated(&$spec, &new_id))
+            // #410: storage phase parked on the blocking pool.
+            super::on_blocking(move || -> Result<(StatusCode, Json<Value>), DomainError> {
+                access::guard_duplicate(&state, &principal, $spec.resource, &id)?;
+                let new_id = state.duplicate(&$spec, &id, &body)?;
+                Ok($crate::api::crud::duplicated(&$spec, &new_id))
+            })
+            .await
         }
     };
 }
