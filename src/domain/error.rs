@@ -27,6 +27,14 @@ pub enum DomainError {
     Internal(String),
     /// A storage failure whose details must not reach the client.
     Storage,
+    /// A storage failure that remembers WHY, server-side only (#417).
+    ///
+    /// The client still sees the fixed `storage_error` envelope — the
+    /// difference is that the cause survives the conversion far enough to
+    /// be LOGGED: an ENOSPC on a dying volume, an EACCES after a bad
+    /// mount, an EIO mid-rename. Without this variant every one of those
+    /// collapses into an identical, undebuggable 500.
+    StorageWithCause(String),
     /// The advisory lock could not be acquired within the configured timeout.
     LockTimeout,
     /// The request carried no usable credential; `code` names what was wrong.
@@ -132,8 +140,7 @@ impl DomainError {
             Self::Conflict(_) => "conflict",
             Self::PreconditionFailed { .. } => "conflict",
             Self::PayloadTooLarge => "payload_too_large",
-            Self::Internal(_) => "storage_error",
-            Self::Storage => "storage_error",
+            Self::Internal(_) | Self::Storage | Self::StorageWithCause(_) => "storage_error",
             Self::LockTimeout => "lock_timeout",
             Self::Unauthenticated { code, .. } => code,
             Self::Forbidden(_) => "forbidden",
@@ -152,7 +159,9 @@ impl Display for DomainError {
             }
             Self::PayloadTooLarge => write!(formatter, "payload too large"),
             Self::Internal(message) => write!(formatter, "internal error: {message}"),
-            Self::Storage => write!(formatter, "storage operation failed"),
+            Self::Storage | Self::StorageWithCause(_) => {
+                write!(formatter, "storage operation failed")
+            }
             Self::LockTimeout => write!(formatter, "lock acquisition timed out"),
             Self::Unauthenticated { code, message } => write!(formatter, "{code}: {message}"),
             Self::Forbidden(message) => write!(formatter, "forbidden: {message}"),
@@ -179,7 +188,9 @@ impl From<io::Error> for DomainError {
             io::ErrorKind::InvalidInput => Self::invalid_request("Invalid request"),
             io::ErrorKind::AlreadyExists => Self::Conflict("Resource already exists".to_owned()),
             io::ErrorKind::WouldBlock => Self::LockTimeout,
-            _ => Self::Storage,
+            // The kinds no client needs to know: keep the WHY for the log
+            // and answer the same fixed envelope anyway (#417).
+            kind => Self::StorageWithCause(format!("{kind:?}: {error}")),
         }
     }
 }
