@@ -13,6 +13,11 @@
 //      contents. A page that is not in the book is invisible to a reader.
 //   3. Every page under docs/ is listed in the README documentation table, so a
 //      new page cannot be added without being discoverable.
+//   5. Every Rust module under src/ is named — as a `file.rs` — in README.md or
+//      AGENTS.md, so the architecture tables cannot rot into fiction when a
+//      module is added, renamed, or split (issue #424's presence assertion:
+//      links are checked for validity by rule 1, but only presence catches a
+//      table that no longer describes the tree).
 //   4. Every wiki page linked from the wiki index exists, and every wiki page on
 //      disk is reachable from the index: the index is exhaustive by decision.
 //
@@ -152,11 +157,35 @@ function escapeRegExp(text) {
   return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+// Rule 5 (issue #424): every module under src/ must be NAMED somewhere in the
+// two architecture documents. The check is by file name (`guardrails.rs`),
+// because the tables describe files by name; mod.rs is the directory itself
+// and main.rs/lib.rs are crate surfaces, so they are exempt, as is anything
+// named tests.rs. A new module that no doc mentions fails CI — the drift this
+// rule exists to catch was exactly `fs.rs` outliving its split into `fs/`.
+function checkModulesNamed() {
+  const listing = readdirSync(join(repoRoot, "src"), {
+    recursive: true,
+    encoding: "utf8",
+  });
+  const haystack = [readFileSync(join(repoRoot, "README.md"), "utf8"), readFileSync(join(repoRoot, "AGENTS.md"), "utf8")].join("\n");
+  for (const entry of listing) {
+    if (!entry.endsWith(".rs")) continue;
+    const name = entry.split("/").pop();
+    if (["mod.rs", "main.rs", "lib.rs", "tests.rs"].includes(name)) continue;
+    if (!haystack.includes(name)) {
+      violations.push(`src/${entry}: named in neither README.md nor AGENTS.md (architecture tables must list every module, issue #424)`);
+    }
+  }
+}
+
 const pages = docsPages();
+
 for (const page of [...pages, "README.md", "AGENTS.md"]) checkLinks(page);
 checkSummary(pages);
 checkReadmeTable(pages);
 checkWikiIndex(pages);
+checkModulesNamed();
 
 if (violations.length > 0) {
   console.error(`docs link check failed with ${violations.length} violation(s):`);

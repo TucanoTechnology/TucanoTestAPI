@@ -53,6 +53,15 @@ secret never reaches a commit. Generate one with
 missing `TUCANO_JWT_SECRET` or `TUCANO_BOOTSTRAP_PASSWORD` stops Compose with an error that names
 the variable, rather than starting an anonymous stack.
 
+
+Four further knobs decide request ceilings rather than boot identity, and they fail closed at
+startup — an upgraded container that refuses to boot usually names one of them: `TUCANO_MAX_BODY_BYTES`
+(default 50 MiB), `TUCANO_REQUEST_TIMEOUT_MS` (default 300000; `0` disables the deadline),
+`TUCANO_MAX_CONCURRENCY` (default 128; `0` uncaps), and `TUCANO_LOCK_TIMEOUT_MS` (default 5000 —
+keep it below the container `stop_grace_period`, which is 30 s in the shipped file). The full
+contract, including what each refuses and why, is in the
+[configuration reference](../deployment/configuration-reference.md).
+
 Then build and start:
 
 ```sh
