@@ -171,6 +171,7 @@ services:
     cap_drop:
       - ALL
     restart: unless-stopped
+    stop_grace_period: 30s
     deploy:
       replicas: 1
       resources:
@@ -318,6 +319,7 @@ same hardened shape, matching what the Dockerfile already does:
 | `ca-certificates` only | The only package the runtime image installs is `ca-certificates`; the Rust toolchain stays in the build stage. |
 | `deploy.resources.limits` | Per-replica CPU (`1.0`) and memory (`512M`) ceilings. |
 | `restart: unless-stopped` | The container is restarted after a host reboot or crash unless an operator stopped it. |
+| `stop_grace_period: 30s` | SIGTERM starts the server's graceful drain — in-flight requests are answered, idle connections close, the process exits on its own — so the stop window must be long enough for the work it waits on (a parked write, at worst the lock deadline) to finish before Docker escalates to SIGKILL (#411). |
 
 A consequence worth internalising: because the root filesystem is read-only, the service must not
 be given anything to write outside `TUCANO_DATA_DIR` and `/tmp` — and it does not need to. If a

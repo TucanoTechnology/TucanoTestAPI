@@ -135,6 +135,18 @@ If `/ready` reports *the storage lock cannot be taken* on a replica that used to
 for a stuck writer on the shared volume before restarting anything — the diagnosis section below
 covers it.
 
+### Stopping and restarting
+
+Stopping is graceful: `docker stop` (or a compose down) sends SIGTERM, the service finishes the
+requests it is actively working — including a write parked on the volume's advisory lock — closes
+idle connections, and exits on its own. The escalation to SIGKILL only arrives when the grace
+period runs out, so keep it above the worst thing a drain waits for: the lock deadline
+(`TUCANO_LOCK_TIMEOUT_MS`, default 5 s) plus the work queued behind it. The shipped Compose file
+carries `stop_grace_period: 30s` for exactly that (#411). A drained request's write reaches disk
+and its client still gets its answer; a SIGKILLed one relies on the atomic-publish rule — the old
+document or the complete new one, never a half one — so prefer the graceful path and size the
+grace period rather than killing.
+
 ## Backup and restore
 
 A backup is a directory copy. Nothing has to be quiesced for a *consistent* copy, but the process
