@@ -331,7 +331,11 @@ out at 45 seconds; document routes are never cached and stay strongly consistent
 
 The API process is stateless: replicas do not keep sessions or in-memory records. Horizontal scaling
 requires a shared persistent POSIX volume mounted at the same `TUCANO_DATA_DIR` for every replica.
-Repository mutations use an advisory lock file and atomic same-directory renames. A write that
+Repository mutations use an advisory lock file and atomic same-directory renames. An atomic publish
+is complete only when the DIRECTORY agrees: after every rename, unlink and attachment creation the
+owning directory is fsynced best-effort, so a write acknowledged across a power loss is a write that
+comes back — and a revoked grant, synced before the project folder is deleted, never resurrects
+(#423). A write that
 cannot take the lock within `TUCANO_LOCK_TIMEOUT_MS` (default `5000` ms) is refused with
 `503 lock_timeout` and a `Retry-After`, so a busy volume is answered rather than queued behind
 indefinitely. Two ceilings stand beside it on the request path

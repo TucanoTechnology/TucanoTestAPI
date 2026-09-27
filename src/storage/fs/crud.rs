@@ -348,11 +348,25 @@ impl FileRepository {
         id: &str,
     ) -> io::Result<()> {
         let lock = self.acquire_lock()?;
-        let result = if resource.is_hierarchical() {
-            fs::remove_dir_all(self.folder(resource, parent, id)?)
+        let target = if resource.is_hierarchical() {
+            self.folder(resource, parent, id)?
         } else {
-            fs::remove_file(self.document(resource, parent, id)?)
+            self.document(resource, parent, id)?
         };
+        let result = if resource.is_hierarchical() {
+            fs::remove_dir_all(&target)
+        } else {
+            fs::remove_file(&target)
+        };
+        // A delete that a crash un-deletes is a document — or a grant —
+        // that comes back to life; the parent sync is what makes "gone"
+        // survive power loss, and it is why the grants store is revoked
+        // BEFORE folders disappear (#423, ordering as documented).
+        if result.is_ok()
+            && let Some(container) = target.parent()
+        {
+            super::FileRepository::sync_directory(container);
+        }
         lock.unlock()?;
         result
     }
