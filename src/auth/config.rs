@@ -182,18 +182,31 @@ impl AuthConfig {
 #[derive(Debug)]
 pub enum ConfigError {
     /// `TUCANO_AUTH_REQUIRED` is not a value the server understands.
-    InvalidBool { value: String },
+    InvalidBool {
+        /// The refused value, quoted; it is what the operator typed.
+        value: String,
+    },
     /// A lifetime is empty, zero, unparseable, or too large to be a duration.
-    InvalidTtl { key: &'static str, value: String },
+    InvalidTtl {
+        /// The setting whose lifetime was refused.
+        key: &'static str,
+        /// The refused value, quoted; never a secret's content.
+        value: String,
+    },
     /// Both `TUCANO_JWT_SECRET` and `TUCANO_JWT_SECRET_FILE` were set.
     SecretSourcesConflict,
     /// Auth is required but no signing secret was configured.
     MissingSecret,
     /// The signing secret is present but shorter than [`MIN_SECRET_BYTES`].
-    ShortSecret { length: usize },
+    ShortSecret {
+        /// The secret's actual byte length, named without printing it.
+        length: usize,
+    },
     /// The secret file could not be read.
     SecretFile {
+        /// The file that could not be read.
         path: String,
+        /// The underlying OS error, kept server-side for the startup message.
         source: std::io::Error,
     },
     /// Only one of the two bootstrap variables was set.
