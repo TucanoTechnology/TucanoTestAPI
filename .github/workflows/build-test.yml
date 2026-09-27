@@ -252,6 +252,13 @@ jobs:
           # exec targets the smoke container directly, against the volume the
           # server reads while it serves.
           TUCANO_SEED_AUTH_CMD: docker exec -t tucano-smoke-${{ github.run_id }} tucano-test seed-auth
+          # smoke.sh authenticates under its OWN names (SMOKE_USERNAME/
+          # SMOKE_PASSWORD, not the TUCANO_BOOTSTRAP_* the seed and validator
+          # read): unset, it signs in nobody and serves the anonymous posture
+          # by design — on this auth-enforced container that reads as the
+          # 401 that failed the last run. Same smoke bootstrap account.
+          SMOKE_USERNAME: smoke
+          SMOKE_PASSWORD: container-smoke-bootstrap-password
         run: |
           node scripts/seed.mjs http://localhost:3009
           node scripts/validate-seed.mjs http://localhost:3009
