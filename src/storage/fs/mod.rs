@@ -202,6 +202,25 @@ impl FileRepository {
 
     /// Write a document atomically: a same-directory temporary file, flushed and
     /// synced, then renamed over the destination.
+    /// Makes a directory edit durable: a rename or unlink is a change to
+    /// the DIRECTORY, and the kernel may keep that change in its own cache
+    /// even after the renamed file's data was fsynced — power loss would
+    /// resurrect the old name (or forget the new one) while every read
+    /// since boot shows the new world (#423). Syncing the parent is what
+    /// makes an atomic publish atomic across a crash, not just across
+    /// processes.
+    ///
+    /// Best-effort by design: opening a directory is refused on platforms
+    /// (or filesystems, or read-only mounts) that will not do it, and a
+    /// write whose data IS durable must not be failed because the
+    /// bookkeeping sync could not be attempted — the guarantee on those
+    /// systems is exactly what it was before, and the code says so.
+    fn sync_directory(directory: &Path) {
+        if let Ok(handle) = fs::File::open(directory) {
+            let _ = handle.sync_all();
+        }
+    }
+
     fn write_json(&self, destination: &Path, value: &Value) -> io::Result<()> {
         let directory = destination.parent().ok_or_else(|| {
             io::Error::new(io::ErrorKind::InvalidInput, "destination has no parent")
@@ -218,7 +237,11 @@ impl FileRepository {
                 .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
             file.write_all(b"\n")?;
             file.sync_all()?;
-            fs::rename(&temporary, destination)
+            fs::rename(&temporary, destination)?;
+            // The rename is only as durable as the directory that holds it
+            // (#423).
+            Self::sync_directory(directory);
+            Ok(())
         })();
         if result.is_err() {
             let _ = fs::remove_file(&temporary);
@@ -406,7 +429,14 @@ impl FileRepository {
         match mode {
             Placement::Copy => copy_dir_all(&self.root, &from, &to),
             Placement::Move => match fs::rename(&from, &to) {
-                Ok(()) => Ok(()),
+                Ok(()) => {
+                    // A move edits BOTH directories' entries (#423).
+                    if let (Some(from_parent), Some(to_parent)) = (from.parent(), to.parent()) {
+                        Self::sync_directory(from_parent);
+                        Self::sync_directory(to_parent);
+                    }
+                    Ok(())
+                }
                 Err(_) => {
                     copy_dir_all(&self.root, &from, &to)?;
                     fs::remove_dir_all(&from)
