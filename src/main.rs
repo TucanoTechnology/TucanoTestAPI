@@ -104,8 +104,40 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         listener,
         api::router_with_guardrails(repository, authentication, guardrails),
     )
+    .with_graceful_shutdown(shutdown_signal())
     .await?;
     Ok(())
+}
+
+/// Resolves when the process is asked to stop: Ctrl-C for the local run,
+/// SIGTERM for the orchestrator — `docker stop`, a compose down, a rolling
+/// restart (#411).
+///
+/// `axum::serve`'s graceful drain then stops accepting new work, answers
+/// every in-flight request to completion, and `run` returns normally. The
+/// storage phase of a parked request still finishes atomically; the
+/// guarantee this adds on top is that the RESPONSE also reaches the client
+/// that was mid-upload when the stop arrived, and the audit lines written
+/// during it all flush.
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        tokio::signal::ctrl_c()
+            .await
+            .expect("could not install the Ctrl-C handler");
+    };
+    #[cfg(unix)]
+    let terminate = async {
+        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .expect("could not install the SIGTERM handler")
+            .recv()
+            .await;
+    };
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+    tokio::select! {
+        () = ctrl_c => {},
+        () = terminate => {},
+    }
 }
 
 /// The data directory the server would use, so `seed-auth` writes where the
