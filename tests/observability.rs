@@ -416,6 +416,14 @@ async fn an_attachment_is_audited_without_its_contents() {
 #[cfg(unix)]
 async fn a_storage_failure_logs_its_cause_and_answers_the_fixed_envelope() {
     use std::os::unix::fs::PermissionsExt as _;
+    // The forced failure is a MODE refusal, and root is above the mode
+    // bits: inside the container test jobs (uid 0) the chmod would not
+    // stop the write, and this test would assert a 500 that cannot
+    // happen there. Honest skip, loudly reported — not a silent pass.
+    if rustix::process::getuid().as_raw() == 0 {
+        eprintln!("skipping: the test process is root, which ignores mode 0500");
+        return;
+    }
     let (directory, app) = common::test_app();
     let capture = capture();
 
