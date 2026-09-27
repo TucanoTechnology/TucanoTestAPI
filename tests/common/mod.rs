@@ -278,11 +278,20 @@ pub fn multipart_request(uri: &str, filename: &str, contents: &[u8]) -> Request<
     multipart_with_body(uri, body)
 }
 
+/// A frame that announces a part and then just ENDS — no final boundary,
+/// the shape a killed upload leaves on the wire (#421).
+pub fn multipart_truncated(uri: &str) -> Request<Body> {
+    let body = format!(
+        "--{BOUNDARY}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"cut.bin\"\r\nContent-Type: text/plain\r\n\r\nhalf a file, and then the wire went dead"
+    );
+    multipart_with_body(uri, body.into_bytes())
+}
+
 pub fn multipart_without_file(uri: &str) -> Request<Body> {
     multipart_with_body(uri, format!("--{BOUNDARY}--\r\n").into_bytes())
 }
 
-fn multipart_with_body(uri: &str, body: Vec<u8>) -> Request<Body> {
+pub(crate) fn multipart_with_body(uri: &str, body: Vec<u8>) -> Request<Body> {
     Request::builder()
         .method("POST")
         .uri(uri)
