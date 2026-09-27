@@ -29,7 +29,7 @@ use tucano_test::auth::{
 };
 use tucano_test::{api, repository::FileRepository};
 
-use common::{ROLE_CHECKED_WRITE_OPERATIONS, role_checked_write};
+use common::{ROLE_CHECKED_WRITE_OPERATIONS, assert_challenge, role_checked_write};
 
 const SECRET: &[u8] = b"an-integration-test-secret-of-32-plus!";
 const PASSWORD: &str = "correct horse battery staple";
@@ -240,17 +240,6 @@ async fn sign_in(app: &Router) -> Value {
 
 fn error_code(body: &Value) -> &str {
     body["error"]["code"].as_str().expect("error code")
-}
-
-fn assert_challenge(headers: &HeaderMap) {
-    let challenge = headers
-        .get(header::WWW_AUTHENTICATE)
-        .and_then(|value| value.to_str().ok())
-        .expect("WWW-Authenticate challenge");
-    assert!(
-        challenge.starts_with("Bearer realm="),
-        "not a bearer challenge: {challenge}"
-    );
 }
 
 fn access_token(session: &Value) -> &str {

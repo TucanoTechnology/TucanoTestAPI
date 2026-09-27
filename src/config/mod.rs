@@ -429,14 +429,23 @@ pub enum ConfigError {
     /// Deliberately path-free: the ADR forbids a raw file path in an error. The
     /// message names `TUCANO_CONFIG_FILE` instead, which is what an operator
     /// needs in order to know which setting to look at.
-    UnreadableFile { source: std::io::Error },
+    UnreadableFile {
+        /// The underlying OS error, kept server-side for the startup message.
+        source: std::io::Error,
+    },
     /// The configuration file is not a valid document of this schema.
     ///
     /// The detail names the offending key and the type that key wants, or the
     /// position of a syntax error; it never quotes the value that was refused.
-    Malformed { detail: String },
+    Malformed {
+        /// Which key or position failed, without quoting the refused value.
+        detail: String,
+    },
     /// The `version` marker is not [`CONFIG_VERSION`].
-    UnsupportedVersion { found: u32 },
+    UnsupportedVersion {
+        /// The version marker actually read, where only [`CONFIG_VERSION`] serves.
+        found: u32,
+    },
     /// An encrypted value in the configuration file could not be decrypted.
     ///
     /// Wraps a [`SecretError`] that names the setting or key identifier at
