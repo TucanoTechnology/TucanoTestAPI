@@ -97,6 +97,13 @@ macro_rules! crud_handlers {
             Path(id): Path<String>,
         ) -> Result<Json<Value>, DomainError> {
             access::guard_delete(&state, &principal, $resource, &id)?;
+            // Deleting a project also forgets its grants (#408), revoked
+            // first: a failed revocation leaves the project whole and the
+            // delete retryable, never a grant file a later create could
+            // resurrect.
+            if $resource == Resource::Projects {
+                access::revoke_project_grants(&state, &id)?;
+            }
             state.delete($resource, &id)?;
             Ok(Json(json!({ "message": "Resource deleted" })))
         }
