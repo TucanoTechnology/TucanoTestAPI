@@ -122,8 +122,11 @@ rollback — is in the [deployment guide](docs/deployment/deployment-guide.md).
 
 Every request opens one `http.request` span carrying the method, the path, the query string (every
 secret query parameter redacted), the status and the latency. Every mutating operation writes one
-`tucano.audit` event naming the action, the resource, the identifier and the outcome, alongside the
-error code when it was refused. No request body and no attachment's contents are ever logged.
+`tucano.audit` event naming the action, the resource, the identifier, the acting subject (`user=`
+— the authenticated account, or the explicit `-` where no authentication is enforced) and the
+outcome, alongside the error code when it was refused. Sign-ins, token rotations (a spent or
+unknown refresh token is recorded as `replay`) and logout write the same event kind. No request
+body, credential, or attachment's contents are ever logged.
 
 `TUCANO_LOG` is the `tracing-subscriber` directive set, defaulting to `info` — the request spans, the
 audit lines and the failures, without the per-connection noise `debug` adds. `TUCANO_LOG_FORMAT` is

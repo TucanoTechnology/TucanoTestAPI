@@ -252,14 +252,35 @@ async fn login<R: Repository + 'static>(
     super::on_blocking(move || -> Result<Json<SessionResponse>, DomainError> {
         let Json(body) = body.map_err(|_| rejected_body())?;
         let auth = state.auth();
-        let tokens = crate::auth::login(
+        let outcome = crate::auth::login(
             &auth.store,
             &auth.config,
             &body.username,
             &body.password,
             now_seconds(),
-        )?;
-        Ok(Json(SessionResponse::new(tokens, &auth.config)))
+        );
+        // Session events (#416): the attempt itself is the audit subject —
+        // a login names the username it was tried with, which is exactly
+        // what an operator asks after a burst of failures. Never a
+        // password, a hash or a token.
+        match &outcome {
+            Ok(_) => tracing::info!(
+                target: crate::domain::AUDIT_TARGET,
+                action = "login",
+                resource = "session",
+                id = body.username.as_str(),
+                outcome = "success"
+            ),
+            Err(error) => tracing::info!(
+                target: crate::domain::AUDIT_TARGET,
+                action = "login",
+                resource = "session",
+                id = body.username.as_str(),
+                outcome = "failure",
+                code = error.code()
+            ),
+        }
+        Ok(Json(SessionResponse::new(outcome?, &auth.config)))
     })
     .await
 }
@@ -274,13 +295,35 @@ async fn refresh<R: Repository + 'static>(
     super::on_blocking(move || -> Result<Json<SessionResponse>, DomainError> {
         let Json(body) = body.map_err(|_| rejected_body())?;
         let auth = state.auth();
-        let tokens = crate::auth::refresh(
+        let outcome = crate::auth::refresh(
             &auth.store,
             &auth.config,
             &body.refresh_token,
             now_seconds(),
-        )?;
-        Ok(Json(SessionResponse::new(tokens, &auth.config)))
+        );
+        // A refresh that does not present the store's live token for an
+        // account is a `replay` on the trail: unknown, expired, revoked or
+        // already-spent tokens are deliberately indistinguishable to the
+        // client, and the audit line keeps that same blindness — it names
+        // the event without a token or hash (#416).
+        match &outcome {
+            Ok(_) => tracing::info!(
+                target: crate::domain::AUDIT_TARGET,
+                action = "refresh",
+                resource = "session",
+                id = "-",
+                outcome = "success"
+            ),
+            Err(error) => tracing::info!(
+                target: crate::domain::AUDIT_TARGET,
+                action = "refresh",
+                resource = "session",
+                id = "-",
+                outcome = "replay",
+                code = error.code()
+            ),
+        }
+        Ok(Json(SessionResponse::new(outcome?, &auth.config)))
     })
     .await
 }
@@ -299,7 +342,19 @@ async fn logout<R: Repository + 'static>(
     super::on_blocking(move || -> Result<Json<Value>, DomainError> {
         let Json(body) = body.map_err(|_| rejected_body())?;
         let auth = state.auth();
-        crate::auth::logout(&auth.store, &principal, &body.refresh_token)?;
+        let revoked = crate::auth::logout(&auth.store, &principal, &body.refresh_token)?;
+        // The CLIENT answer stays uniform by design — it never confirms
+        // whether the token was live. The trail is the operator's view and
+        // says so: `revoked` records whether a live token actually was
+        // taken down (#416).
+        tracing::info!(
+            target: crate::domain::AUDIT_TARGET,
+            action = "logout",
+            resource = "session",
+            id = principal.user_id.as_str(),
+            outcome = "success",
+            revoked
+        );
         Ok(Json(json!({ "message": "Signed out" })))
     })
     .await
