@@ -542,7 +542,9 @@ async fn uploaded_file(multipart: &mut Multipart) -> Result<(String, Bytes), Dom
         return Err(invalid_multipart("Unable to read uploaded file"));
     };
     if contents.len() > MAX_ATTACHMENT_BYTES {
-        return Err(DomainError::PayloadTooLarge);
+        return Err(DomainError::PayloadTooLarge {
+            limit_bytes: MAX_ATTACHMENT_BYTES,
+        });
     }
     Ok((original_name, contents))
 }

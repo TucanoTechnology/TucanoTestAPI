@@ -29,8 +29,14 @@ pub enum DomainError {
         /// The digest the stored document carries NOW, for the client's retry.
         current_etag: String,
     },
-    /// The uploaded attachment is larger than [`crate::domain::MAX_ATTACHMENT_BYTES`].
-    PayloadTooLarge,
+    /// Rejected upload — a file larger than the attachment limit
+    /// ([`crate::domain::MAX_ATTACHMENT_BYTES`] today) — carrying the byte
+    /// limit the check enforced, so the rendered message can never quote a
+    /// number that disagrees with what fired (#425).
+    PayloadTooLarge {
+        /// Bytes the upload was measured against; the message formats this.
+        limit_bytes: usize,
+    },
     /// An unexpected internal failure carrying a specific message.
     Internal(String),
     /// A storage failure whose details must not reach the client.
@@ -152,7 +158,7 @@ impl DomainError {
             Self::InvalidRequest { code, .. } => code,
             Self::Conflict(_) => "conflict",
             Self::PreconditionFailed { .. } => "conflict",
-            Self::PayloadTooLarge => "payload_too_large",
+            Self::PayloadTooLarge { .. } => "payload_too_large",
             Self::Internal(_) | Self::Storage | Self::StorageWithCause(_) => "storage_error",
             Self::LockTimeout => "lock_timeout",
             Self::Unauthenticated { code, .. } => code,
@@ -170,7 +176,9 @@ impl Display for DomainError {
             Self::PreconditionFailed { current_etag } => {
                 write!(formatter, "precondition failed: ETag is now {current_etag}")
             }
-            Self::PayloadTooLarge => write!(formatter, "payload too large"),
+            Self::PayloadTooLarge { limit_bytes } => {
+                write!(formatter, "payload too large (limit {limit_bytes} bytes)")
+            }
             Self::Internal(message) => write!(formatter, "internal error: {message}"),
             Self::Storage | Self::StorageWithCause(_) => {
                 write!(formatter, "storage operation failed")

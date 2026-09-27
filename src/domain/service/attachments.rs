@@ -20,7 +20,9 @@ impl<R: Repository + 'static> TestService<R> {
         contents: &[u8],
     ) -> Result<StoredAttachment, DomainError> {
         if contents.len() > MAX_ATTACHMENT_BYTES {
-            return Err(DomainError::PayloadTooLarge);
+            return Err(DomainError::PayloadTooLarge {
+                limit_bytes: MAX_ATTACHMENT_BYTES,
+            });
         }
 
         let filename = stored_attachment_name(original_name)?;
@@ -90,7 +92,9 @@ impl<R: Repository + 'static> TestService<R> {
         contents: &[u8],
     ) -> Result<StoredAttachment, DomainError> {
         if contents.len() > MAX_ATTACHMENT_BYTES {
-            return Err(DomainError::PayloadTooLarge);
+            return Err(DomainError::PayloadTooLarge {
+                limit_bytes: MAX_ATTACHMENT_BYTES,
+            });
         }
         self.structured_step(parent, id, step_index)?;
 

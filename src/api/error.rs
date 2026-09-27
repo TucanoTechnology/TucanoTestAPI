@@ -87,11 +87,22 @@ impl IntoResponse for DomainError {
                 }
                 response
             }
-            DomainError::PayloadTooLarge => envelope(
-                StatusCode::PAYLOAD_TOO_LARGE,
-                "payload_too_large",
-                "Attachment exceeds 50 MiB",
-            ),
+            // The number is the limit the check enforced, delivered with
+            // the error — the message cannot outlive a changed cap (#425).
+            DomainError::PayloadTooLarge { limit_bytes } => {
+                let human = if limit_bytes == 0 {
+                    format!("{limit_bytes} bytes")
+                } else if limit_bytes % (1024 * 1024) == 0 {
+                    format!("{} MiB", limit_bytes / (1024 * 1024))
+                } else {
+                    format!("{limit_bytes} bytes")
+                };
+                envelope(
+                    StatusCode::PAYLOAD_TOO_LARGE,
+                    "payload_too_large",
+                    &format!("Attachment exceeds {human}"),
+                )
+            }
             // A 500 is the operator's problem, and until now the operator
             // saw nothing: the cause was either a fixed string or an
             // `io::Error` that the conversion had already digested. Both
