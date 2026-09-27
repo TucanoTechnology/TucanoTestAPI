@@ -1,6 +1,7 @@
 ---
 load-when: writing a new ticket
 applies-to: every repository
+title: Ticket template
 ---
 
 # Ticket Template

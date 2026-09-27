@@ -1,6 +1,7 @@
 ---
 load-when: handling credentials or secrets, or changing anything security-sensitive
 applies-to: every repository
+title: Security
 ---
 
 # Security

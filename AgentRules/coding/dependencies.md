@@ -1,6 +1,7 @@
 ---
 load-when: adding or upgrading a dependency
 applies-to: every repository
+title: Dependencies
 ---
 
 # Dependencies
