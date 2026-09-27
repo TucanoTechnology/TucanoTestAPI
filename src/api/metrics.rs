@@ -134,6 +134,10 @@ fn resource_label(matched: Option<&str>) -> String {
 pub fn record_outcome(response: &Response, latency: Duration, span: &Span) {
     span.record("status", response.status().as_u16());
     span.record("duration_ms", latency.as_millis() as u64);
+    // The acting subject, when the request carried a verified token (#416).
+    if let Some(actor) = response.extensions().get::<super::RequestActor>() {
+        span.record("user", actor.0.as_str());
+    }
 }
 
 #[cfg(test)]

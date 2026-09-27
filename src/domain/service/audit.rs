@@ -8,6 +8,13 @@
 //! request body, no attachment bytes, no stored path — so an audit trail can be
 //! kept on without keeping a secret.
 //!
+//! Every line also names the acting subject as `user=` — the authenticated
+//! account the request carried, `"-"` on a deployment that enforces no
+//! authentication — so the trail is attributable, not merely a record that
+//! something changed (#416). Session events (login, refresh, logout) are
+//! audited by the auth layer under the same target; they name the username
+//! a request attempted with and never a token, hash or password.
+//!
 //! Only the storage write that performs a mutation is audited, not the request
 //! that asked for it. A request refused by validation, by an unresolvable
 //! identifier or by a conflict never wrote anything and produces no audit line,
@@ -19,6 +26,38 @@
 use crate::storage::{Placement, Resource};
 
 use super::error::DomainError;
+
+/// The label audit lines carry when no authenticated subject exists: a
+/// trusted deployment enforces no authentication, so writes there are
+/// honestly anonymous rather than attributed to an empty string (#416).
+pub const ANONYMOUS_ACTOR: &str = "-";
+
+tokio::task_local! {
+    static CURRENT_ACTOR: String;
+}
+
+/// The actor for the current request, as recorded by the API layer.
+#[must_use]
+pub fn current_actor() -> String {
+    CURRENT_ACTOR
+        .try_with(Clone::clone)
+        .unwrap_or_else(|_| ANONYMOUS_ACTOR.to_owned())
+}
+
+/// Runs a future with `actor` installed as the current request's subject.
+pub async fn with_request_actor<T>(
+    actor: String,
+    future: impl std::future::Future<Output = T>,
+) -> T {
+    CURRENT_ACTOR.scope(actor, future).await
+}
+
+/// Runs a synchronous operation with `actor` installed, for the blocking
+/// pool (#416): task-locals do not cross threads on their own.
+#[must_use]
+pub fn with_actor<T>(actor: String, operation: impl FnOnce() -> T) -> T {
+    CURRENT_ACTOR.sync_scope(actor, operation)
+}
 
 /// The label an attachment is audited under.
 ///
@@ -65,14 +104,23 @@ pub fn audited<T>(
     id: &str,
     operation: impl FnOnce() -> Result<T, DomainError>,
 ) -> Result<T, DomainError> {
+    let actor = current_actor();
     let outcome = operation();
     match &outcome {
-        Ok(_) => tracing::info!(target: AUDIT_TARGET, action, resource, id, outcome = "success"),
+        Ok(_) => tracing::info!(
+            target: AUDIT_TARGET,
+            action,
+            resource,
+            id,
+            user = actor.as_str(),
+            outcome = "success"
+        ),
         Err(error) => tracing::info!(
             target: AUDIT_TARGET,
             action,
             resource,
             id,
+            user = actor.as_str(),
             outcome = "failure",
             code = error.code()
         ),
