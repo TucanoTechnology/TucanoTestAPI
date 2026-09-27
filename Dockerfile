@@ -8,7 +8,7 @@ ARG BUILD_NUMBER=local
 ENV BUILD_NUMBER=${BUILD_NUMBER}
 
 WORKDIR /build
-COPY Cargo.toml Cargo.lock ./
+COPY Cargo.toml Cargo.lock build.rs ./
 COPY src ./src
 COPY benches ./benches
 COPY openapi.json swagger.html ./
