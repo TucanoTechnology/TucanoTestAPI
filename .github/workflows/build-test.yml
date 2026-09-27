@@ -174,3 +174,73 @@ jobs:
         run: rustup toolchain install nightly-2026-09-26 --profile minimal
       - name: Compile-check every fuzz target
         run: cargo +nightly-2026-09-26 check --manifest-path fuzz/Cargo.toml
+  # Running the shipped image end to end (#419). Every other job here tests
+  # compiled code: routers in-process, binaries under `cargo test`. None of
+  # them ever asks whether an IMAGE boots — which is precisely the class
+  # that broke a real deployment (#355: an unwritable volume was a runtime,
+  # image-internal refusal no test could see). This one builds the runtime
+  # image, boots it against an empty named volume exactly like a first
+  # deploy, waits for /health, and then exercises it as a real HTTP client
+  # with the repo's own seed/validate/smoke scripts. It pushes-to-main only:
+  # the merge itself is the proof, and the run stays cheap.
+  container-smoke:
+    name: Container smoke
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: [self-hosted, Linux, X64]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - name: Build the runtime image under test
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: Dockerfile
+          push: false
+          load: true
+          tags: tucano-smoke:${{ github.sha }}
+          # Same buildx cache scope the container-scan job warms: the image
+          # this job runs is the image the scanner just scanned.
+          cache-from: type=gha,scope=container-scan
+          cache-to: type=gha,mode=max,scope=container-scan
+      - name: Boot it against an empty volume, like a first deployment
+        run: |
+          docker volume create tucano-smoke-${{ github.run_id }}
+          # The named volume is seeded from the image at creation, so it
+          # arrives owned by the service account (uid 10001) — the real
+          # first-deploy condition, not a root-owned accident.
+          docker run -d --rm --name tucano-smoke-${{ github.run_id }} \
+            --volume tucano-smoke-${{ github.run_id }}:/data \
+            --publish 3009:3000 \
+            tucano-smoke:${{ github.sha }}
+      - name: Wait for /health, and read the boot self-identification (#418)
+        run: |
+          ready=""
+          for _ in $(seq 1 60); do
+            if curl -fsS http://localhost:3009/health >/dev/null 2>&1; then ready=yes; break; fi
+            sleep 1
+          done
+          if [ -z "$ready" ]; then
+            docker logs tucano-smoke-${{ github.run_id }} 2>&1 || true
+            exit 1
+          fi
+          logs=$(docker logs tucano-smoke-${{ github.run_id }} 2>&1 | head -n 3)
+          echo "$logs"
+          echo "$logs" | grep -q 'tucano.boot' \
+            || { echo "the boot line must self-identify the build (#418)"; exit 1; }
+      - name: Seed, validate and smoke as a real HTTP client
+        run: |
+          node scripts/seed.mjs http://localhost:3009
+          node scripts/validate-seed.mjs http://localhost:3009
+          bash scripts/smoke.sh http://localhost:3009
+      - name: The compose file still loads as configuration
+        run: |
+          # Config-parse only: the values are placeholders for the required
+          # variable checks, not a deployment.
+          TUCANO_JWT_SECRET="container-smoke-placeholder-secret-000" \
+          TUCANO_BOOTSTRAP_PASSWORD="container-smoke-placeholder" \
+            docker compose --file docker-compose.yml config --quiet
+      - name: Tear down
+        if: always()
+        run: |
+          docker rm -f tucano-smoke-${{ github.run_id }} 2>/dev/null || true
+          docker volume rm tucano-smoke-${{ github.run_id }} 2>/dev/null || true
