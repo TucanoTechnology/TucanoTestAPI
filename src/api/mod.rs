@@ -43,11 +43,50 @@ use self::auth::AuthState;
 use self::guardrails::{GuardrailState, Guardrails};
 use self::metrics::HttpMetrics;
 use crate::{
-    domain::{MAX_ATTACHMENT_BYTES, TestService},
+    domain::{DomainError, MAX_ATTACHMENT_BYTES, TestService},
     storage::{Repository, StorageProbe},
 };
 
 pub use crate::domain::ListQuery;
+
+/// Run a fully synchronous request body (domain service + storage + auth
+/// store calls) on the blocking pool instead of the async worker threads
+/// (#410).
+///
+/// The storage layer is intentionally synchronous: advisory-lock waits poll
+/// with `std::thread::sleep`, and every read/write/fsync is a `std::fs`
+/// call. On the runtime's own threads that made a busy volume starve the
+/// executor itself — timers (including the request-timeout guardrail),
+/// keep-alives and `/health` alike, down to a handful of workers on a
+/// 1-CPU container. Parking the synchronous phase on the blocking pool
+/// occupies pool threads sized for exactly this, and frees the executor.
+/// Body extractors stay async (streams keep working on workers); only the
+/// disk-and-lock phase moves — and when a request is cancelled, its parked
+/// operation still runs to its ATOMIC completion, the same guarantee every
+/// dropped write already had.
+pub(crate) async fn on_blocking<T, F>(work: F) -> Result<T, DomainError>
+where
+    F: FnOnce() -> Result<T, DomainError> + Send + 'static,
+    T: Send + 'static,
+{
+    tokio::task::spawn_blocking(work)
+        .await
+        // A panic inside the synchronous phase surfaces as the ordinary
+        // storage failure (trace on stderr from the pool thread itself);
+        // the request still answers the safe envelope.
+        .unwrap_or_else(|_| Err(DomainError::Internal("Storage operation failed".to_owned())))
+}
+
+/// A parking variant for the probe endpoints, which compute a value rather
+/// than a result: `fallback` answers only if the blocking worker itself dies
+/// (a panic in probe code — the probes cannot fail any other way) (#410).
+pub(crate) async fn park<T, F>(work: F, fallback: T) -> T
+where
+    F: FnOnce() -> T + Send + 'static,
+    T: Send + 'static,
+{
+    tokio::task::spawn_blocking(work).await.unwrap_or(fallback)
+}
 
 /// Largest request body the API accepts, in bytes. Uploads beyond this are
 /// rejected before they are read.
@@ -298,15 +337,28 @@ async fn ready<R>(State(state): State<AppState<R>>) -> Response
 where
     R: Repository + 'static,
 {
-    let probe = state.probe_storage();
-    if probe.ready() {
-        return Json(json!({"status": "ready", "storage": "filesystem"})).into_response();
-    }
-    error::envelope(
-        StatusCode::SERVICE_UNAVAILABLE,
-        "not_ready",
-        &format!("storage is not ready: {}", not_ready_reason(&probe)),
+    // The probe writes a scratch file and tries the lock — disk work, parked
+    // like every other synchronous phase (#410). A dead probe worker answers
+    // the same 503 shape with its own reason.
+    park(
+        move || -> Response {
+            let probe = state.probe_storage();
+            if probe.ready() {
+                return Json(json!({"status": "ready", "storage": "filesystem"})).into_response();
+            }
+            error::envelope(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "not_ready",
+                &format!("storage is not ready: {}", not_ready_reason(&probe)),
+            )
+        },
+        error::envelope(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "not_ready",
+            "storage is not ready: the readiness probe worker failed",
+        ),
     )
+    .await
 }
 
 /// The operator's half of the probe: the same checks as `/ready`, reported
@@ -319,16 +371,33 @@ async fn diagnostics<R>(State(state): State<AppState<R>>) -> Json<Value>
 where
     R: Repository + 'static,
 {
-    let probe = state.probe_storage();
-    Json(json!({
-        "storage": "filesystem",
-        "ready": probe.ready(),
-        "exists": probe.exists,
-        "writable": probe.writable,
-        "lockable": probe.lockable,
-        "lockHeld": probe.lock_held,
-        "lastWriteUnix": probe.last_write_unix,
-    }))
+    // Probing means touching the volume; parked like `/ready` (#410). A dead
+    // worker reports itself as a not-ready store rather than panicking the
+    // caller.
+    park(
+        move || -> Json<Value> {
+            let probe = state.probe_storage();
+            Json(json!({
+                "storage": "filesystem",
+                "ready": probe.ready(),
+                "exists": probe.exists,
+                "writable": probe.writable,
+                "lockable": probe.lockable,
+                "lockHeld": probe.lock_held,
+                "lastWriteUnix": probe.last_write_unix,
+            }))
+        },
+        Json(json!({
+            "storage": "filesystem",
+            "ready": false,
+            "exists": false,
+            "writable": false,
+            "lockable": false,
+            "lockHeld": false,
+            "lastWriteUnix": null,
+        })),
+    )
+    .await
 }
 
 /// The counters behind `/metrics`, rendered in the Prometheus text exposition

@@ -39,46 +39,56 @@ struct SummaryQuery {
     to: Option<String>,
 }
 
-async fn get_coverage<R: Repository>(
+async fn get_coverage<R: Repository + 'static>(
     State(service): State<AppState<R>>,
     principal: Principal,
     Query(query): Query<CoverageQuery>,
 ) -> Result<Json<CoverageReport>, DomainError> {
-    let reachable = access::scope(service.auth(), &principal)?;
-    let scope = match (query.project_id, reachable) {
-        (Some(id), None) => reports::Scope::Project(id),
-        (Some(id), Some(_)) => {
-            access::require(&service, &principal, &id, Role::Viewer)?;
-            reports::Scope::Project(id)
-        }
-        (None, None) => reports::Scope::All,
-        (None, Some(reachable)) => reports::Scope::Projects(reachable.into_iter().collect()),
-    };
-    Ok(Json(service.coverage_report(scope)?))
+    // The storage phase is synchronous by design; park it on the blocking
+    // pool so lock waits and fsyncs never occupy an async worker (#410).
+    super::on_blocking(move || -> Result<Json<CoverageReport>, DomainError> {
+        let reachable = access::scope(service.auth(), &principal)?;
+        let scope = match (query.project_id, reachable) {
+            (Some(id), None) => reports::Scope::Project(id),
+            (Some(id), Some(_)) => {
+                access::require(&service, &principal, &id, Role::Viewer)?;
+                reports::Scope::Project(id)
+            }
+            (None, None) => reports::Scope::All,
+            (None, Some(reachable)) => reports::Scope::Projects(reachable.into_iter().collect()),
+        };
+        Ok(Json(service.coverage_report(scope)?))
+    })
+    .await
 }
 
-async fn get_summary<R: Repository>(
+async fn get_summary<R: Repository + 'static>(
     State(service): State<AppState<R>>,
     principal: Principal,
     Query(query): Query<SummaryQuery>,
 ) -> Result<Json<SummaryReport>, DomainError> {
-    let reachable = access::scope(service.auth(), &principal)?;
-    if let Some(id) = query.project_id.as_deref()
-        && reachable.is_some()
-    {
-        access::require(&service, &principal, id, Role::Viewer)?;
-    }
-    let filters = SummaryFilters {
-        project_id: query.project_id,
-        milestone_id: query.milestone_id,
-        configuration_id: query.configuration_id,
-        from: query.from,
-        to: query.to,
-    };
-    let reachable: Option<Vec<String>> = reachable.map(|set| set.into_iter().collect());
-    Ok(Json(
-        service.summary_report(&filters, reachable.as_deref())?,
-    ))
+    // The storage phase is synchronous by design; park it on the blocking
+    // pool so lock waits and fsyncs never occupy an async worker (#410).
+    super::on_blocking(move || -> Result<Json<SummaryReport>, DomainError> {
+        let reachable = access::scope(service.auth(), &principal)?;
+        if let Some(id) = query.project_id.as_deref()
+            && reachable.is_some()
+        {
+            access::require(&service, &principal, id, Role::Viewer)?;
+        }
+        let filters = SummaryFilters {
+            project_id: query.project_id,
+            milestone_id: query.milestone_id,
+            configuration_id: query.configuration_id,
+            from: query.from,
+            to: query.to,
+        };
+        let reachable: Option<Vec<String>> = reachable.map(|set| set.into_iter().collect());
+        Ok(Json(
+            service.summary_report(&filters, reachable.as_deref())?,
+        ))
+    })
+    .await
 }
 
 pub(crate) fn routes<R: Repository + 'static>() -> Router<AppState<R>> {

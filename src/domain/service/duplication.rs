@@ -2,7 +2,7 @@
 
 use super::*;
 
-impl<R: Repository> TestService<R> {
+impl<R: Repository + 'static> TestService<R> {
     // --- duplication ---------------------------------------------------
 
     /// Copies a document, applying the request-body overrides, and returns the

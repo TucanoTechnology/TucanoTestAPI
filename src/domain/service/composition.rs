@@ -3,7 +3,7 @@
 use super::super::composition;
 use super::*;
 
-impl<R: Repository> TestService<R> {
+impl<R: Repository + 'static> TestService<R> {
     // --- composition ---------------------------------------------------
 
     /// Creates a new entity in `target`, or places an existing one there.

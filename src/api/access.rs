@@ -76,7 +76,7 @@ pub(crate) fn allowed(scope: Option<&BTreeSet<String>>, project: &str) -> bool {
 ///
 /// [`DomainError::Forbidden`] when the caller is not entitled, and whatever
 /// reading the grants failed with when the store cannot be read.
-pub(crate) fn require<R: Repository>(
+pub(crate) fn require<R: Repository + 'static>(
     state: &AppState<R>,
     principal: &Principal,
     project: &str,
@@ -161,7 +161,7 @@ fn effective_run_projects(document: &Value, body: &Value) -> Vec<String> {
 /// project's `nightly`, not a conflict. Skipping it instead would drop every
 /// project that run covers out of the authorization, leaving the milestone
 /// governed by its home alone.
-fn milestone_projects<R: Repository>(
+fn milestone_projects<R: Repository + 'static>(
     state: &AppState<R>,
     home: &str,
     suites: &[String],
@@ -205,7 +205,7 @@ fn milestone_projects<R: Repository>(
 ///
 /// [`DomainError::NotFound`] when nothing holds `id`, and
 /// [`DomainError::Conflict`] when two projects do.
-fn reachable_projects<R: Repository>(
+fn reachable_projects<R: Repository + 'static>(
     state: &AppState<R>,
     resource: Resource,
     id: &str,
@@ -238,7 +238,7 @@ fn with_home(home: String, mut projects: Vec<String>) -> Vec<String> {
 /// the request will read next. A project names itself; a suite, a case and a
 /// configuration are governed by the project that holds them; a run and a
 /// milestone additionally by every project their references reach.
-fn projects_of<R: Repository>(
+fn projects_of<R: Repository + 'static>(
     state: &AppState<R>,
     resource: Resource,
     id: &str,
@@ -309,7 +309,7 @@ fn source_field(resource: Resource) -> Option<&'static str> {
 /// [`DomainError::Forbidden`] when the caller cannot reach the resource,
 /// [`DomainError::NotFound`] when the resource the guard resolves does not
 /// exist, and [`DomainError::Conflict`] when two projects hold the identifier.
-pub(crate) fn guard_get<R: Repository>(
+pub(crate) fn guard_get<R: Repository + 'static>(
     state: &AppState<R>,
     principal: &Principal,
     resource: Resource,
@@ -334,7 +334,7 @@ pub(crate) fn guard_get<R: Repository>(
 ///
 /// [`DomainError::Forbidden`] for a caller that is not a system administrator
 /// when authentication is enforced.
-pub(crate) fn guard_create<R: Repository>(
+pub(crate) fn guard_create<R: Repository + 'static>(
     state: &AppState<R>,
     principal: &Principal,
     resource: Resource,
@@ -361,7 +361,7 @@ pub(crate) fn guard_create<R: Repository>(
 ///
 /// [`DomainError::Forbidden`] when the caller cannot reach the target project or
 /// any project the body names, and whatever resolving a reference failed with.
-pub(crate) fn guard_project_create<R: Repository>(
+pub(crate) fn guard_project_create<R: Repository + 'static>(
     state: &AppState<R>,
     principal: &Principal,
     resource: Resource,
@@ -401,7 +401,7 @@ pub(crate) fn guard_project_create<R: Repository>(
 /// [`DomainError::Forbidden`] when the caller cannot reach every project the
 /// resource would carry, [`DomainError::NotFound`] when it does not exist, and
 /// [`DomainError::Conflict`] when two projects hold the identifier.
-pub(crate) fn guard_update<R: Repository>(
+pub(crate) fn guard_update<R: Repository + 'static>(
     state: &AppState<R>,
     principal: &Principal,
     resource: Resource,
@@ -445,7 +445,7 @@ pub(crate) fn guard_update<R: Repository>(
 /// [`DomainError::Forbidden`] when the caller cannot reach the resource,
 /// [`DomainError::NotFound`] when it does not exist, and
 /// [`DomainError::Conflict`] when two projects hold the identifier.
-pub(crate) fn guard_delete<R: Repository>(
+pub(crate) fn guard_delete<R: Repository + 'static>(
     state: &AppState<R>,
     principal: &Principal,
     resource: Resource,
@@ -469,7 +469,7 @@ pub(crate) fn guard_delete<R: Repository>(
 ///
 /// [`DomainError::Forbidden`] when the caller cannot reach the source, and
 /// [`DomainError::NotFound`] when it does not exist.
-pub(crate) fn guard_duplicate<R: Repository>(
+pub(crate) fn guard_duplicate<R: Repository + 'static>(
     state: &AppState<R>,
     principal: &Principal,
     resource: Resource,
@@ -500,7 +500,7 @@ pub(crate) fn guard_duplicate<R: Repository>(
 ///
 /// [`DomainError::Forbidden`] when the caller cannot reach the target or an
 /// existing source.
-pub(crate) fn guard_composition<R: Repository>(
+pub(crate) fn guard_composition<R: Repository + 'static>(
     state: &AppState<R>,
     principal: &Principal,
     resource: Resource,
@@ -531,7 +531,7 @@ pub(crate) fn guard_composition<R: Repository>(
 ///
 /// [`DomainError::Forbidden`] when the caller cannot reach the item, and
 /// [`DomainError::NotFound`] when it does not exist.
-pub(crate) fn guard_removal<R: Repository>(
+pub(crate) fn guard_removal<R: Repository + 'static>(
     state: &AppState<R>,
     principal: &Principal,
     resource: Resource,
@@ -549,7 +549,7 @@ pub(crate) fn guard_removal<R: Repository>(
 /// Only suites and cases live in the project tree, so this is the one path that
 /// can resolve an id to its project. It is used where a route names a suite or a
 /// case without naming its project.
-fn authorize_item<R: Repository>(
+fn authorize_item<R: Repository + 'static>(
     state: &AppState<R>,
     principal: &Principal,
     resource: Resource,
@@ -572,7 +572,7 @@ fn authorize_item<R: Repository>(
 /// [`DomainError::Forbidden`] when the caller cannot reach the run,
 /// [`DomainError::NotFound`] when it does not exist, and
 /// [`DomainError::Conflict`] when two projects hold the identifier.
-pub(crate) fn require_run<R: Repository>(
+pub(crate) fn require_run<R: Repository + 'static>(
     state: &AppState<R>,
     principal: &Principal,
     run_id: &str,
@@ -596,7 +596,7 @@ pub(crate) fn require_run<R: Repository>(
 ///
 /// [`DomainError::Forbidden`] when either side is out of reach, and
 /// [`DomainError::NotFound`] when the run or the source does not exist.
-pub(crate) fn require_run_source<R: Repository>(
+pub(crate) fn require_run_source<R: Repository + 'static>(
     state: &AppState<R>,
     principal: &Principal,
     run_id: &str,
@@ -627,7 +627,7 @@ pub(crate) fn require_run_source<R: Repository>(
 ///
 /// [`DomainError::Forbidden`] when the run or the configuration is out of reach,
 /// and [`DomainError::NotFound`] when either does not exist.
-pub(crate) fn require_run_configuration<R: Repository>(
+pub(crate) fn require_run_configuration<R: Repository + 'static>(
     state: &AppState<R>,
     principal: &Principal,
     run_id: &str,
@@ -676,7 +676,7 @@ pub(crate) fn require_run_configuration<R: Repository>(
 /// # Errors
 ///
 /// Whatever reading the entries the filter inspects failed with.
-pub(crate) fn filter_list<R: Repository>(
+pub(crate) fn filter_list<R: Repository + 'static>(
     state: &AppState<R>,
     resource: Resource,
     items: Vec<String>,
@@ -728,7 +728,7 @@ fn all_within(projects: &[String], reachable: &BTreeSet<String>) -> bool {
 /// retryable, rather than leaving a resurrection behind. Independent of
 /// whether auth is enforced: a non-enforcing deployment may store grants the
 /// day its operator turns the flag on. Audited like every other mutation.
-pub(crate) fn revoke_project_grants<R: Repository>(
+pub(crate) fn revoke_project_grants<R: Repository + 'static>(
     state: &AppState<R>,
     project_id: &str,
 ) -> Result<(), DomainError> {

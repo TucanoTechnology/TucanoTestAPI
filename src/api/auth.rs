@@ -243,78 +243,98 @@ fn rejected_body() -> DomainError {
 }
 
 /// `POST /auth/login` — verifies credentials and starts a session.
-async fn login<R: Repository>(
+async fn login<R: Repository + 'static>(
     State(state): State<AppState<R>>,
     body: Result<Json<LoginRequest>, JsonRejection>,
 ) -> Result<Json<SessionResponse>, DomainError> {
-    let Json(body) = body.map_err(|_| rejected_body())?;
-    let auth = state.auth();
-    let tokens = crate::auth::login(
-        &auth.store,
-        &auth.config,
-        &body.username,
-        &body.password,
-        now_seconds(),
-    )?;
-    Ok(Json(SessionResponse::new(tokens, &auth.config)))
+    // The storage phase is synchronous by design; park it on the blocking
+    // pool so lock waits and fsyncs never occupy an async worker (#410).
+    super::on_blocking(move || -> Result<Json<SessionResponse>, DomainError> {
+        let Json(body) = body.map_err(|_| rejected_body())?;
+        let auth = state.auth();
+        let tokens = crate::auth::login(
+            &auth.store,
+            &auth.config,
+            &body.username,
+            &body.password,
+            now_seconds(),
+        )?;
+        Ok(Json(SessionResponse::new(tokens, &auth.config)))
+    })
+    .await
 }
 
 /// `POST /auth/refresh` — exchanges a refresh token for a fresh pair.
-async fn refresh<R: Repository>(
+async fn refresh<R: Repository + 'static>(
     State(state): State<AppState<R>>,
     body: Result<Json<RefreshRequest>, JsonRejection>,
 ) -> Result<Json<SessionResponse>, DomainError> {
-    let Json(body) = body.map_err(|_| rejected_body())?;
-    let auth = state.auth();
-    let tokens = crate::auth::refresh(
-        &auth.store,
-        &auth.config,
-        &body.refresh_token,
-        now_seconds(),
-    )?;
-    Ok(Json(SessionResponse::new(tokens, &auth.config)))
+    // The storage phase is synchronous by design; park it on the blocking
+    // pool so lock waits and fsyncs never occupy an async worker (#410).
+    super::on_blocking(move || -> Result<Json<SessionResponse>, DomainError> {
+        let Json(body) = body.map_err(|_| rejected_body())?;
+        let auth = state.auth();
+        let tokens = crate::auth::refresh(
+            &auth.store,
+            &auth.config,
+            &body.refresh_token,
+            now_seconds(),
+        )?;
+        Ok(Json(SessionResponse::new(tokens, &auth.config)))
+    })
+    .await
 }
 
 /// `POST /auth/logout` — revokes the caller's refresh token.
 ///
 /// Answered the same way whether or not the token was live, so the response
 /// never confirms whether it existed.
-async fn logout<R: Repository>(
+async fn logout<R: Repository + 'static>(
     State(state): State<AppState<R>>,
     principal: Principal,
     body: Result<Json<LogoutRequest>, JsonRejection>,
 ) -> Result<Json<Value>, DomainError> {
-    let Json(body) = body.map_err(|_| rejected_body())?;
-    let auth = state.auth();
-    crate::auth::logout(&auth.store, &principal, &body.refresh_token)?;
-    Ok(Json(json!({ "message": "Signed out" })))
+    // The storage phase is synchronous by design; park it on the blocking
+    // pool so lock waits and fsyncs never occupy an async worker (#410).
+    super::on_blocking(move || -> Result<Json<Value>, DomainError> {
+        let Json(body) = body.map_err(|_| rejected_body())?;
+        let auth = state.auth();
+        crate::auth::logout(&auth.store, &principal, &body.refresh_token)?;
+        Ok(Json(json!({ "message": "Signed out" })))
+    })
+    .await
 }
 
 /// `GET /auth/me` — reports the caller the request authenticated as.
 ///
 /// The authority reported is the token's, not the account file's: it is what
 /// the caller can actually do until the token expires.
-async fn me<R: Repository>(
+async fn me<R: Repository + 'static>(
     State(state): State<AppState<R>>,
     principal: Principal,
 ) -> Result<Json<MeResponse>, DomainError> {
-    let auth = state.auth();
-    let account = auth
-        .store
-        .user(&principal.user_id)?
-        .ok_or_else(DomainError::invalid_token)?;
-    let mut roles = BTreeMap::new();
-    for project in auth.store.projects_for_user(&principal.user_id)? {
-        if let Some(role) = auth.store.role_of(&project, &principal.user_id)? {
-            roles.insert(project, role_name(role).to_owned());
+    // The storage phase is synchronous by design; park it on the blocking
+    // pool so lock waits and fsyncs never occupy an async worker (#410).
+    super::on_blocking(move || -> Result<Json<MeResponse>, DomainError> {
+        let auth = state.auth();
+        let account = auth
+            .store
+            .user(&principal.user_id)?
+            .ok_or_else(DomainError::invalid_token)?;
+        let mut roles = BTreeMap::new();
+        for project in auth.store.projects_for_user(&principal.user_id)? {
+            if let Some(role) = auth.store.role_of(&project, &principal.user_id)? {
+                roles.insert(project, role_name(role).to_owned());
+            }
         }
-    }
-    Ok(Json(MeResponse {
-        id: account.id,
-        username: account.username,
-        system_admin: principal.system_admin,
-        roles,
-    }))
+        Ok(Json(MeResponse {
+            id: account.id,
+            username: account.username,
+            system_admin: principal.system_admin,
+            roles,
+        }))
+    })
+    .await
 }
 
 /// The session endpoints this module owns.

@@ -33,88 +33,119 @@ crud_handlers!(
 
 duplicate_handler!(duplicate_suite, duplicate::SUITE);
 
-async fn list_project_suites<R: Repository>(
+async fn list_project_suites<R: Repository + 'static>(
     State(service): State<AppState<R>>,
     principal: Principal,
     Path(id): Path<String>,
     Query(query): Query<ListQuery>,
 ) -> Result<Json<Value>, DomainError> {
-    access::require(&service, &principal, &id, Role::Viewer)?;
-    let items = service.list_children_matching(&Parent::Project(id), Resource::Suites, &query)?;
-    Ok(Json(json!(items)))
+    // The storage phase is synchronous by design; park it on the blocking
+    // pool so lock waits and fsyncs never occupy an async worker (#410).
+    super::on_blocking(move || -> Result<Json<Value>, DomainError> {
+        access::require(&service, &principal, &id, Role::Viewer)?;
+        let items =
+            service.list_children_matching(&Parent::Project(id), Resource::Suites, &query)?;
+        Ok(Json(json!(items)))
+    })
+    .await
 }
 
-async fn create_project_suite<R: Repository>(
+async fn create_project_suite<R: Repository + 'static>(
     State(service): State<AppState<R>>,
     principal: Principal,
     Path(id): Path<String>,
     Json(body): Json<Value>,
 ) -> Result<(StatusCode, Json<Value>), DomainError> {
-    access::guard_composition(
-        &service,
-        &principal,
-        Resource::Suites,
-        &id,
-        &body,
-        Role::Editor,
-    )?;
-    let composed = service.compose(Resource::Suites, &Parent::Project(id), &body)?;
-    Ok(composed_response(&composed, "Test suite"))
+    // The storage phase is synchronous by design; park it on the blocking
+    // pool so lock waits and fsyncs never occupy an async worker (#410).
+    super::on_blocking(move || -> Result<(StatusCode, Json<Value>), DomainError> {
+        access::guard_composition(
+            &service,
+            &principal,
+            Resource::Suites,
+            &id,
+            &body,
+            Role::Editor,
+        )?;
+        let composed = service.compose(Resource::Suites, &Parent::Project(id), &body)?;
+        Ok(composed_response(&composed, "Test suite"))
+    })
+    .await
 }
 
-async fn delete_project_suite<R: Repository>(
+async fn delete_project_suite<R: Repository + 'static>(
     State(service): State<AppState<R>>,
     principal: Principal,
     Path((id, suite_id)): Path<(String, String)>,
 ) -> Result<Json<Value>, DomainError> {
-    // The route names the project that owns the occurrence, so the role is
-    // checked there rather than through the global lookup in `guard_delete`,
-    // which conflicts while two projects hold the same suite identifier.
-    access::require(&service, &principal, &id, Role::Editor)?;
-    service.delete_in(Resource::Suites, &Parent::Project(id), &suite_id)?;
-    Ok(Json(json!({ "message": "Test suite deleted" })))
+    // The storage phase is synchronous by design; park it on the blocking
+    // pool so lock waits and fsyncs never occupy an async worker (#410).
+    super::on_blocking(move || -> Result<Json<Value>, DomainError> {
+        // The route names the project that owns the occurrence, so the role is
+        // checked there rather than through the global lookup in `guard_delete`,
+        // which conflicts while two projects hold the same suite identifier.
+        access::require(&service, &principal, &id, Role::Editor)?;
+        service.delete_in(Resource::Suites, &Parent::Project(id), &suite_id)?;
+        Ok(Json(json!({ "message": "Test suite deleted" })))
+    })
+    .await
 }
 
-async fn list_suite_cases<R: Repository>(
+async fn list_suite_cases<R: Repository + 'static>(
     State(service): State<AppState<R>>,
     principal: Principal,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, DomainError> {
-    let parent = service.suite_parent(&id)?;
-    access::require(&service, &principal, parent.project(), Role::Viewer)?;
-    // Deliberately unfiltered: a suite's cases are answered exhaustively.
-    // Issue #293 adds the query to the project-scoped listings only.
-    let items = service.list_children(&parent, Resource::Cases)?;
-    Ok(Json(json!(items)))
+    // The storage phase is synchronous by design; park it on the blocking
+    // pool so lock waits and fsyncs never occupy an async worker (#410).
+    super::on_blocking(move || -> Result<Json<Value>, DomainError> {
+        let parent = service.suite_parent(&id)?;
+        access::require(&service, &principal, parent.project(), Role::Viewer)?;
+        // Deliberately unfiltered: a suite's cases are answered exhaustively.
+        // Issue #293 adds the query to the project-scoped listings only.
+        let items = service.list_children(&parent, Resource::Cases)?;
+        Ok(Json(json!(items)))
+    })
+    .await
 }
 
-async fn add_case_to_suite<R: Repository>(
+async fn add_case_to_suite<R: Repository + 'static>(
     State(service): State<AppState<R>>,
     principal: Principal,
     Path(id): Path<String>,
     Json(body): Json<Value>,
 ) -> Result<(StatusCode, Json<Value>), DomainError> {
-    let parent = service.suite_parent(&id)?;
-    access::guard_composition(
-        &service,
-        &principal,
-        Resource::Cases,
-        parent.project(),
-        &body,
-        Role::Editor,
-    )?;
-    let composed = service.compose(Resource::Cases, &parent, &body)?;
-    Ok(composed_response(&composed, "Test case"))
+    // The storage phase is synchronous by design; park it on the blocking
+    // pool so lock waits and fsyncs never occupy an async worker (#410).
+    super::on_blocking(move || -> Result<(StatusCode, Json<Value>), DomainError> {
+        let parent = service.suite_parent(&id)?;
+        access::guard_composition(
+            &service,
+            &principal,
+            Resource::Cases,
+            parent.project(),
+            &body,
+            Role::Editor,
+        )?;
+        let composed = service.compose(Resource::Cases, &parent, &body)?;
+        Ok(composed_response(&composed, "Test case"))
+    })
+    .await
 }
 
-async fn remove_case_from_suite<R: Repository>(
+async fn remove_case_from_suite<R: Repository + 'static>(
     State(service): State<AppState<R>>,
     principal: Principal,
     Path((id, case_id)): Path<(String, String)>,
 ) -> Result<Json<Value>, DomainError> {
-    access::guard_removal(&service, &principal, Resource::Suites, &id, Role::Editor)?;
-    service.remove_case_from_suite(&id, &case_id)?;
-    Ok(Json(json!({ "message": "Test case removed from suite" })))
+    // The storage phase is synchronous by design; park it on the blocking
+    // pool so lock waits and fsyncs never occupy an async worker (#410).
+    super::on_blocking(move || -> Result<Json<Value>, DomainError> {
+        access::guard_removal(&service, &principal, Resource::Suites, &id, Role::Editor)?;
+        service.remove_case_from_suite(&id, &case_id)?;
+        Ok(Json(json!({ "message": "Test case removed from suite" })))
+    })
+    .await
 }
 
 pub(crate) fn routes<R: Repository + 'static>() -> Router<AppState<R>> {
