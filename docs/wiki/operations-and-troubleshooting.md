@@ -293,6 +293,11 @@ stay up:
 docker compose logs api | tail -20
 ls -ld ./data
 ```
+If both look right and the host enforces SELinux (`getenforce` says `Enforcing`), the label is
+the third suspect: `sudo chcon -R -t container_file_t ./data`, or mount `./data:/data:z` in your
+own override — see *The JSON volume mount* in the
+deployment guide for the trade-off (#450).
+
 
 Causes and fixes:
 
