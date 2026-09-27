@@ -77,6 +77,20 @@ and the container holds nothing that must survive a restart:
   — instead of the bare `Permission denied (os error 13)` that used to repeat on every restart
   (#355).
 
+On an SELinux-enforcing host (Fedora, RHEL and kin) the Unix ownership above is necessary but not
+sufficient: a bind-mounted directory the container is not labelled to read is refused the same
+`Permission denied` regardless of uid. Two cures, pick by taste:
+
+```sh
+sudo chcon -R -t container_file_t ./data     # label the host directory once
+```
+
+or mount with the relabel flag by writing the volume line as `./data:/data:z` in your own compose
+override. The shipped file keeps the plain mount: the deployment target this project validates
+against runs plain Docker without SELinux, and `:z` relabelling would silently contradict an
+operator's own labels on hosts that do enforce. The refusal message names path and uid either way —
+on an enforcing host where those already look right, `ls -dZ ./data` showing a non-container type
+is the third suspect (#450).
 This is the property that makes both scaling and rollback possible: two containers pointed at the
 same `TUCANO_DATA_DIR` see the same data.
 
