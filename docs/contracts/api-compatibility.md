@@ -1472,17 +1472,14 @@ contract, and this section records them.
   request carrying `If-Match`, a header no earlier build examined. The finding named `409` for this arm; the
   implementation answers `412`, the status RFC 9110 reserves for a failed `If-Match`, and `409` keeps the
   meaning it has elsewhere in this contract (a duplicate creation or an ambiguous identifier).
-- **The header surface is not yet published in `openapi.json`.** The `ETag` response header, the `If-Match`
-  request header and the `412` answer predate this plan (they landed with Issues #263/#266) and are served but
-  undocumented in the published contract; publishing them is left to a follow-up so this remediation stays
-  scoped to the durability invariant and its regression proof.
-- Deviation recorded with tests in
-  `tests/security_tests.rs::data_integrity_tests::test_every_acknowledged_write_is_readable_back` (the
-  `F-177-3` regression: 16 concurrent acknowledged writers, then the version, the history and every distinct
-  acknowledged value are asserted readable back) and `tests/concurrency.rs`
-  (`::test_concurrent_updates_return_412_on_etag_mismatch`, `::test_concurrent_creates_all_succeed`,
-  `::test_concurrent_mixed_read_write`, `::test_lock_contention_latency`).
-## Stored Component Length Bound Plan (Issue #324)
+- **The header surface IS published (issue #425, this ticket's own
+  follow-up).** The six update operations carry the `If-Match` request
+  parameter (`components.parameters.IfMatch`) and a `412` response
+  (`components.responses.PreconditionFailed`) whose `ETag` header names the
+  current digest — exactly what the server has always answered, now visible
+  to generated clients. The published code stays `conflict` (the shape the
+  error envelope has always used); `412` distinguishes the failed
+  precondition from a create-time `409` without inventing a code.
 
 Issue: [#324](https://github.com/TucanoTechnology/TucanoTestAPI/issues/324) — `validate_component` and
 `validate_document_id` in `src/storage/layout.rs` refused a hostile component but imposed no length bound, so an
@@ -1549,7 +1546,7 @@ root cause merged by the #180 triage; CWE-20).
   `412` with the current `ETag`. The change is additive: no request that used to succeed is refused, a `PUT`
   without `If-Match` behaves as before — except that its acknowledged write is now durable, which is the point
   of the plan — and no stored document shape changed. `openapi.json` does not yet publish the headers or the
-  `412`; the follow-up is named in the plan.
+  `412`; the surface is published in `openapi.json` (#425).
 - **Request id propagated, echoed and published in the error envelope** (Issue #106, plan above). `X-Request-Id`
   is a new response header on every answer, and the error envelope gains an optional `requestId`. The change is
   additive: no request that used to succeed is refused, no stored document changes, and an envelope a client
