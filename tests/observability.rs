@@ -409,3 +409,66 @@ async fn an_attachment_is_audited_without_its_contents() {
         "an attachment's contents reached the log capture"
     );
 }
+
+// --- #417: the 500 answers stay redacted; the CAUSE reaches the log ------
+
+#[tokio::test]
+#[cfg(unix)]
+async fn a_storage_failure_logs_its_cause_and_answers_the_fixed_envelope() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let (directory, app) = common::test_app();
+    let capture = capture();
+
+    // Make the store unwritable, the way a full or remounted volume does:
+    // the next create must fail deep in the storage layer.
+    std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o500))
+        .expect("seal the directory");
+    let (status, headers, body) = common::send_full(
+        &app,
+        common::json_request(
+            "POST",
+            "/projects",
+            &json!({"name": "against-a-dead-volume"}),
+        ),
+    )
+    .await;
+    std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o700))
+        .expect("reopen the directory");
+
+    let text = String::from_utf8_lossy(&body).into_owned();
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{text}");
+    assert!(
+        text.contains("\"storage_error\"") && text.contains("Storage operation failed"),
+        "the published contract is the fixed envelope: {text}"
+    );
+    assert!(
+        !text.contains("Permission") && !text.contains("denied"),
+        "the OS-level cause must not reach the client: {text}"
+    );
+
+    // The server-side line names the cause and joins the request by id.
+    let causes: Vec<_> = capture
+        .snapshot()
+        .into_iter()
+        .filter(|line| line.field("cause").is_some() && line.field("code") == Some("storage_error"))
+        .collect();
+    assert!(!causes.is_empty(), "the 500 must be logged with its cause");
+    let cause = causes
+        .last()
+        .expect("just asserted")
+        .field("cause")
+        .expect("field");
+    assert!(
+        cause.contains("PermissionDenied"),
+        "the surviving io kind names the failure: {cause}"
+    );
+    let request_id = headers
+        .get("x-request-id")
+        .and_then(|v| v.to_str().ok())
+        .expect("the answer carries a request id");
+    assert_eq!(
+        causes.last().expect("just asserted").field("request_id"),
+        Some(request_id),
+        "the error line and the client's id join"
+    );
+}
