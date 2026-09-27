@@ -90,6 +90,31 @@ pub struct TestService<R> {
     repository: R,
 }
 
+/// Map an io::Error out of a single-lock read-modify-write.
+///
+/// A `WouldBlock` **with** an [`EtagMismatch`](crate::storage::EtagMismatch)
+/// payload is the genuine precondition failure: 412 carrying the digest the
+/// stored document now has. A `WouldBlock` without it is the advisory lock
+/// timing out — 503 with a retry hint, never a suggestion that someone edited
+/// the document (#407). `missing` is the 404 text this operation publishes.
+fn map_mutation_error(error: io::Error, missing: &str) -> DomainError {
+    match error.kind() {
+        io::ErrorKind::WouldBlock => {
+            if let Some(inner) = error.get_ref()
+                && let Some(mismatch) = inner.downcast_ref::<crate::storage::EtagMismatch>()
+            {
+                return DomainError::PreconditionFailed {
+                    current_etag: mismatch.0.clone(),
+                };
+            }
+            DomainError::LockTimeout
+        }
+        io::ErrorKind::NotFound => DomainError::NotFound(missing.to_owned()),
+        io::ErrorKind::InvalidInput => DomainError::invalid_id(),
+        kind => DomainError::from(io::Error::new(kind, error)),
+    }
+}
+
 impl<R: Repository> TestService<R> {
     /// Wraps a repository in the domain rules.
     pub fn new(repository: R) -> Self {
@@ -550,13 +575,7 @@ impl<R: Repository> TestService<R> {
         if let Some(error) = refusal {
             return Err(error);
         }
-        outcome.map_err(|error| match error.kind() {
-            io::ErrorKind::NotFound => DomainError::NotFound("Test run not found".to_owned()),
-            io::ErrorKind::InvalidData => {
-                DomainError::Internal("Stored JSON is invalid".to_owned())
-            }
-            kind => DomainError::from(io::Error::new(kind, error)),
-        })?;
+        outcome.map_err(|error| map_mutation_error(error, "Test run not found"))?;
         produced.ok_or_else(|| DomainError::Internal("run mutation produced no outcome".to_owned()))
     }
 

@@ -143,15 +143,7 @@ impl<R: Repository> TestService<R> {
                     super::normalise_marker(resource, id, &mut document);
                     Ok(document)
                 })
-                .map_err(|e| {
-                    if e.kind() == io::ErrorKind::WouldBlock {
-                        DomainError::PreconditionFailed {
-                            current_etag: e.to_string(),
-                        }
-                    } else {
-                        error::document_error(e, "Resource not found")
-                    }
-                })
+                .map_err(|e| map_mutation_error(e, "Resource not found"))
         })
     }
 

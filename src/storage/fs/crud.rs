@@ -204,7 +204,10 @@ impl FileRepository {
             if let Some(expected) = expected_etag {
                 let current = crate::storage::compute_etag(&raw);
                 if current != expected {
-                    return Err(io::Error::new(io::ErrorKind::WouldBlock, current));
+                    return Err(io::Error::new(
+                        io::ErrorKind::WouldBlock,
+                        super::super::EtagMismatch(current),
+                    ));
                 }
             }
 
