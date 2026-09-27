@@ -64,6 +64,15 @@ findings with no available fix, and **fail the run** if anything is found.
   re-resolved moving tag. The job fails on a finding the same way, so the digest a consumer pulls
   is the digest a passing scan reported on.
 
+The scan proves what is IN the image; it does not prove the image RUNS. That gap — bootable,
+health-answering, writable-volume-serving, seeded-end-to-end — is closed by the `container-smoke`
+job in `build-test.yml` (#419), which builds the same image layers (shared buildx cache scope),
+boots it against an empty named volume exactly as a first deployment does, waits on `/health`,
+confirms the boot self-identification line (#418), and drives the repo's own
+`seed.mjs`/`validate-seed.mjs`/`smoke.sh` against it as a real HTTP client before parsing the
+compose file. It runs on every push to `main`, so every recorded release artifact was booted as
+this exact recipe at its own commit.
+
 The release scan runs after the push by design, so a failing scan fails the release run but does not
 withdraw the digest from the registry. Promotion and rollback therefore gate on a green release run
 for the tag they deploy, not on the tag's mere presence
