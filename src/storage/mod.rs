@@ -90,6 +90,11 @@ pub trait Repository: Send + Sync {
     /// and sorted.
     fn list(&self, resource: Resource) -> io::Result<Vec<String>>;
 
+    /// Identifiers with the home each was found in, from ONE walk of the
+    /// tree. Ambiguous identifiers appear once per home, so callers that
+    /// treat multiplicity as ambiguity see it without re-resolving (#414).
+    fn list_homes(&self, resource: Resource) -> io::Result<Vec<(String, Option<Parent>)>>;
+
     /// Every parent that owns an occurrence of an entity, in a stable order.
     /// Empty means nothing owns it; more than one is ambiguous.
     fn locate(&self, resource: Resource, id: &str) -> io::Result<Vec<Parent>>;

@@ -37,7 +37,9 @@ macro_rules! crud_handlers {
             // Storage phase parked on the blocking pool (#410).
             super::on_blocking(move || -> Result<Json<Value>, DomainError> {
                 let scope = access::scope(state.auth(), &principal)?;
-                let items = state.list($resource, &query)?;
+                // One walk carries the homes; the filter never re-resolves
+                // (#414).
+                let items = state.list_homes($resource, &query)?;
                 Ok(Json(json!(access::filter_list(
                     &state,
                     $resource,

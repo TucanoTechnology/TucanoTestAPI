@@ -497,6 +497,25 @@ impl<R: Repository + 'static> TestService<R> {
             .collect()
     }
 
+    /// Reads the stored document of `id` at an already-resolved home.
+    ///
+    /// The listing filter (#414) authorises runs and milestones from their
+    /// references; the homes the walk found let it do so without resolving
+    /// — or reading — anything a second time.
+    pub fn document_at(
+        &self,
+        resource: Resource,
+        id: &str,
+        home: Option<&Parent>,
+    ) -> Result<Value, DomainError> {
+        let document = self
+            .repository
+            .read_at(resource, home, id)
+            .map_err(error::read_error)?;
+        Self::check_stored_shape(resource, &document)?;
+        Ok(document)
+    }
+
     /// Reads one stored document and reports `missing` when it is absent.
     ///
     /// A document that parses as JSON but does not deserialise into the model
@@ -527,23 +546,6 @@ impl<R: Repository + 'static> TestService<R> {
             Ok(())
         } else {
             Err(DomainError::Internal("Stored JSON is invalid".to_owned()))
-        }
-    }
-
-    /// The identifier and the document of the first occurrence, for filters
-    /// that need the stored fields of an identifier several parents may own.
-    fn first_document(&self, resource: Resource, id: &str) -> io::Result<Value> {
-        match resource {
-            Resource::Projects => self.repository.read_at(resource, None, id),
-            _ => {
-                let home = self
-                    .repository
-                    .locate(resource, id)?
-                    .into_iter()
-                    .next()
-                    .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "resource not found"))?;
-                self.repository.read_at(resource, Some(&home), id)
-            }
         }
     }
 

@@ -224,6 +224,11 @@ fn reachable_projects<R: Repository + 'static>(
     Ok(with_home(home, references))
 }
 
+/// Whether every project in `projects` is inside `reachable`.
+fn all_within(projects: &[String], reachable: &BTreeSet<String>) -> bool {
+    projects.iter().all(|project| reachable.contains(project))
+}
+
 /// `projects` plus `home`, the project the document is stored in.
 fn with_home(home: String, mut projects: Vec<String>) -> Vec<String> {
     if !projects.contains(&home) {
@@ -717,30 +722,84 @@ pub(crate) fn require_run_configuration<R: Repository + 'static>(
 ///
 /// # Errors
 ///
-/// Whatever reading the entries the filter inspects failed with.
+/// Keeps the identifiers a listing may show to `scope`, resolved from the
+/// HOMES the listing walk already produced (#414).
+///
+/// The old filter re-resolved every candidate through a fresh `locate` scan
+/// (and runs and milestones read their document twice more), making a
+/// restricted listing O(candidates x store). Now the homes ride along with
+/// the ids: an identifier is kept when its single home is reachable — and
+/// for a run or a milestone, when that home plus every project its
+/// references reach is. Multiple distinct homes still drop the identifier
+/// as ambiguous, exactly as the per-id resolve did; an unbounded scope sees
+/// everything, unchanged.
 pub(crate) fn filter_list<R: Repository + 'static>(
     state: &AppState<R>,
     resource: Resource,
-    items: Vec<String>,
+    mut items: Vec<(String, Option<Parent>)>,
     scope: Option<&BTreeSet<String>>,
 ) -> Result<Vec<String>, DomainError> {
+    // The walk yields homes in folder order; grouping by identifier needs
+    // them beside each other, and callers expect a sorted listing.
+    items.sort_by(|(a_id, _), (b_id, _)| a_id.cmp(b_id));
     let Some(reachable) = scope else {
-        return Ok(items);
+        let mut ids: Vec<String> = items.into_iter().map(|(id, _)| id).collect();
+        ids.sort();
+        ids.dedup();
+        return Ok(ids);
     };
-    let mut kept = Vec::with_capacity(items.len());
-    for item in items {
+    // Collapse to identifier -> distinct homes, keeping the sorted order of
+    // the previous repository listing.
+    let mut homes_of: Vec<(String, Vec<Option<Parent>>)> = Vec::new();
+    for (id, home) in items {
+        match homes_of.last_mut() {
+            Some((last, homes)) if *last == id => {
+                if !homes.contains(&home) {
+                    homes.push(home);
+                }
+            }
+            _ => homes_of.push((id, vec![home])),
+        }
+    }
+    let mut kept = Vec::new();
+    for (id, homes) in homes_of {
         let keep = match resource {
-            Resource::Projects => reachable.contains(&item),
-            Resource::Suites | Resource::Cases | Resource::Configurations => state
-                .project_of(resource, &item, missing(resource))
-                .map(|project| allowed(Some(reachable), &project))
-                .unwrap_or(false),
-            Resource::Runs | Resource::Milestones => reachable_projects(state, resource, &item)
-                .map(|projects| all_within(&projects, reachable))
-                .unwrap_or(false),
+            Resource::Projects => reachable.contains(&id),
+            // A suite, a case and a configuration answer to the one project
+            // holding it; an identifier two homes claim stays as ambiguous
+            // as it has always been listed.
+            Resource::Suites | Resource::Cases | Resource::Configurations => match &homes[..] {
+                [Some(home)] => allowed(Some(reachable), home.project()),
+                _ => false,
+            },
+            // A run or a milestone is governed by its home AND every project
+            // its references reach; the document is read once, AT THE HOME,
+            // instead of being resolved and read again as before.
+            Resource::Runs | Resource::Milestones => match &homes[..] {
+                [Some(home)] => {
+                    let home_project = home.project().to_owned();
+                    match state.document_at(resource, &id, Some(home)) {
+                        Ok(document) => {
+                            let projects = match resource {
+                                Resource::Runs => project_ids(document.get("projects")),
+                                _ => milestone_projects(
+                                    state,
+                                    &home_project,
+                                    &string_array(document.get("testSuiteIds")),
+                                    &string_array(document.get("testRunIds")),
+                                ),
+                            };
+                            let projects = with_home(home_project, projects);
+                            all_within(&projects, reachable)
+                        }
+                        Err(_) => false,
+                    }
+                }
+                _ => false,
+            },
         };
         if keep {
-            kept.push(item);
+            kept.push(id);
         }
     }
     Ok(kept)
@@ -748,18 +807,6 @@ pub(crate) fn filter_list<R: Repository + 'static>(
 
 /// Whether every project a document reaches falls inside `reachable`.
 ///
-/// This is the same rule `reports::run_reachable` applies to the summary
-/// report, stated over the identifiers a listing holds rather than over a
-/// deserialized `TestRun`: **the home is reachable and every project the
-/// document names is reachable**. The home is always among them, so a run that
-/// covers no project is kept when its home is reachable instead of hidden, and
-/// one unreachable covered project still hides it. The two must be changed
-/// together; `a_run_is_in_scope_when_its_home_and_every_project_it_names_are`
-/// and `reports`' own test pin the same three cases on each side.
-fn all_within(projects: &[String], reachable: &BTreeSet<String>) -> bool {
-    projects.iter().all(|project| reachable.contains(project))
-}
-
 /// Forget every grant for a project being deleted (#408).
 ///
 /// A grant file that outlives its project is a silent access resurrection:

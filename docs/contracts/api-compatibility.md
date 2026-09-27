@@ -46,6 +46,18 @@ Each endpoint case must record:
 6. Internal paths, stack traces, raw filesystem errors, secrets, and file contents must never appear in client errors or logs.
 7. Rust deviations must be listed with rationale, migration impact, and a test proving the new behavior.
 
+### Cross-reference limits (Issue #414)
+
+A run body may carry at most 512 entries in each of `projects`, `testSuites` and `testCases`;
+a milestone body at most 512 in each of `testSuiteIds` and `testRunIds`. A longer array answers
+`400 invalid_request` — a published code, no new code — and nothing is written. Rationale: every
+later reader of such a document (scope-filtered listings, milestone progress, reachability
+resolution) pays per element, so one oversized array stored once slows every listing forever.
+Migration impact: reads of documents that predate the limit are unaffected; only new writes are
+refused, and a caller that genuinely covers more than 512 things splits the milestone or run.
+Tests prove the boundary on both create routes (`milestone_reference_arrays_are_bounded`,
+`run_reference_arrays_are_bounded`).
+
 ## Test Run Results Schema Versioning Plan (Issue #22)
 
 To record per-case execution outcomes within test runs without breaking existing run files:
