@@ -139,8 +139,9 @@ pub trait Repository: Send + Sync {
     ///
     /// Acquires the advisory lock, re-reads the document, passes it to `transform`
     /// and writes the result back. An `expected_etag`, when present, is compared
-    /// to a SHA-256 digest of the raw bytes; a mismatch reports
-    /// [`io::ErrorKind::WouldBlock`] so the caller can signal a 412.
+    /// to a SHA-256 digest of the raw bytes; a mismatch reports an
+    /// [`io::ErrorKind::WouldBlock`] carrying an [`EtagMismatch`] payload, while
+    /// a lock that times out reports a bare [`io::ErrorKind::WouldBlock`].
     fn transform_at<F>(
         &self,
         resource: Resource,
@@ -252,3 +253,21 @@ pub trait Repository: Send + Sync {
     /// [`StorageProbe`] instead of as an error.
     fn probe_readiness(&self) -> StorageProbe;
 }
+
+/// The current digest an `If-Match` comparison found wanting.
+///
+/// Carried as the payload of a `WouldBlock` io::Error out of
+/// [`Repository::transform_at`] so the domain layer can distinguish a genuine
+/// precondition failure (412, with this digest for the client) from the
+/// advisory-lock timeout that shares the kind (#407); a lock timeout is a
+/// bare `WouldBlock` with no payload of this type.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EtagMismatch(pub String);
+
+impl std::fmt::Display for EtagMismatch {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("the If-Match digest does not describe the stored document")
+    }
+}
+
+impl std::error::Error for EtagMismatch {}
