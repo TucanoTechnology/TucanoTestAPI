@@ -1821,3 +1821,43 @@ fn composed_id_placed() {
     };
     assert_eq!(composed.id(), "placed.json");
 }
+
+/// #412: the digest a GET publishes is computed from the very bytes its body
+/// was parsed from — one read, so no interleaved write can ever make the
+/// header describe a newer document than the body the client holds.
+#[test]
+fn get_and_etag_digests_the_exact_bytes_the_body_came_from() {
+    let (service, directory) = service();
+    let created = service
+        .create(Resource::Projects, &json!({"name": "digested"}))
+        .expect("create");
+    let home = service
+        .resolve_home(Resource::Projects, &created.id, "Resource not found")
+        .expect("resolve");
+    let (document, etag) = service
+        .get_and_etag(
+            Resource::Projects,
+            &created.id,
+            home.as_ref(),
+            "Resource not found",
+        )
+        .expect("read");
+    let stored = service
+        .get(Resource::Projects, &created.id)
+        .expect("the plain read agrees");
+    assert_eq!(
+        document, stored,
+        "hydrated reads must agree with and without the digest"
+    );
+    // Re-reading the raw bytes and digesting must equal what the call claims:
+    // the file on disk did not move between the two.
+    let repository = FileRepository::new(directory.path()).expect("second handle");
+    let raw = repository
+        .read_raw_at(Resource::Projects, None, &created.id)
+        .expect("raw");
+    assert_eq!(
+        etag,
+        crate::storage::compute_etag(&raw),
+        "the digest is not of the served bytes"
+    );
+}
