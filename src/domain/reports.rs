@@ -85,10 +85,15 @@ pub fn coverage(project_id: Option<&str>, projects: Vec<ProjectCases>) -> Covera
 /// and may name a bare date or a full ISO-8601 timestamp.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct SummaryFilters {
+    /// Restrict to the run results in this project.
     pub project_id: Option<String>,
+    /// The milestone's identity or the report's requested milestone.
     pub milestone_id: Option<String>,
+    /// Restrict to runs linking this configuration.
     pub configuration_id: Option<String>,
+    /// Inclusive lower bound on the run's own timestamp; date or full ISO-8601.
     pub from: Option<String>,
+    /// Inclusive upper bound, same shapes as `from`.
     pub to: Option<String>,
 }
 

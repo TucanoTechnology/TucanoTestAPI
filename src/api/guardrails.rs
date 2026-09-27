@@ -88,6 +88,7 @@ impl Guardrails {
 /// The guardrails as the middleware sees them: configuration plus permits.
 #[derive(Clone, Debug)]
 pub struct GuardrailState {
+    /// The configured ceilings these permits were sized from.
     pub limits: Guardrails,
     semaphore: Arc<Semaphore>,
 }

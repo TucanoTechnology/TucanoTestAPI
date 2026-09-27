@@ -1,3 +1,6 @@
+//! The filesystem `Repository`: one handle, the lock, and the
+//! confined write/read helpers every operation is built from.
+
 use fs2::FileExt;
 use serde_json::{Map, Value};
 use std::fs::{self, File, OpenOptions};
@@ -37,6 +40,7 @@ pub struct FileRepository {
 }
 
 impl FileRepository {
+    /// Opens the store rooted at `root`, creating what must exist.
     pub fn new(root: impl Into<PathBuf>) -> io::Result<Self> {
         let root = root.into();
         for resource in Resource::ROOT_DIRS {
