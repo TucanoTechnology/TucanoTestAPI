@@ -13,7 +13,7 @@ use axum::{
 use serde_json::{Value, json};
 
 use crate::{
-    domain::{DomainError, duplicate},
+    domain::{ChildExpansion, DomainError, duplicate},
     models::MilestoneProgress,
     storage::{Parent, Repository, Resource},
 };
@@ -91,7 +91,13 @@ async fn get_milestone_progress<R: Repository + 'static>(
     // The storage phase is synchronous by design; park it on the blocking
     // pool so lock waits and fsyncs never occupy an async worker (#410).
     super::on_blocking(move || -> Result<Json<MilestoneProgress>, DomainError> {
-        access::guard_get(&service, &principal, Resource::Milestones, &id)?;
+        access::guard_get(
+            &service,
+            &principal,
+            Resource::Milestones,
+            &id,
+            ChildExpansion::Full,
+        )?;
         Ok(Json(service.milestone_progress(&id)?))
     })
     .await

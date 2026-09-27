@@ -46,6 +46,32 @@ Each endpoint case must record:
 6. Internal paths, stack traces, raw filesystem errors, secrets, and file contents must never appear in client errors or logs.
 7. Rust deviations must be listed with rationale, migration impact, and a test proving the new behavior.
 
+### Shallow child expansion (Issue #415)
+
+`GET /projects/{id}` and `GET /test_suites/{id}` accept `?children=ids`:
+the response then carries the children's wire identifiers (strings) instead
+of embedded child documents. Purely additive — no existing request changes
+answer, the default stays the embedded shape, and an unknown parameter
+value is documented as the default rather than an error. The omission rule
+is identical (`testCases` absent when a project holds no case directly);
+only the element type changes, and it changes only when asked.
+
+### Derivation caches (Issue #415)
+
+`/releases`, `/environments`, `/reports/summary` and milestone `/progress`
+are served from an in-process cache of derived answers. Contract impact:
+**none observable within one replica** — every local write retires the whole
+cache before the write's response goes out, so a client never reads a stale
+derived answer after a change its own process made, and per-scope and
+per-filter keys keep every caller's answer identical to the uncached
+computation. Across replicas the four endpoints are eventually consistent
+with a bound of 45 seconds (documented at the cache): a second replica's
+write reaches this process's derived answers when an entry ages out. Callers
+that must observe cross-replica state immediately read the document routes,
+which are never cached. Coverage reports are deliberately not cached: their
+invalidation surface is the case/suite folder tree, whose copy and move
+routes do not funnel through the write choke points the cache hooks.
+
 ### Cross-reference limits (Issue #414)
 
 A run body may carry at most 512 entries in each of `projects`, `testSuites` and `testCases`;

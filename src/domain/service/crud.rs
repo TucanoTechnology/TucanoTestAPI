@@ -174,6 +174,7 @@ impl<R: Repository + 'static> TestService<R> {
                 })
                 .map_err(|e| map_mutation_error(e, "Resource not found"))
         })
+        .inspect(|_| self.derivations.invalidate())
     }
 
     /// Refuses an identity field in a `PUT` body that does not name the
@@ -228,6 +229,7 @@ impl<R: Repository + 'static> TestService<R> {
                 .delete_at(resource, parent.as_ref(), id)
                 .map_err(error::delete_error)
         })
+        .inspect(|_| self.derivations.invalidate())
     }
 
     /// Removes one occurrence of a child from a parent the caller named.
@@ -243,6 +245,7 @@ impl<R: Repository + 'static> TestService<R> {
                 .delete_at(resource, Some(parent), id)
                 .map_err(error::delete_error)
         })
+        .inspect(|_| self.derivations.invalidate())
     }
 }
 

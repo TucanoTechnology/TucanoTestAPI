@@ -304,6 +304,11 @@ The full reconciliation of the documented error contract and schema strictness i
 
 ## Scaling and statelessness
 
+Derived answers (the GUI context bar, `/reports/summary`, milestone progress) are cached in-process
+and retired by every local write — exact within a replica. Across replicas those four endpoints age
+out at 45 seconds; document routes are never cached and stay strongly consistent (see
+[the compatibility note](../contracts/api-compatibility.md)).
+
 The API process is stateless: replicas do not keep sessions or in-memory records. Horizontal scaling
 requires a shared persistent POSIX volume mounted at the same `TUCANO_DATA_DIR` for every replica.
 Repository mutations use an advisory lock file and atomic same-directory renames. A write that

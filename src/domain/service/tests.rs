@@ -1840,6 +1840,7 @@ fn get_and_etag_digests_the_exact_bytes_the_body_came_from() {
             &created.id,
             home.as_ref(),
             "Resource not found",
+            ChildExpansion::Full,
         )
         .expect("read");
     let stored = service

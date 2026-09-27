@@ -18,7 +18,7 @@
 //! * `validate_large_case_payload` — validate a test-case body carrying a
 //!   hundred structured steps and a thousand tags, without persisting it.
 //!   Exercises the payload validator in isolation from I/O.
-//! * `hydrate_project_wide` — read a project that holds many suites and
+//! * `get_project_hydrated` — read a project that holds many suites and
 //!   cases. Exercises the hydration path #412 made single-resolution.
 //! * `resolve_bare_id_wide_tree` — resolve a bare case identifier across a
 //!   seeded forest. Exercises the `locate` scan whose count per GET #412
@@ -322,9 +322,9 @@ fn seed_forest(
 
 /// Hydrating a project read: the #412 change cut its per-request `locate`
 /// scans from three to one and its own-document reads from two to one.
-fn bench_hydrate_project_wide(criterion: &mut Criterion) {
+fn bench_get_project_hydrated(criterion: &mut Criterion) {
     let (_dir, service, _target) = seed_forest(4, 5, 10);
-    criterion.bench_function("hydrate_project_wide", |bencher| {
+    criterion.bench_function("get_project_hydrated", |bencher| {
         bencher.iter(|| {
             service
                 .get(Resource::Projects, "bench-project-3.json")
@@ -342,6 +342,77 @@ fn bench_resolve_bare_id_wide_tree(criterion: &mut Criterion) {
     });
 }
 
+/// A run body holding `count` results spread across the known statuses.
+fn seeded_run(name: &str, count: usize) -> Value {
+    let results: Vec<Value> = (0..count)
+        .map(|n| {
+            let status = ["Passed", "Failed", "Blocked", "Untested"][n % 4];
+            json!({"testCaseId": format!("TC-{name}-{n}"), "status": status, "timestamp": "1789735695"})
+        })
+        .collect()
+    ;
+    let cases: Vec<Value> = (0..count)
+        .map(|n| {
+            json!({"testCaseId": format!("TC-{name}-{n}"), "title": "bench", "expectedResult": "bench"})
+        })
+        .collect();
+    json!({"name": name, "testCases": cases, "results": results})
+}
+
+/// `/reports/summary` across a run forest: the #415 steady state is the
+/// cached answer — this measures what the GUI pays when nothing changed,
+/// against the old O(store) parse of every run document per call.
+fn bench_summary_report(criterion: &mut Criterion) {
+    let (_dir, service, _target) = seed_forest(3, 1, 1);
+    let project = Parent::Project("bench-project-2.json".to_owned());
+    for run in 0..6 {
+        service
+            .create_in(
+                Resource::Runs,
+                &project,
+                &seeded_run(&format!("bench-run-{run}"), 150),
+            )
+            .expect("seed run");
+    }
+    let filters = tucano_test::domain::reports::SummaryFilters::default();
+    criterion.bench_function("summary_report", |bencher| {
+        bencher.iter(|| service.summary_report(&filters, None).expect("summary"))
+    });
+}
+
+/// The context bar (`/releases` + `/environments`), the most frequent GUI
+/// read there is: every navigation re-asked for it while the old path
+/// parsed every milestone and configuration document each time (#415).
+fn bench_context_bar(criterion: &mut Criterion) {
+    let (_dir, service, _target) = seed_forest(4, 1, 1);
+    for p in 0..4 {
+        let project = Parent::Project(format!("bench-project-{p}.json"));
+        for m in 0..5 {
+            service
+                .create_in(
+                    Resource::Milestones,
+                    &project,
+                    &json!({"milestoneId": format!("bm-{p}-{m}.json"), "name": format!("Bench {p}-{m}")}),
+                )
+                .expect("seed milestone");
+            service
+                .create_in(
+                    Resource::Configurations,
+                    &project,
+                    &json!({"name": format!("Bench cfg {p}-{m}")}),
+                )
+                .expect("seed config");
+        }
+    }
+    criterion.bench_function("context_bar", |bencher| {
+        bencher.iter(|| {
+            let releases = service.release_names(None).expect("releases");
+            let environments = service.environment_names(None).expect("environments");
+            (releases, environments)
+        })
+    });
+}
+
 criterion_group!(
     benches,
     bench_crud_case_full_cycle,
@@ -349,7 +420,9 @@ criterion_group!(
     bench_list_cases_in_suite,
     bench_validate_large_case,
     bench_attachment_upload_delete,
-    bench_hydrate_project_wide,
+    bench_get_project_hydrated,
     bench_resolve_bare_id_wide_tree,
+    bench_summary_report,
+    bench_context_bar,
 );
 criterion_main!(benches);

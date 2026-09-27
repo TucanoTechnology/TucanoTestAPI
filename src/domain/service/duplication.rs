@@ -47,7 +47,8 @@ impl<R: Repository + 'static> TestService<R> {
                         DomainError::from(error)
                     }
                 })
-        })?;
+        })
+        .inspect(|_| self.derivations.invalidate())?;
         Ok(new_id)
     }
 }
