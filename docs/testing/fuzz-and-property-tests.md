@@ -17,12 +17,17 @@ identifier never becomes a path that leaves the data root.
 | Half | Runner | When it runs | What it is for |
 | --- | --- | --- | --- |
 | Property suite | `cargo test` (proptest) | Every build, every CI run | Bounded, generated inputs for every decode and sanitisation entry point |
-| Fuzz targets | `cargo fuzz` (libFuzzer) | On demand, by a contributor | Coverage-guided, unbounded search for the input that breaks a contract |
+| Fuzz harness compile | `cargo +nightly check --manifest-path fuzz/Cargo.toml` (`fuzz-check` in `build-test.yml`) | Every pull request and push | The targets keep compiling against the pinned nightly — a rename in the storage layer can no longer rot them silently (#420) |
+| Fuzz run | `cargo fuzz run <target>` (`fuzz-run` in `security.yml`) | Weekly schedule, 120 s per target | Coverage-guided exploration; corpus and any crash archived as the `fuzz-state-<run>` artifact; a crash fails the scheduled run and surfaces on the alert path operators already watch |
+| Manual fuzzing | `cargo fuzz run <target>` with no time bound | On demand, by a contributor | The long campaign: hours or days of search after a significant change to a decoder or path builder |
 
-The split follows one rule: **nothing long-running runs in CI.** The property suite is deliberately
-cheap — `ProptestConfig::with_cases(128)` and inputs bounded by construction — so it can ride along
-with every `cargo test`. Fuzzing is a tool a contributor reaches for when changing a decoder or a
-path builder, not a gate that every pull request waits behind.
+The split follows one rule: **nothing long-running gates a pull request.** The property suite is
+deliberately cheap — `ProptestConfig::with_cases(128)` and inputs bounded by construction — so it
+can ride along with every `cargo test`. The CI fuzzing added by #420 honours the rule: the pull
+gate is compile-only, and the actual exploration runs on the weekly schedule with a bounded
+`-max_total_time=120` per target. Both jobs use the same date-pinned nightly (`nightly-2026-09-26`)
+so the gate, the schedule, and a local `rustup toolchain install nightly-2026-09-26` reproduce one
+another.
 
 ## 2. The property suite
 

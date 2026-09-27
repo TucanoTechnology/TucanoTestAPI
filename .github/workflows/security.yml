@@ -188,6 +188,58 @@ jobs:
   # (wildcard requirements denied; version duplicates reviewed, not auto-failed).
   # The advisory half intentionally overlaps cargo-audit — two engines on one
   # database is the supply-chain equivalent of redundant sensors.
+  # Coverage-guided fuzzing of the two harnesses that live outside the
+  # workspace (#420). The compile gate in build-test.yml keeps them rot-free
+  # on every pull; this job puts them to work: a bounded exploration on the
+  # weekly schedule, corpus and any crash archived either way. A crash fails
+  # the scheduled run, which is the alert path operators already watch — the
+  # targets find what the 128-case property suite cannot reach.
+  fuzz-run:
+    name: Fuzz the harnesses (scheduled)
+    if: github.event_name == 'schedule'
+    runs-on: [self-hosted, Linux, X64]
+    timeout-minutes: 45
+    container:
+      image: rust:1.98.0-bookworm@sha256:82150a52ec202c1b14d7817e14516c392bb7f5cfebd88f1ed531cb37ebd39922
+      options: --dns 8.8.8.8 --dns 1.1.1.1
+      volumes:
+        - tucanotestapi-cargo-registry:/usr/local/cargo/registry
+        - tucanotestapi-cargo-git:/usr/local/cargo/git
+        - tucanotestapi-rustup:/usr/local/rustup
+        # cargo-fuzz itself is a tool compile: paid once per fleet via the
+        # shared tools volume (#398).
+        - tucanotestapi-cargo-tools:/cargo
+    env:
+      CARGO_HOME: /cargo
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install the pinned nightly and cargo-fuzz
+        env:
+          RUSTUP_TOOLCHAIN: nightly-2026-09-26
+        run: |
+          rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal
+          if [ ! -x "$CARGO_HOME/bin/cargo-fuzz" ]; then
+            cargo install cargo-fuzz --locked
+          fi
+      - name: Explore the model deserialiser (120 s)
+        env:
+          RUSTUP_TOOLCHAIN: nightly-2026-09-26
+        run: cargo fuzz run deserialize_models -- -max_total_time=120
+      - name: Explore the identifier sanitiser (120 s)
+        env:
+          RUSTUP_TOOLCHAIN: nightly-2026-09-26
+        run: cargo fuzz run sanitise_identifiers -- -max_total_time=120
+      - name: Archive corpus and any crash artifacts
+        if: always()
+        run: tar -czf fuzz-state.tar.gz fuzz/corpora fuzz/artifacts 2>/dev/null || true
+      - name: Upload
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: fuzz-state-${{ github.run_number }}
+          path: fuzz-state.tar.gz
+          if-no-files-found: ignore
+
   deny:
     name: Policy-check dependencies
     runs-on: [self-hosted, Linux, X64]
