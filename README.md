@@ -125,6 +125,10 @@ secret query parameter redacted), the status and the latency. Every mutating ope
 `tucano.audit` event naming the action, the resource, the identifier and the outcome, alongside the
 error code when it was refused. No request body and no attachment's contents are ever logged.
 
+The service opens by naming its own build under the `tucano.boot` target — version, CI build
+number, toolchain, data directory, auth posture — so a container can confirm the artifact a tag
+claims (#418).
+
 `TUCANO_LOG` is the `tracing-subscriber` directive set, defaulting to `info` — the request spans, the
 audit lines and the failures, without the per-connection noise `debug` adds. `TUCANO_LOG_FORMAT` is
 `compact` (the default, one human-readable line per event, coloured only when stdout is a terminal)

@@ -217,7 +217,10 @@ backend, and the terms of the mirror permission are in
 ## Rolling back a release
 
 Rollback means redeploying a previously recorded **immutable** tag — never moving a tag, never
-rebuilding from a branch. Record what is serving before you change anything:
+rebuilding from a branch. After the container is back up, its first log line confirms it: the
+`tucano.boot` event names the build the running process was compiled as (`build=`), and it must
+match the tag you rolled back to before any traffic returns (#418). Record what is serving before
+you change anything:
 
 ```sh
 IMAGE="ghcr.io/tucanotechnology/tucanotestapi"
