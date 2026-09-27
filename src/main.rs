@@ -70,6 +70,24 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         .with_lock_timeout(lock_timeout);
 
     let auth_config = auth::AuthConfig::from_env_and_file(file.as_ref())?;
+    // Self-identification (#418): a process that cannot say which build it
+    // is leaves every canary and rollback decision resting on registry
+    // metadata the running container has never confirmed. One line at boot
+    // names what the process knows about itself: its version, the CI build
+    // number the image was compiled with (absent outside CI, honestly
+    // reported as `local`), the toolchain that compiled it, the volume it
+    // will serve, and whether authentication is enforced. The data
+    // directory is operator-facing information at this point already — a
+    // configuration refusal has always printed it.
+    tracing::info!(
+        target: "tucano.boot",
+        version = env!("CARGO_PKG_VERSION"),
+        build = env!("TUCANO_BUILD"),
+        toolchain = %env!("TUCANO_TOOLCHAIN"),
+        data_dir = %data_dir.display(),
+        auth_required = auth_config.required,
+        "tucano-test is starting"
+    );
     let store = auth::AuthStore::new(&data_dir)
         .map_err(startup_failure(
             "prepare the account store below the data directory",

@@ -100,11 +100,20 @@ docker run --detach --name tucano-api-canary \
 ```
 
 If the data lives in a named Docker volume rather than a host directory, pass the same volume name
-the stable service uses (`--volume <volume-name>:/data`). Wait for the container to become healthy:
+the stable service uses (`--volume <volume-name>:/data`). Wait for the container to become healthy — and read its own report of what it is:
 
 ```sh
 docker logs --follow --tail 20 tucano-api-canary
+# tucano.boot version=1.0.1 build=build-4711 toolchain="rustc 1.98.0 ..." data_dir=/data auth_required=true
 ```
+
+Since [#418](https://github.com/TucanoTechnology/TucanoTestAPI/issues/418) the service opens by
+identifying itself, from data compiled into the binary: `build=` is the CI run number the image was
+built with, and it **must** name the same build as `$CANDIDATE`'s tag — a container whose boot line
+disagrees with the tag it was pulled under means the registry or the node cache is serving a
+different image than you think, and every check below would be testing the wrong artifact. Outside
+CI the build reads `local`, which is exactly as informative for the docker hub of one's laptop.
+`auth_required` and `data_dir` confirm the runtime posture the canary is actually running with.
 
 A candidate that expects a newer storage layout may **refuse to start** against an older volume.
 Since layout v3 ([#215](https://github.com/TucanoTechnology/TucanoTestAPI/issues/215)) the service
