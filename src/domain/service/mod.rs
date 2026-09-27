@@ -119,6 +119,36 @@ fn map_mutation_error(error: io::Error, missing: &str) -> DomainError {
     }
 }
 
+/// How deeply a parent's `GET` embeds its children.
+///
+/// A project read normally answers with every suite and direct case parsed
+/// and embedded; `?children=ids` asks instead for the child *identifiers*
+/// alone (#415) — the shape a context tree or a picker needs, answered
+/// from the folder walk without reading a single child document. Anything
+/// else, and every other resource, keeps the embedded shape.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ChildExpansion {
+    /// Embed every child document (the default, and the shape the contract
+    /// has always answered with).
+    #[default]
+    Full,
+    /// List the children by wire identifier only. Meaningful for projects
+    /// and suites; ignored elsewhere.
+    Ids,
+}
+
+impl ChildExpansion {
+    /// Reads the `children` query parameter: only `ids` selects the shallow
+    /// shape; unknown values are the default, as documented.
+    #[must_use]
+    pub fn from_query(value: Option<&str>) -> Self {
+        match value {
+            Some("ids") => Self::Ids,
+            _ => Self::Full,
+        }
+    }
+}
+
 impl<R: Repository + 'static> TestService<R> {
     /// Wraps a repository in the domain rules.
     pub fn new(repository: R) -> Self {
@@ -356,7 +386,7 @@ impl<R: Repository + 'static> TestService<R> {
     /// Reads a document the way a `GET` would, assembling its children.
     fn assembled(&self, resource: Resource, id: &str, missing: &str) -> Result<Value, DomainError> {
         let home = self.resolve_home(resource, id, missing)?;
-        self.assembled_with(resource, id, missing, home.as_ref())
+        self.assembled_with(resource, id, missing, home.as_ref(), ChildExpansion::Full)
     }
 
     /// The project folder that addresses `id` for reading purposes: `None`
@@ -384,9 +414,10 @@ impl<R: Repository + 'static> TestService<R> {
         id: &str,
         missing: &str,
         home: Option<&Parent>,
+        expansion: ChildExpansion,
     ) -> Result<Value, DomainError> {
         let document = self.read_document(resource, home, id, missing)?;
-        self.hydrate(resource, id, home, document, missing)
+        self.hydrate(resource, id, home, document, missing, expansion)
     }
 
     /// Reads a document and digests the very bytes it parsed (#412).
@@ -402,6 +433,7 @@ impl<R: Repository + 'static> TestService<R> {
         id: &str,
         home: Option<&Parent>,
         missing: &str,
+        expansion: ChildExpansion,
     ) -> Result<(Value, String), DomainError> {
         let raw = self
             .repository
@@ -410,7 +442,7 @@ impl<R: Repository + 'static> TestService<R> {
         let document: Value = serde_json::from_slice(&raw)
             .map_err(|error| DomainError::Internal(error.to_string()))?;
         Self::check_stored_shape(resource, &document)?;
-        let hydrated = self.hydrate(resource, id, home, document.clone(), missing)?;
+        let hydrated = self.hydrate(resource, id, home, document.clone(), missing, expansion)?;
         Ok((hydrated, crate::storage::compute_etag(&raw)))
     }
 
@@ -428,8 +460,61 @@ impl<R: Repository + 'static> TestService<R> {
         home: Option<&Parent>,
         mut document: Value,
         missing: &str,
+        expansion: ChildExpansion,
     ) -> Result<Value, DomainError> {
         match resource {
+            // Shallow expansion (#415): children are listed from the folder
+            // walk alone — no child document is read. The key rules
+            // (`testCases` omitted when empty) hold identically; only the
+            // element type changes, which is what the parameter documents.
+            _ if expansion == ChildExpansion::Ids
+                && matches!(resource, Resource::Projects | Resource::Suites) =>
+            {
+                let parent = if resource == Resource::Projects {
+                    Parent::Project(id.to_owned())
+                } else {
+                    let project = home.ok_or_else(|| DomainError::NotFound(missing.to_owned()))?;
+                    Parent::Suite {
+                        project: project.project().to_owned(),
+                        suite: id.to_owned(),
+                    }
+                };
+                if resource == Resource::Projects {
+                    let suite_ids = self
+                        .repository
+                        .list_children(&parent, Resource::Suites)
+                        .map_err(error::read_error)?
+                        .into_iter()
+                        .map(Value::String)
+                        .collect::<Vec<_>>();
+                    let case_ids = self
+                        .repository
+                        .list_children(&parent, Resource::Cases)
+                        .map_err(error::read_error)?
+                        .into_iter()
+                        .map(Value::String)
+                        .collect::<Vec<_>>();
+                    if let Some(object) = document.as_object_mut() {
+                        object.insert("testSuites".to_owned(), Value::Array(suite_ids));
+                        if case_ids.is_empty() {
+                            object.remove("testCases");
+                        } else {
+                            object.insert("testCases".to_owned(), Value::Array(case_ids));
+                        }
+                    }
+                } else {
+                    let case_ids = self
+                        .repository
+                        .list_children(&parent, Resource::Cases)
+                        .map_err(error::read_error)?
+                        .into_iter()
+                        .map(Value::String)
+                        .collect::<Vec<_>>();
+                    if let Some(object) = document.as_object_mut() {
+                        object.insert("testCases".to_owned(), Value::Array(case_ids));
+                    }
+                }
+            }
             Resource::Projects => {
                 let parent = Parent::Project(id.to_owned());
                 let suites = self.child_suites(&parent)?;

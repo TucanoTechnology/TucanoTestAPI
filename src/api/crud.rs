@@ -54,12 +54,14 @@ macro_rules! crud_handlers {
             State(state): State<AppState<R>>,
             principal: Principal,
             Path(id): Path<String>,
+            Query(params): Query<super::GetQuery>,
         ) -> Result<(HeaderMap, Json<Value>), DomainError> {
+            let expansion = $crate::domain::ChildExpansion::from_query(params.children.as_deref());
             // Storage phase parked on the blocking pool (#410).
             super::on_blocking(move || -> Result<(HeaderMap, Json<Value>), DomainError> {
                 // One resolution, one read, one digest of the served bytes
                 // (#412): the guard returns the document it authorised.
-                let read = access::guard_get(&state, &principal, $resource, &id)?;
+                let read = access::guard_get(&state, &principal, $resource, &id, expansion)?;
                 let mut headers = HeaderMap::new();
                 let etag = format!("\"{}\"", read.etag);
                 if let Ok(value) = HeaderValue::from_str(&etag) {

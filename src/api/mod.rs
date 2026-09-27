@@ -64,6 +64,18 @@ pub use crate::domain::ListQuery;
 /// disk-and-lock phase moves — and when a request is cancelled, its parked
 /// operation still runs to its ATOMIC completion, the same guarantee every
 /// dropped write already had.
+/// Query parameters every `GET` document route accepts.
+///
+/// Only `children` is meaningful (#415): `?children=ids` answers a project
+/// or suite read with its children's identifiers instead of embedded
+/// documents. Unknown parameters are ignored by the extractor, and an
+/// unknown `children` value is the default shape — documented at
+/// `ChildExpansion::from_query`.
+#[derive(Debug, Default, serde::Deserialize)]
+pub(crate) struct GetQuery {
+    pub(crate) children: Option<String>,
+}
+
 pub(crate) async fn on_blocking<T, F>(work: F) -> Result<T, DomainError>
 where
     F: FnOnce() -> Result<T, DomainError> + Send + 'static,

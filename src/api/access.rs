@@ -37,7 +37,7 @@ use super::{
 };
 use crate::{
     auth::{Principal, Role},
-    domain::DomainError,
+    domain::{ChildExpansion, DomainError},
     storage::{Parent, Repository, Resource},
 };
 
@@ -319,6 +319,7 @@ pub(crate) fn guard_get<R: Repository + 'static>(
     principal: &Principal,
     resource: Resource,
     id: &str,
+    expansion: ChildExpansion,
 ) -> Result<ReadOutcome, DomainError> {
     // The read guard IS the read (#412): resolving the home, reading the
     // document and digesting its bytes used to happen once per concern —
@@ -343,7 +344,7 @@ pub(crate) fn guard_get<R: Repository + 'static>(
         require_every(state.auth(), principal, &[id.to_owned()], Role::Viewer)?;
     }
     let home = state.resolve_home(resource, id, not_found)?;
-    let (document, etag) = state.get_and_etag(resource, id, home.as_ref(), not_found)?;
+    let (document, etag) = state.get_and_etag(resource, id, home.as_ref(), not_found, expansion)?;
     if !state.auth().config.required {
         return Ok(ReadOutcome { document, etag });
     }
