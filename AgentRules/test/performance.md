@@ -1,6 +1,7 @@
 ---
 load-when: writing or changing performance tests or benchmarks
 applies-to: every repository
+title: Performance tests
 ---
 
 # Performance Tests

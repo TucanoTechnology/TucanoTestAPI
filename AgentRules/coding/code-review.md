@@ -1,6 +1,7 @@
 ---
 load-when: reviewing a pull request, or preparing one for review
 applies-to: every repository
+title: Code review
 ---
 
 # Code Review

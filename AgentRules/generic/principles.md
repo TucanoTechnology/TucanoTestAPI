@@ -1,6 +1,7 @@
 ---
 load-when: always — read before starting any task
 applies-to: every repository
+title: Principles
 ---
 
 # Principles

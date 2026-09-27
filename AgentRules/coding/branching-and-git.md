@@ -1,6 +1,7 @@
 ---
 load-when: creating a branch, committing, or merging a change
 applies-to: every repository
+title: Branching & git
 ---
 
 # Branching and Git

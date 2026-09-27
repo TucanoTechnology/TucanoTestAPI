@@ -1,6 +1,7 @@
 ---
 load-when: creating, updating, or closing a ticket, or raising a pull request
 applies-to: every repository
+title: Ticket workflow
 ---
 
 # Workflow

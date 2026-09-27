@@ -1,6 +1,7 @@
 ---
 load-when: adding or changing an HTTP endpoint, request, response, or persisted data shape
 applies-to: repositories that expose an HTTP API or persist structured data
+title: API & data contracts
 ---
 
 # API and Data Contracts

@@ -1,6 +1,7 @@
 ---
 load-when: writing or changing unit tests
 applies-to: every repository
+title: Unit tests
 ---
 
 # Unit Tests

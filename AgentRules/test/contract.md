@@ -1,6 +1,7 @@
 ---
 load-when: writing or changing contract tests, or changing an exchanged payload or schema
 applies-to: every repository
+title: Contract tests
 ---
 
 # Contract Tests
