@@ -17,7 +17,7 @@ tree. Two constraints already bind the answer:
 
 1. **The repository-root rule in [`AGENTS.md`](../../AGENTS.md).** Only `README.md` and `AGENTS.md`
    belong at the repository root. Every other document lives under `docs/<category>/` and is linked
-   from the README documentation table. A wiki that introduced a parallel top-level content tree, or a
+   from the documentation index (README table before issue #405, `docs/SUMMARY.md` since). A wiki that introduced a parallel top-level content tree, or a
    second copy of the same facts, would violate that rule.
 2. **`openapi.json` is normative for the HTTP contract and is already checked against the router.**
    [`docs/architecture/gui-client-boundary.md`](gui-client-boundary.md) fixes the single-source-of-truth
@@ -34,7 +34,7 @@ is produced from it without creating a second source of truth*.
 | Canonical prose source | The in-repo `docs/` tree. Every wiki page is a file under `docs/<category>/`, reviewed in a normal pull request and versioned with the code. |
 | Published surface | A **generated site built from `docs/` with [mdBook](https://rust-lang.github.io/mdBook/)**. The wiki is a build artifact, never an editor. |
 | Relationship to GitHub Wiki | A **read-only mirror**, never an editor. `docs/wiki/` stays canonical; on a merge to `main` a publish job copies the pages into the wiki repository. Editing a wiki page directly is a mistake that the next publish overwrites. |
-| README link | The README documentation table links the decision document and the generated wiki's entry point; the README remains the orientation page, not the wiki. |
+| README link | The README links the canonical indexes — `docs/SUMMARY.md` (which carries the decision document's row) and the wiki's entry point; the README is the quick-start, not the index (issue #405) — and the checker's rule 3 enforces exactly that. |
 | HTTP contract | `openapi.json` stays normative. Wiki API pages link the served contract and the Swagger UI at `/api-docs`; they never re-type routes, parameters or schemas. |
 | Drift prevention | Hand-written prose lives in `docs/` and is reviewed like code; generated reference (the route/operation index) is produced from `openapi.json` at build time; a CI job regenerates and fails on any diff. Rules stated in *Drift prevention* below. |
 
@@ -187,7 +187,9 @@ rejection, not a runtime surprise.
    container without rebuilding the crate, so it is cheap on every pull request.
 3. **README linkage and links must stay complete** — `node scripts/check-docs-links.mjs` asserts that
    every relative link in every tracked Markdown document resolves, that every `docs/<category>/*.md`
-   page appears in both `SUMMARY.md` and the README documentation table, and that the wiki index links
+   page appears in `SUMMARY.md` — the canonical table of contents since issue #405 demoted the README
+   to a quick-start; the README's own duty is now to keep linking `SUMMARY.md`, the wiki index,
+   `CONTRIBUTING.md` and `AGENTS.md`, and that the wiki index links
    every wiki page and no page that does not exist. A new page cannot be added without being
    discoverable, and the index cannot link a page that is missing — the defect issue
    [#236](https://github.com/TucanoTechnology/TucanoTestAPI/issues/236) reported. This mirrors the

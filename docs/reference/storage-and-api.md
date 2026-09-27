@@ -175,6 +175,8 @@ absent from `openapi.json`; the documented way to list a project's runs, milesto
 configurations is the parent-scoped route.
 
 ## Authentication
+The service's own default remains `TUCANO_AUTH_REQUIRED=false`; the shipped Compose file is the safe default, not the service — a deployment that supplies its own container definition and does not opt in still runs anonymously (audit finding F-178-1).
+
 
 With `TUCANO_AUTH_REQUIRED` turned on, every operation but `GET /health`, `GET /ready`,
 `GET /diagnostics`, `GET /metrics`, `GET /openapi.json`, `GET /api-docs`, `POST /auth/login`, and
