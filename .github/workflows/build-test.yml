@@ -187,6 +187,16 @@ jobs:
     name: Container smoke
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: [self-hosted, Linux, X64]
+    # The shipped posture is authentication enforced, and scripts/seed.mjs is
+    # written against exactly that deployment (it signs in as the bootstrap
+    # account). The first real run booted an anonymous container and the
+    # seed correctly refused; the job now matches the compose file it is
+    # meant to prove (#419 follow-up to its own first execution).
+    env:
+      TUCANO_AUTH_REQUIRED: "true"
+      TUCANO_JWT_SECRET: "container-smoke-secret-of-at-least-32-bytes!!"
+      TUCANO_BOOTSTRAP_USERNAME: "smoke"
+      TUCANO_BOOTSTRAP_PASSWORD: "container-smoke-bootstrap-password"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
@@ -211,6 +221,10 @@ jobs:
           docker run -d --rm --name tucano-smoke-${{ github.run_id }} \
             --volume tucano-smoke-${{ github.run_id }}:/data \
             --publish 3009:3000 \
+            --env TUCANO_AUTH_REQUIRED \
+            --env TUCANO_JWT_SECRET \
+            --env TUCANO_BOOTSTRAP_USERNAME \
+            --env TUCANO_BOOTSTRAP_PASSWORD \
             tucano-smoke:${{ github.sha }}
       - name: Wait for /health, and read the boot self-identification (#418)
         run: |
@@ -227,6 +241,8 @@ jobs:
           echo "$logs"
           echo "$logs" | grep -q 'tucano.boot' \
             || { echo "the boot line must self-identify the build (#418)"; exit 1; }
+          echo "$logs" | grep -q 'auth_required=true' \
+            || { echo "the smoke container must boot in the shipped auth posture"; exit 1; }
       - name: Seed, validate and smoke as a real HTTP client
         run: |
           node scripts/seed.mjs http://localhost:3009
