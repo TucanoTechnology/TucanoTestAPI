@@ -14,7 +14,6 @@
 use std::collections::HashSet;
 use std::io;
 
-use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 
@@ -89,6 +88,31 @@ impl Composed {
 /// CRUD, composition, duplication and reporting over a [`Repository`].
 pub struct TestService<R> {
     repository: R,
+}
+
+/// Map an io::Error out of a single-lock read-modify-write.
+///
+/// A `WouldBlock` **with** an [`EtagMismatch`](crate::storage::EtagMismatch)
+/// payload is the genuine precondition failure: 412 carrying the digest the
+/// stored document now has. A `WouldBlock` without it is the advisory lock
+/// timing out — 503 with a retry hint, never a suggestion that someone edited
+/// the document (#407). `missing` is the 404 text this operation publishes.
+fn map_mutation_error(error: io::Error, missing: &str) -> DomainError {
+    match error.kind() {
+        io::ErrorKind::WouldBlock => {
+            if let Some(inner) = error.get_ref()
+                && let Some(mismatch) = inner.downcast_ref::<crate::storage::EtagMismatch>()
+            {
+                return DomainError::PreconditionFailed {
+                    current_etag: mismatch.0.clone(),
+                };
+            }
+            DomainError::LockTimeout
+        }
+        io::ErrorKind::NotFound => DomainError::NotFound(missing.to_owned()),
+        io::ErrorKind::InvalidInput => DomainError::invalid_id(),
+        kind => DomainError::from(io::Error::new(kind, error)),
+    }
 }
 
 impl<R: Repository> TestService<R> {
@@ -281,22 +305,6 @@ impl<R: Repository> TestService<R> {
         normalise_marker(resource, id, &mut document);
         self.repository
             .create_at(resource, parent, id, &document)
-            .map_err(DomainError::from)
-    }
-
-    /// Persists a document, keeping a parent marker's child collections empty:
-    /// membership lives in the folders, never in the parent document.
-    fn write_marker(
-        &self,
-        resource: Resource,
-        parent: Option<&Parent>,
-        id: &str,
-        value: &Value,
-    ) -> Result<(), DomainError> {
-        let mut document = value.clone();
-        normalise_marker(resource, id, &mut document);
-        self.repository
-            .write_at(resource, parent, id, &document)
             .map_err(DomainError::from)
     }
 
@@ -524,6 +532,53 @@ impl<R: Repository> TestService<R> {
         self.resolve(Resource::Runs, run_id, None, "Test run not found")
     }
 
+    /// Read-modify-write the run document as one transaction.
+    ///
+    /// One advisory-lock acquisition covers the re-read, the closure's
+    /// mutation and the write, so two concurrent mutations of the same run
+    /// serialise instead of one clobbering the other with a stale read
+    /// (#406). A refusal from the closure surfaces its own domain error and
+    /// writes nothing; a lock that times out answers `LockTimeout` like every
+    /// other write. The refusal is judged before the `io::Error` mapping, so
+    /// the internal sentinel never reaches a client. Dependent reads happen
+    /// inside the closure, so embedded snapshots describe what the winning
+    /// writer saw (#407 lands the matching etag-mismatch split on the
+    /// optimistic-concurrency path).
+    ///
+    pub(super) fn mutate_run<T>(
+        &self,
+        run_id: &str,
+        mutate: impl FnOnce(&mut TestRun, &Parent) -> Result<T, DomainError>,
+    ) -> Result<T, DomainError> {
+        let home = self.run_home(run_id)?;
+        let mut refusal: Option<DomainError> = None;
+        let mut produced: Option<T> = None;
+        let outcome =
+            self.repository
+                .transform_at(Resource::Runs, Some(&home), run_id, None, |stored| {
+                    let mut run: TestRun = serde_json::from_value(stored)
+                        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+                    match mutate(&mut run, &home) {
+                        Ok(value) => {
+                            let document = serde_json::to_value(&run).map_err(|error| {
+                                io::Error::new(io::ErrorKind::InvalidData, error)
+                            })?;
+                            produced = Some(value);
+                            Ok(document)
+                        }
+                        Err(error) => {
+                            refusal = Some(error);
+                            Err(io::Error::other("run mutation refused"))
+                        }
+                    }
+                });
+        if let Some(error) = refusal {
+            return Err(error);
+        }
+        outcome.map_err(|error| map_mutation_error(error, "Test run not found"))?;
+        produced.ok_or_else(|| DomainError::Internal("run mutation produced no outcome".to_owned()))
+    }
+
     /// The parent a write addresses, for resources that live inside one.
     ///
     /// Only projects are addressed without a parent; every other resource is
@@ -590,30 +645,6 @@ impl<R: Repository> TestService<R> {
         let value = self.read_document(resource, Some(&parent), id, missing_message)?;
         serde_json::from_value(value)
             .map_err(|_| DomainError::Internal("Stored JSON is invalid".to_owned()))
-    }
-
-    /// Writes a document back to `parent`, the home its caller resolved.
-    ///
-    /// A write never moves a document: `parent` is the home the matching read
-    /// resolved, so an update addresses the same occurrence it loaded.
-    fn save<T: Serialize>(
-        &self,
-        resource: Resource,
-        id: &str,
-        parent: Option<&Parent>,
-        value: &T,
-    ) -> Result<(), DomainError> {
-        let document = serde_json::to_value(value)
-            .map_err(|_| DomainError::Internal("Failed to serialize document".to_owned()))?;
-        // A document is written back to the parent that owns it, which for a
-        // run is the project it was created in.
-        let parent = match parent {
-            Some(parent) => Some(parent.clone()),
-            None => self.owner_for_write(resource, id, entity_missing_message(resource))?,
-        };
-        self.repository
-            .write_at(resource, parent.as_ref(), id, &document)
-            .map_err(DomainError::from)
     }
 }
 

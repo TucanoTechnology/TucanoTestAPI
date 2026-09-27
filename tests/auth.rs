@@ -2010,3 +2010,52 @@ fn a_refresh_token_exchanges_at_most_once_under_concurrent_replay() {
     let error = replay.expect_err("a spent token must never exchange again");
     assert_eq!(error.code(), "invalid_refresh_token", "{error:?}");
 }
+
+/// #408: the grants a deleted project leaves behind resurrect every old role
+/// the moment the identifier is re-created — authorisation reads the file, and
+/// nothing else would ever write it again. Delete now forgets them.
+#[tokio::test]
+async fn deleting_a_project_forgets_its_grants() {
+    let (directory, app) = common::test_app();
+    let store = tucano_test::auth::AuthStore::new(directory.path()).expect("store");
+
+    let (status, body) = common::send_json(
+        &app,
+        common::json_request("POST", "/projects", &json!({"name": "phoenix"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    store
+        .set_role("phoenix.json", "user-1", Role::Owner)
+        .expect("grant");
+    assert_eq!(
+        store.role_of("phoenix.json", "user-1").expect("role"),
+        Some(Role::Owner),
+        "the grant must exist before the delete"
+    );
+
+    let (status, body) = common::send_json(&app, common::delete("/projects/phoenix.json")).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        store
+            .grants("phoenix.json")
+            .expect("grants after delete")
+            .grants
+            .len(),
+        0,
+        "the deleted project must hold no grants"
+    );
+    assert!(
+        !directory.path().join("auth/projects/phoenix.json").exists(),
+        "the grants file survived its project"
+    );
+
+    // Re-creating the identifier starts from an empty access list.
+    let (status, body) = common::send_json(
+        &app,
+        common::json_request("POST", "/projects", &json!({"name": "phoenix"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    assert_eq!(store.role_of("phoenix.json", "user-1").expect("role"), None);
+}

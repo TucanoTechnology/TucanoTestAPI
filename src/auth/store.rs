@@ -422,11 +422,14 @@ impl AuthStore {
     /// Forget every grant for a project, which is what deleting it does.
     ///
     /// A project that never had a grant file is already forgotten.
-    pub fn remove_project_grants(&self, project_id: &str) -> io::Result<()> {
+    pub fn remove_project_grants(&self, project_id: &str) -> io::Result<bool> {
         let _lock = self.acquire_lock()?;
         match fs::remove_file(self.grant_path(project_id)?) {
-            Ok(()) => Ok(()),
-            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+            // `true`: there was a grant file and it is gone. `false`: there
+            // was nothing to forget — the caller's audit line distinguishes a
+            // revocation from a no-op (#408).
+            Ok(()) => Ok(true),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
             Err(error) => Err(error),
         }
     }
@@ -761,11 +764,13 @@ mod tests {
             .expect("set");
         store
             .remove_project_grants("checkout.json")
-            .expect("forget");
+            .expect("forget")
+            .then_some(());
         assert_eq!(store.grant_count("checkout.json").expect("count"), 0);
         store
             .remove_project_grants("checkout.json")
-            .expect("forget");
+            .expect("forget")
+            .then_some(());
     }
 
     #[test]

@@ -718,6 +718,45 @@ fn all_within(projects: &[String], reachable: &BTreeSet<String>) -> bool {
     projects.iter().all(|project| reachable.contains(project))
 }
 
+/// Forget every grant for a project being deleted (#408).
+///
+/// A grant file that outlives its project is a silent access resurrection:
+/// authorisation resolves roles from the file, so re-creating the same
+/// identifier would restore former members with no grant event anywhere.
+/// Runs BEFORE the folder delete so a refused revocation (a busy lock, an
+/// unwritable volume) leaves the project untouched and the whole delete
+/// retryable, rather than leaving a resurrection behind. Independent of
+/// whether auth is enforced: a non-enforcing deployment may store grants the
+/// day its operator turns the flag on. Audited like every other mutation.
+pub(crate) fn revoke_project_grants<R: Repository>(
+    state: &AppState<R>,
+    project_id: &str,
+) -> Result<(), DomainError> {
+    let outcome = state.auth().store.remove_project_grants(project_id);
+    match &outcome {
+        // A project that never had a grant file is a no-op, and no-ops do not
+        // audit: an operator reading the trail should see revocations, not
+        // every delete of a grantless project (#408, observability contract).
+        Ok(false) => {}
+        Ok(true) => tracing::info!(
+            target: "tucano.audit",
+            action = "revoke_grants",
+            resource = "project",
+            id = project_id,
+            outcome = "success"
+        ),
+        Err(_) => tracing::info!(
+            target: "tucano.audit",
+            action = "revoke_grants",
+            resource = "project",
+            id = project_id,
+            outcome = "failure",
+            code = "storage_error"
+        ),
+    }
+    outcome.map(|_deleted| ()).map_err(DomainError::from)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
