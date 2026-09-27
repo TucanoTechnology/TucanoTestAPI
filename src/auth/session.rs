@@ -169,8 +169,16 @@ pub fn refresh(
         return Err(DomainError::invalid_refresh_token());
     }
     // The spent token goes first, so a replay of it cannot find it, whatever
-    // happens next.
-    store.revoke_refresh_token(&user.id, &stored.id)?;
+    // happens next — and the CONSUMPTION IS THE GATE (#409): two concurrent
+    // rotations of one token both pass the lookup above, but
+    // `revoke_refresh_token` is one lock transaction that reports whether it
+    // actually removed the record. The loser of that race sees `false`, the
+    // token is already someone else's spent history, and rotation refuses —
+    // exactly one caller may exchange a refresh token, as the single-use
+    // property above promises.
+    if !store.revoke_refresh_token(&user.id, &stored.id)? {
+        return Err(DomainError::invalid_refresh_token());
+    }
     issue_tokens(store, config, &user, secret, now)
 }
 
