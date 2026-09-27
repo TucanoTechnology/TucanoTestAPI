@@ -562,3 +562,155 @@ async fn test_lock_contention_latency() {
         "max latency {max:.0}ms exceeds 10s — possible deadlock"
     );
 }
+
+/// #406: concurrent result records for *different* cases of one run must all
+/// survive. Before the transaction fix, each mutation read the run document
+/// outside the lock and wrote it back inside a fresh one, so the slower writer
+/// clobbered the faster one's acknowledged result — two 2xx responses, one
+/// lost fact. `mutate_run` makes read+mutate+write one lock acquisition.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn concurrent_results_for_different_cases_all_survive() {
+    let (_dir, app) = test_app();
+    let app = Arc::new(app);
+
+    send_json(
+        &app,
+        json_request("POST", "/projects", &json!({"name": "race-project"})),
+    )
+    .await;
+    for id in ["TC-race-1", "TC-race-2"] {
+        send_json(
+            &app,
+            json_request(
+                "POST",
+                "/projects/race-project.json/test_cases",
+                &json!({"testCaseId": id, "title": id, "expectedResult": "ok"}),
+            ),
+        )
+        .await;
+    }
+    let (status, _) = send_json(
+        &app,
+        json_request(
+            "POST",
+            "/projects/race-project.json/test_runs",
+            &json!({
+                "name": "race-run",
+                "testCases": [
+                    {"testCaseId": "TC-race-1", "title": "TC-race-1", "expectedResult": "ok"},
+                    {"testCaseId": "TC-race-2", "title": "TC-race-2", "expectedResult": "ok"}
+                ]
+            }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    let mut handles = Vec::new();
+    for round in 0..4 {
+        let app = Arc::clone(&app);
+        let (case, outcome) = match round % 2 {
+            0 => ("TC-race-1", "Passed"),
+            _ => ("TC-race-2", "Failed"),
+        };
+        handles.push(tokio::spawn(async move {
+            for _ in 0..12 {
+                let (code, body) = send_json(
+                    &app,
+                    json_request(
+                        "POST",
+                        "/test_runs/race-run.json/results",
+                        &json!({"testCaseId": case, "status": outcome}),
+                    ),
+                )
+                .await;
+                if code == StatusCode::CREATED || code == StatusCode::OK {
+                    return;
+                }
+                assert_eq!(
+                    body.pointer("/error/code").and_then(Value::as_str),
+                    Some("lock_timeout"),
+                    "only lock contention may refuse this POST: {code} {body}"
+                );
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            panic!("result for {case} never succeeded under contention");
+        }));
+    }
+    for handle in handles {
+        handle.await.expect("task");
+    }
+
+    let (_status, run) = send_json(&app, get("/test_runs/race-run.json")).await;
+    let results = run["results"].as_array().expect("results array");
+    assert_eq!(results.len(), 2, "both cases must hold a result: {run}");
+    for case in ["TC-race-1", "TC-race-2"] {
+        assert!(
+            results
+                .iter()
+                .any(|result| result["testCaseId"] == case && result["status"] != "Untested"),
+            "{case} lost its concurrently recorded result: {run}"
+        );
+    }
+}
+
+/// #406: two concurrent duplicates of the same source under the same `newId`
+/// used to race an unlocked `exists_at` against an unconditional overwrite —
+/// both answered 201 and one document silently replaced the other. `create_at`
+/// makes check-and-write one acquisition: exactly one winner, one conflict.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn concurrent_duplicates_of_one_new_id_have_exactly_one_winner() {
+    let (_dir, app) = test_app();
+    let app = Arc::new(app);
+    send_json(
+        &app,
+        json_request("POST", "/projects", &json!({"name": "dupe-source"})),
+    )
+    .await;
+
+    let mut handles = Vec::new();
+    for _ in 0..8 {
+        let app = Arc::clone(&app);
+        handles.push(tokio::spawn(async move {
+            let (code, body) = send_json(
+                &app,
+                json_request(
+                    "POST",
+                    "/projects/dupe-source.json/duplicate",
+                    &json!({"newId": "dupe-copy.json", "name": "dupe-copy"}),
+                ),
+            )
+            .await;
+            (code, body)
+        }));
+    }
+
+    let mut created = 0;
+    let mut conflicts = 0;
+    for handle in handles {
+        let (code, body) = handle.await.expect("task");
+        match code.as_u16() {
+            201 => created += 1,
+            409 => {
+                assert_eq!(
+                    body.pointer("/error/code").and_then(Value::as_str),
+                    Some("conflict")
+                );
+                conflicts += 1;
+            }
+            other => panic!("unexpected {other} {body} from racing duplicate"),
+        }
+    }
+    assert_eq!(created, 1, "exactly one duplicate may create the target");
+    assert_eq!(conflicts, 7, "the losers must all conflict");
+
+    // The single copy is a complete document, readable exactly once.
+    let (_status, listing) = send_json(&app, get("/projects")).await;
+    let names: Vec<_> = listing
+        .as_array()
+        .expect("list")
+        .iter()
+        .map(Value::as_str)
+        .collect();
+    assert!(names.contains(&Some("dupe-copy.json")), "{names:?}");
+}
