@@ -54,13 +54,11 @@ impl<R: Repository> TestService<R> {
         let suite_id = required_string(body, "suiteId")
             .ok_or_else(|| DomainError::invalid_request("Required field suiteId is missing"))?;
 
-        let home = self.run_home(run_id)?;
-        let mut run =
-            self.load::<TestRun>(Resource::Runs, run_id, Some(&home), "Test run not found")?;
-        let suite = self.load_entity::<TestSuite>(Resource::Suites, &suite_id)?;
-        composition::attach_suite_to_run(&mut run, &suite, &suite_id)?;
         audited(resource_noun(Resource::Runs), "add_suite", run_id, || {
-            self.save(Resource::Runs, run_id, Some(&home), &run)
+            self.mutate_run(run_id, |run, _home| {
+                let suite = self.load_entity::<TestSuite>(Resource::Suites, &suite_id)?;
+                composition::attach_suite_to_run(run, &suite, &suite_id)
+            })
         })
     }
 
@@ -69,14 +67,13 @@ impl<R: Repository> TestService<R> {
         let test_case_id = required_string(body, "testCaseId")
             .ok_or_else(|| DomainError::invalid_request("Required field testCaseId is missing"))?;
 
-        let home = self.run_home(run_id)?;
-        let mut run =
-            self.load::<TestRun>(Resource::Runs, run_id, Some(&home), "Test run not found")?;
-        let test_case = self.load_entity::<TestCase>(Resource::Cases, &test_case_id)?;
-        composition::attach_case_to_run(&mut run, &test_case, &test_case_id)?;
-        composition::capture_case_version(&mut run, &test_case.test_case_id, test_case.version);
         audited(resource_noun(Resource::Runs), "add_case", run_id, || {
-            self.save(Resource::Runs, run_id, Some(&home), &run)
+            self.mutate_run(run_id, |run, _home| {
+                let test_case = self.load_entity::<TestCase>(Resource::Cases, &test_case_id)?;
+                composition::attach_case_to_run(run, &test_case, &test_case_id)?;
+                composition::capture_case_version(run, &test_case.test_case_id, test_case.version);
+                Ok(())
+            })
         })
     }
 
@@ -88,32 +85,36 @@ impl<R: Repository> TestService<R> {
     pub fn record_run_result(&self, run_id: &str, body: &Value) -> Result<(), DomainError> {
         let update = result_update(body, None)?;
 
-        let home = self.run_home(run_id)?;
-        let mut run =
-            self.load::<TestRun>(Resource::Runs, run_id, Some(&home), "Test run not found")?;
-        if !composition::holds_case(&run, &update.test_case_id) {
-            return Err(DomainError::NotFound(
-                "Test case not in test run".to_owned(),
-            ));
-        }
-        // A run may hold a case whose document has since been removed, so the
-        // case is looked up best-effort: its version is pinned when it can be
-        // read and the run falls back to version 1 when it cannot.
-        let held = self
-            .load_entity::<TestCase>(Resource::Cases, &update.test_case_id)
-            .ok();
-        composition::capture_case_version(
-            &mut run,
-            held.as_ref()
-                .map_or(&update.test_case_id, |case| &case.test_case_id),
-            held.as_ref().and_then(|case| case.version),
-        );
-        composition::upsert_result(&mut run, update);
         audited(
             resource_noun(Resource::Runs),
             "record_result",
             run_id,
-            || self.save(Resource::Runs, run_id, Some(&home), &run),
+            || {
+                self.mutate_run(run_id, |run, _home| {
+                    if !composition::holds_case(run, &update.test_case_id) {
+                        return Err(DomainError::NotFound(
+                            "Test case not in test run".to_owned(),
+                        ));
+                    }
+                    // A run may hold a case whose document has since been
+                    // removed, so the case is looked up best-effort: its
+                    // version is pinned when it can be read and the run falls
+                    // back to version 1 when it cannot. The lookup happens
+                    // inside the transaction, so the pinned version describes
+                    // what the winning writer saw (#406).
+                    let held = self
+                        .load_entity::<TestCase>(Resource::Cases, &update.test_case_id)
+                        .ok();
+                    composition::capture_case_version(
+                        run,
+                        held.as_ref()
+                            .map_or(&update.test_case_id, |case| &case.test_case_id),
+                        held.as_ref().and_then(|case| case.version),
+                    );
+                    composition::upsert_result(run, update);
+                    Ok(())
+                })
+            },
         )
     }
 
@@ -133,15 +134,15 @@ impl<R: Repository> TestService<R> {
     ) -> Result<(), DomainError> {
         let update = result_update(body, Some(case_id))?;
 
-        let home = self.run_home(run_id)?;
-        let mut run =
-            self.load::<TestRun>(Resource::Runs, run_id, Some(&home), "Test run not found")?;
-        composition::replace_result(&mut run, update)?;
         audited(
             resource_noun(Resource::Runs),
             "replace_result",
             run_id,
-            || self.save(Resource::Runs, run_id, Some(&home), &run),
+            || {
+                self.mutate_run(run_id, |run, _home| {
+                    composition::replace_result(run, update)
+                })
+            },
         )
     }
 
@@ -151,15 +152,15 @@ impl<R: Repository> TestService<R> {
     /// all as much as one that records other cases — answers `404`: there is
     /// nothing to remove.
     pub fn delete_run_result(&self, run_id: &str, case_id: &str) -> Result<(), DomainError> {
-        let home = self.run_home(run_id)?;
-        let mut run =
-            self.load::<TestRun>(Resource::Runs, run_id, Some(&home), "Test run not found")?;
-        composition::remove_result(&mut run, case_id)?;
         audited(
             resource_noun(Resource::Runs),
             "delete_result",
             run_id,
-            || self.save(Resource::Runs, run_id, Some(&home), &run),
+            || {
+                self.mutate_run(run_id, |run, _home| {
+                    composition::remove_result(run, case_id)
+                })
+            },
         )
     }
 
@@ -228,66 +229,62 @@ impl<R: Repository> TestService<R> {
         cases: Vec<ParsedCase>,
         errors: usize,
     ) -> Result<ImportSummary, DomainError> {
-        let home = self.run_home(run_id)?;
-        let mut run =
-            self.load::<TestRun>(Resource::Runs, run_id, Some(&home), "Test run not found")?;
-        let mut seen: HashSet<String> = run
-            .results
-            .as_ref()
-            .map(|results| {
-                results
-                    .iter()
-                    .map(|result| result.test_case_id.clone())
-                    .collect()
-            })
-            .unwrap_or_default();
-
-        let mut summary = ImportCounts {
-            passed: 0,
-            failed: 0,
-            blocked: 0,
-        };
-        let mut imported = 0;
-        let mut duplicates = 0;
-
-        for case in cases {
-            if !seen.insert(case.test_case_id.clone()) {
-                duplicates += 1;
-                continue;
-            }
-
-            match case.status {
-                ImportStatus::Passed => summary.passed += 1,
-                ImportStatus::Failed => summary.failed += 1,
-                ImportStatus::Blocked => summary.blocked += 1,
-            }
-
-            composition::upsert_result(
-                &mut run,
-                composition::ResultUpdate {
-                    test_case_id: case.test_case_id,
-                    status: case.status.as_str().to_owned(),
-                    timestamp: case.timestamp.unwrap_or_else(current_timestamp_string),
-                    notes: case
-                        .notes
-                        .map_or(composition::Patch::Keep, composition::Patch::Set),
-                    duration_ms: composition::Patch::Keep,
-                },
-            );
-            imported += 1;
-        }
-
-        let outcome = ImportSummary {
-            imported,
-            skipped: duplicates + errors,
-            errors,
-            duplicates,
-            summary,
-        };
         audited(resource_noun(Resource::Runs), "import", run_id, || {
-            self.save(Resource::Runs, run_id, Some(&home), &run)
-        })?;
-        Ok(outcome)
+            self.mutate_run(run_id, |run, _home| {
+                let mut seen: HashSet<String> = run
+                    .results
+                    .as_ref()
+                    .map(|results| {
+                        results
+                            .iter()
+                            .map(|result| result.test_case_id.clone())
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                let mut summary = ImportCounts {
+                    passed: 0,
+                    failed: 0,
+                    blocked: 0,
+                };
+                let mut imported = 0;
+                let mut duplicates = 0;
+
+                for case in cases {
+                    if !seen.insert(case.test_case_id.clone()) {
+                        duplicates += 1;
+                        continue;
+                    }
+
+                    match case.status {
+                        ImportStatus::Passed => summary.passed += 1,
+                        ImportStatus::Failed => summary.failed += 1,
+                        ImportStatus::Blocked => summary.blocked += 1,
+                    }
+
+                    composition::upsert_result(
+                        run,
+                        composition::ResultUpdate {
+                            test_case_id: case.test_case_id,
+                            status: case.status.as_str().to_owned(),
+                            timestamp: case.timestamp.unwrap_or_else(current_timestamp_string),
+                            notes: case
+                                .notes
+                                .map_or(composition::Patch::Keep, composition::Patch::Set),
+                            duration_ms: composition::Patch::Keep,
+                        },
+                    );
+                    imported += 1;
+                }
+
+                Ok(ImportSummary {
+                    imported,
+                    skipped: duplicates + errors,
+                    errors,
+                    duplicates,
+                    summary,
+                })
+            })
+        })
     }
 
     /// Links the configuration named in `body` to a run by reference, refusing
@@ -302,21 +299,21 @@ impl<R: Repository> TestService<R> {
         let config_id = required_string(body, "configId")
             .ok_or_else(|| DomainError::invalid_request("Required field configId is missing"))?;
 
-        let home = self.run_home(run_id)?;
-        let mut run =
-            self.load::<TestRun>(Resource::Runs, run_id, Some(&home), "Test run not found")?;
-        let configuration = self.load::<TestConfiguration>(
-            Resource::Configurations,
-            &config_id,
-            Some(&home),
-            entity_missing_message(Resource::Configurations),
-        )?;
-        composition::attach_configuration_to_run(&mut run, &configuration, &config_id)?;
         audited(
             resource_noun(Resource::Runs),
             "link_configuration",
             run_id,
-            || self.save(Resource::Runs, run_id, Some(&home), &run),
+            || {
+                self.mutate_run(run_id, |run, home| {
+                    let configuration = self.load::<TestConfiguration>(
+                        Resource::Configurations,
+                        &config_id,
+                        Some(home),
+                        entity_missing_message(Resource::Configurations),
+                    )?;
+                    composition::attach_configuration_to_run(run, &configuration, &config_id)
+                })
+            },
         )
     }
 
@@ -330,21 +327,21 @@ impl<R: Repository> TestService<R> {
         run_id: &str,
         config_id: &str,
     ) -> Result<(), DomainError> {
-        let home = self.run_home(run_id)?;
-        let mut run =
-            self.load::<TestRun>(Resource::Runs, run_id, Some(&home), "Test run not found")?;
-        self.resolve(
-            Resource::Configurations,
-            config_id,
-            Some(&home),
-            entity_missing_message(Resource::Configurations),
-        )?;
-        composition::detach_configuration_from_run(&mut run, config_id)?;
         audited(
             resource_noun(Resource::Runs),
             "unlink_configuration",
             run_id,
-            || self.save(Resource::Runs, run_id, Some(&home), &run),
+            || {
+                self.mutate_run(run_id, |run, home| {
+                    self.resolve(
+                        Resource::Configurations,
+                        config_id,
+                        Some(home),
+                        entity_missing_message(Resource::Configurations),
+                    )?;
+                    composition::detach_configuration_from_run(run, config_id)
+                })
+            },
         )
     }
 
@@ -371,12 +368,10 @@ impl<R: Repository> TestService<R> {
             current_timestamp_string(),
         );
 
-        let home = self.run_home(run_id)?;
-        let mut run =
-            self.load::<TestRun>(Resource::Runs, run_id, Some(&home), "Test run not found")?;
-        composition::attach_defect_to_result(&mut run, case_id, link.clone())?;
         audited(resource_noun(Resource::Runs), "link_defect", run_id, || {
-            self.save(Resource::Runs, run_id, Some(&home), &run)
+            self.mutate_run(run_id, |run, _home| {
+                composition::attach_defect_to_result(run, case_id, link.clone())
+            })
         })?;
         Ok(link)
     }
@@ -389,15 +384,15 @@ impl<R: Repository> TestService<R> {
         case_id: &str,
         link_id: &str,
     ) -> Result<(), DomainError> {
-        let home = self.run_home(run_id)?;
-        let mut run =
-            self.load::<TestRun>(Resource::Runs, run_id, Some(&home), "Test run not found")?;
-        composition::detach_defect_from_result(&mut run, case_id, link_id)?;
         audited(
             resource_noun(Resource::Runs),
             "unlink_defect",
             run_id,
-            || self.save(Resource::Runs, run_id, Some(&home), &run),
+            || {
+                self.mutate_run(run_id, |run, _home| {
+                    composition::detach_defect_from_result(run, case_id, link_id)
+                })
+            },
         )
     }
 }

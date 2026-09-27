@@ -30,17 +30,23 @@ impl<R: Repository> TestService<R> {
         crate::storage::validate_document_id(spec.resource, &new_id)
             .map_err(|_| DomainError::invalid_id())?;
 
-        if self
-            .repository
-            .exists_at(spec.resource, parent.as_ref(), &new_id)?
-        {
-            return Err(DomainError::Conflict(
-                spec.already_exists_message.to_owned(),
-            ));
-        }
-
+        // Existence check and write are ONE operation under one lock
+        // (`create_at`): a separate `exists_at` followed by an unconditional
+        // write lets a racing duplicate or create of the same `newId` destroy
+        // a document (#406). The loser reports the conflict with the
+        // operation's own message; normalisation matches `write_marker`.
         audited(resource_noun(spec.resource), "duplicate", &new_id, || {
-            self.write_marker(spec.resource, parent.as_ref(), &new_id, &document)
+            let mut stored = document.clone();
+            normalise_marker(spec.resource, &new_id, &mut stored);
+            self.repository
+                .create_at(spec.resource, parent.as_ref(), &new_id, &stored)
+                .map_err(|error| {
+                    if error.kind() == io::ErrorKind::AlreadyExists {
+                        DomainError::Conflict(spec.already_exists_message.to_owned())
+                    } else {
+                        DomainError::from(error)
+                    }
+                })
         })?;
         Ok(new_id)
     }
