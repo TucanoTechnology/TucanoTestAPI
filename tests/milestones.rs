@@ -760,3 +760,42 @@ async fn an_update_accepts_a_body_identifier_that_restates_the_addressed_one() {
     assert_eq!(stored["milestoneId"], "M-1.json");
     assert_eq!(stored["status"], "Closed");
 }
+
+/// #414: a milestone may carry at most 512 references per array. The refusal
+/// is a published code with the field and the limit named, and NOTHING is
+/// written for the rejected body; the exact limit still creates.
+#[tokio::test]
+async fn milestone_reference_arrays_are_bounded() {
+    let (_directory, app) = test_app();
+    let home = fixture_home(&app).await;
+    let ids: Vec<String> = (0..513).map(|n| format!("suite-{n}.json")).collect();
+    let (status, body) = send_json(
+        &app,
+        json_request(
+            "POST",
+            &format!("/projects/{home}/milestones"),
+            &json!({"milestoneId": "over.json", "name": "over the limit", "testSuiteIds": ids}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_error_envelope(&body, "invalid_request");
+    assert!(
+        body["error"]["message"]
+            .as_str()
+            .is_some_and(|m| m.contains("testSuiteIds") && m.contains("512")),
+        "the refusal names the field and the limit: {body}"
+    );
+
+    let exact: Vec<String> = ids.into_iter().take(512).collect();
+    let (status, created) = send_json(
+        &app,
+        json_request(
+            "POST",
+            &format!("/projects/{home}/milestones"),
+            &json!({"milestoneId": "exact.json", "name": "exactly at the limit", "testSuiteIds": exact}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{created}");
+}

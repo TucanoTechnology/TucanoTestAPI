@@ -13,46 +13,86 @@ impl FileRepository {
     /// ambiguous. Listing a parent (`list_children`) is the view that still
     /// distinguishes the placements.
     pub(super) fn list(&self, resource: Resource) -> io::Result<Vec<String>> {
-        let mut ids = match resource {
-            Resource::Projects => self
-                .project_folders()?
-                .iter()
-                .map(|folder| folder_wire_id(folder))
-                .collect::<Vec<_>>(),
-            Resource::Suites => {
-                let mut ids = Vec::new();
-                for project in self.project_folders()? {
-                    let directory = project_dir(&self.root, &folder_wire_id(&project))?;
-                    ids.extend(
-                        self.child_folders(&directory, "suite.json")?
-                            .iter()
-                            .map(|folder| folder_wire_id(folder)),
-                    );
-                }
-                ids
-            }
-            Resource::Cases => {
-                let mut ids = Vec::new();
-                for project in self.project_folders()? {
-                    let directory = project_dir(&self.root, &folder_wire_id(&project))?;
-                    ids.extend(self.child_folders(&directory, "test-case.json")?);
-                    for suite in self.child_folders(&directory, "suite.json")? {
-                        ids.extend(self.child_folders(&directory.join(&suite), "test-case.json")?);
-                    }
-                }
-                ids
-            }
-            Resource::Runs | Resource::Milestones | Resource::Configurations => {
-                let mut ids = Vec::new();
-                for directory in self.collection_dirs(resource)? {
-                    ids.extend(self.collection_documents(&directory)?);
-                }
-                ids
-            }
-        };
+        let mut ids = self
+            .list_with_homes(resource)?
+            .into_iter()
+            .map(|(id, _)| id)
+            .collect::<Vec<_>>();
         ids.sort();
         ids.dedup();
         Ok(ids)
+    }
+
+    /// One walk of the tree, carrying each identifier's home (#414): the
+    /// listing filter used to `locate` every id separately, turning a
+    /// restricted listing into a scan of the whole forest per candidate.
+    pub(super) fn list_with_homes(
+        &self,
+        resource: Resource,
+    ) -> io::Result<Vec<(String, Option<Parent>)>> {
+        let found = match resource {
+            Resource::Projects => self
+                .project_folders()?
+                .iter()
+                .map(|folder| (folder_wire_id(folder), None))
+                .collect::<Vec<_>>(),
+            Resource::Suites => {
+                let mut found = Vec::new();
+                for project in self.project_folders()? {
+                    let project_id = folder_wire_id(&project);
+                    let directory = project_dir(&self.root, &project_id)?;
+                    found.extend(self.child_folders(&directory, "suite.json")?.iter().map(
+                        |folder| {
+                            (
+                                folder_wire_id(folder),
+                                Some(Parent::Project(project_id.clone())),
+                            )
+                        },
+                    ));
+                }
+                found
+            }
+            Resource::Cases => {
+                let mut found = Vec::new();
+                for project in self.project_folders()? {
+                    let project_id = folder_wire_id(&project);
+                    let directory = project_dir(&self.root, &project_id)?;
+                    for folder in self.child_folders(&directory, "test-case.json")? {
+                        found.push((folder, Some(Parent::Project(project_id.clone()))));
+                    }
+                    for suite in self.child_folders(&directory, "suite.json")? {
+                        let suite_id = folder_wire_id(&suite);
+                        for folder in
+                            self.child_folders(&directory.join(&suite), "test-case.json")?
+                        {
+                            found.push((
+                                folder,
+                                Some(Parent::Suite {
+                                    project: project_id.clone(),
+                                    suite: suite_id.clone(),
+                                }),
+                            ));
+                        }
+                    }
+                }
+                found
+            }
+            Resource::Runs | Resource::Milestones | Resource::Configurations => {
+                let mut found = Vec::new();
+                for directory in self.collection_dirs(resource)? {
+                    let Some(project_folder) = directory.parent().and_then(|p| p.file_name())
+                    else {
+                        continue;
+                    };
+                    let project_id = folder_wire_id(&project_folder.to_string_lossy());
+                    for id in self.collection_documents(&directory)? {
+                        found.push((id, Some(Parent::Project(project_id.clone()))));
+                    }
+                }
+                found
+            }
+        };
+        Ok(found)
     }
 
     pub(super) fn locate(&self, resource: Resource, id: &str) -> io::Result<Vec<Parent>> {

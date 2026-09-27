@@ -423,6 +423,10 @@ impl Repository for FileRepository {
     fn list(&self, resource: Resource) -> io::Result<Vec<String>> {
         FileRepository::list(self, resource)
     }
+
+    fn list_homes(&self, resource: Resource) -> io::Result<Vec<(String, Option<Parent>)>> {
+        self.list_with_homes(resource)
+    }
     fn locate(&self, resource: Resource, id: &str) -> io::Result<Vec<Parent>> {
         FileRepository::locate(self, resource, id)
     }

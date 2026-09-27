@@ -7,11 +7,36 @@ impl<R: Repository + 'static> TestService<R> {
 
     /// Lists a resource, applying the optional substring and tag filters.
     pub fn list(&self, resource: Resource, query: &ListQuery) -> Result<Vec<String>, DomainError> {
-        let mut items = self.repository.list(resource)?;
-        apply_list_query(resource, query, &mut items, |item| {
-            self.first_document(resource, item).ok()
+        let mut ids: Vec<String> = self
+            .list_homes(resource, query)?
+            .into_iter()
+            .map(|(id, _)| id)
+            .collect();
+        ids.sort();
+        ids.dedup();
+        Ok(ids)
+    }
+
+    /// The identifiers a query matches, paired with the home each was found
+    /// in — one walk of the tree, and every document a filter or a guard
+    /// needs is read at that home rather than re-resolved (#414).
+    ///
+    /// Ambiguous identifiers occur once per distinct home, which is how a
+    /// caller spots ambiguity without a second `locate`. A tagged or
+    /// configuration-linked identifier survives when ANY of its homes
+    /// matches: the previous single-home load could only ever ask the first,
+    /// and both readings answer the same query — this one stops penalising
+    /// a document for sharing a name.
+    pub fn list_homes(
+        &self,
+        resource: Resource,
+        query: &ListQuery,
+    ) -> Result<Vec<(String, Option<Parent>)>, DomainError> {
+        let mut rows = self.repository.list_homes(resource)?;
+        apply_list_query(resource, query, &mut rows, |item, home| {
+            self.repository.read_at(resource, home, item).ok()
         });
-        Ok(items)
+        Ok(rows)
     }
 
     /// Reads a single document, assembling the children a parent owns.
@@ -48,14 +73,18 @@ impl<R: Repository + 'static> TestService<R> {
         query: &ListQuery,
     ) -> Result<Vec<String>, DomainError> {
         self.require_parent(parent)?;
-        let mut items = self
+        let items = self
             .repository
             .list_children(parent, child)
             .map_err(error::read_error)?;
-        apply_list_query(child, query, &mut items, |item| {
+        let mut rows: Vec<(String, Option<Parent>)> = items
+            .into_iter()
+            .map(|item| (item, Some(parent.clone())))
+            .collect();
+        apply_list_query(child, query, &mut rows, |item, _| {
             self.repository.read_at(child, Some(parent), item).ok()
         });
-        Ok(items)
+        Ok(rows.into_iter().map(|(id, _)| id).collect())
     }
 
     /// Validates, names and stores a new document in the collection that has no
@@ -221,27 +250,27 @@ impl<R: Repository + 'static> TestService<R> {
 /// contract documents: `?filter=`, then `?tags=`, then the runs-only
 /// `?configuration=`. Every parameter sent has to be satisfied.
 ///
-/// `load` reads the document an identifier names, from whichever location the
-/// caller lists — the global scan for [`TestService::list`], the named parent
-/// for [`TestService::list_children_matching`]. An identifier whose document
-/// `load` cannot produce never matches, and neither does a document without the
-/// array a filter walks, so an unnamed tag or configuration yields an empty
-/// listing rather than an error.
-fn apply_list_query<F: Fn(&str) -> Option<Value>>(
+/// `load` reads the document an identifier names AT THE HOME the walk found
+/// it in — no re-resolution, one pass over the tree serving the whole listing
+/// (#414). An identifier whose document `load` cannot produce never matches,
+/// and neither does a document without the array a filter walks, so an
+/// unnamed tag or configuration yields an empty listing rather than an
+/// error.
+fn apply_list_query<F: Fn(&str, Option<&Parent>) -> Option<Value>>(
     resource: Resource,
     query: &ListQuery,
-    items: &mut Vec<String>,
+    items: &mut Vec<(String, Option<Parent>)>,
     load: F,
 ) {
     if let Some(filter) = query.filter.as_ref() {
         let needle = filter.to_lowercase();
-        items.retain(|item| item.to_lowercase().contains(&needle));
+        items.retain(|(item, _)| item.to_lowercase().contains(&needle));
     }
 
     if let Some(tags_param) = query.tags.as_ref() {
         let requested = requested_tags(tags_param);
-        items.retain(|item| {
-            load(item).is_some_and(|value| document_has_any_tag(&value, &requested))
+        items.retain(|(item, home)| {
+            load(item, home.as_ref()).is_some_and(|value| document_has_any_tag(&value, &requested))
         });
     }
 
@@ -249,8 +278,9 @@ fn apply_list_query<F: Fn(&str) -> Option<Value>>(
     if resource == Resource::Runs
         && let Some(config_id) = query.configuration.as_ref()
     {
-        items.retain(|item| {
-            load(item).is_some_and(|value| document_links_configuration(&value, config_id))
+        items.retain(|(item, home)| {
+            load(item, home.as_ref())
+                .is_some_and(|value| document_links_configuration(&value, config_id))
         });
     }
 }

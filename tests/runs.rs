@@ -2431,3 +2431,37 @@ async fn an_update_refuses_a_body_identifier_the_store_cannot_file() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(stored["testRunId"], "nightly.json");
 }
+
+/// #414: the same bound on a run's `projects` references — the array the
+/// scope-filtered listing has to open for every candidate.
+#[tokio::test]
+async fn run_reference_arrays_are_bounded() {
+    let (_directory, app) = test_app();
+    let home = fixture_home(&app).await;
+    let many: Vec<serde_json::Value> = (0..513)
+        .map(|n| json!({"projectId": format!("p-{n}.json"), "name": format!("p-{n}"), "testSuites": []}))
+        .collect();
+    let (status, body) = send_json(
+        &app,
+        json_request(
+            "POST",
+            &format!("/projects/{home}/test_runs"),
+            &json!({"name": "over the limit", "projects": many}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_error_envelope(&body, "invalid_request");
+
+    let exact: Vec<serde_json::Value> = many.into_iter().take(512).collect();
+    let (status, created) = send_json(
+        &app,
+        json_request(
+            "POST",
+            &format!("/projects/{home}/test_runs"),
+            &json!({"name": "exactly at the limit", "projects": exact}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{created}");
+}

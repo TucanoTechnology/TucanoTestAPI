@@ -85,6 +85,8 @@ pub fn validate_payload(resource: Resource, value: &Value) -> Result<(), DomainE
         }
     }
 
+    references_within_limit(resource, object)?;
+
     match resource {
         Resource::Projects => check_against_model::<Project>(object),
         Resource::Suites => check_against_model::<TestSuite>(object),
@@ -93,6 +95,42 @@ pub fn validate_payload(resource: Resource, value: &Value) -> Result<(), DomainE
         Resource::Milestones => check_against_model::<Milestone>(object),
         Resource::Configurations => check_against_model::<TestConfiguration>(object),
     }
+}
+
+/// Ceiling on how many cross-references ONE document may carry.
+///
+/// A run or milestone body is otherwise an unbounded list of pointers into
+/// the store, and every later read of it — listing filters, milestone
+/// progress, the guards' reachability walk — pays per element. 512 is far
+/// above any deployment seen in practice and far below the payload byte
+/// limit, so hitting it means a document grew past its purpose and the
+/// author should split the milestone, not raise the number.
+pub const MAX_REFERENCED_ITEMS: usize = 512;
+
+/// Rejects reference arrays longer than [`MAX_REFERENCED_ITEMS`].
+///
+/// Only the incoming arrays are measured: updates replace whole arrays, so
+/// a body that fits yields a stored document that fits.
+fn references_within_limit(
+    resource: Resource,
+    object: &serde_json::Map<String, Value>,
+) -> Result<(), DomainError> {
+    let fields: &[&str] = match resource {
+        Resource::Runs => &["projects", "testSuites", "testCases"],
+        Resource::Milestones => &["testSuiteIds", "testRunIds"],
+        _ => &[],
+    };
+    for field in fields {
+        if let Some(Value::Array(items)) = object.get(*field)
+            && items.len() > MAX_REFERENCED_ITEMS
+        {
+            return Err(DomainError::invalid_request(format!(
+                "Field `{field}` carries {} references, above the limit of {MAX_REFERENCED_ITEMS}",
+                items.len()
+            )));
+        }
+    }
+    Ok(())
 }
 
 /// Type-checks each supplied top-level field against the resource's model.

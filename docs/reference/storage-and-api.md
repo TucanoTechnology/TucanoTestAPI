@@ -107,7 +107,9 @@ Three API semantics follow from this concept and apply to every composition requ
   `POST /configurations` answer `400 Bad Request` naming their replacement. Reads remain global —
   listing and retrieval search the whole tree, so an entity is always findable regardless of home,
   and each project also publishes a parent-scoped list of the runs, milestones and configurations
-  it holds.
+  it holds. A listing walks the tree ONCE: the scope filter and the `?tags=` / `?configuration=`
+  checks read each candidate at the home the walk already found, instead of re-resolving every
+  identifier with a scan of its own (#414).
 - **Inclusion is copy by default and move opt-in.** Adding an existing case or suite to another
   parent accepts `"mode": "copy" | "move"` and defaults to `copy`: `copy` duplicates the entity
   under the target parent (duplicate-on-include) while the source keeps its home and both copies
@@ -288,6 +290,14 @@ handler:
 - A body the multipart extractor cannot frame — an upload sent as JSON, or without a boundary — is answered
   with `400 text/plain`. Once the framing parses, upload rejections use the structured envelope
   (`missing_file`, `invalid_multipart`).
+
+A run or milestone document may carry at most **512** entries in each of its cross-reference
+arrays — `projects`, `testSuites` and `testCases` on a run, `testSuiteIds` and `testRunIds` on a
+milestone. A longer array is refused with `400 invalid_request` naming the field and the limit,
+before anything is written; updates replace whole arrays, so the bound applies to the merged
+document too. Documents stored before the limit read unchanged — only writes are checked. The
+bound exists because every later reader (scope-filtered listings, milestone progress, the
+reachability guards) pays per reference, so an unbounded array is a permanent tax on the store.
 
 The full reconciliation of the documented error contract and schema strictness is recorded in
 [docs/contracts/api-compatibility.md](../contracts/api-compatibility.md).
