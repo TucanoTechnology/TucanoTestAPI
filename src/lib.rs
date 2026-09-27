@@ -9,6 +9,7 @@
 //! precedence rule that layers it under the environment, read once by the
 //! binary before the listener binds.
 
+#![warn(missing_docs)]
 pub mod api;
 pub mod auth;
 pub mod config;

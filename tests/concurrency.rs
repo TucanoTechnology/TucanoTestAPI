@@ -714,3 +714,89 @@ async fn concurrent_duplicates_of_one_new_id_have_exactly_one_winner() {
         .collect();
     assert!(names.contains(&Some("dupe-copy.json")), "{names:?}");
 }
+
+/// The regression lock for #406's transactional revision: eight writers
+/// racing a qualifying update (no `If-Match` — the legacy path every
+/// deployment still uses) must produce eight acknowledged updates, eight
+/// gapless snapshot versions, and every writer's body must survive in
+/// exactly one revision. Before #406 the middle of the read-modify-write
+/// ran unlocked and silently DISCARDED snapshots (S2 pass entry 24:
+/// 20 acknowledged, 11 kept). #421 pins the failure direction directly.
+#[tokio::test]
+async fn racing_qualifying_updates_leave_a_gapless_revision_history() {
+    let (_directory, app) = test_app();
+    let project = common::create_project(&app, "race-history").await;
+    common::create_case_in(&app, &format!("/projects/{project}/test_cases"), "TC-race").await;
+    let app = Arc::new(app);
+    let barrier = Arc::new(tokio::sync::Barrier::new(8));
+
+    let mut handles = Vec::new();
+    for i in 0..8 {
+        let app = Arc::clone(&app);
+        let barrier = Arc::clone(&barrier);
+        handles.push(tokio::spawn(async move {
+            barrier.wait().await;
+            send_json(
+                &app,
+                json_request(
+                    "PUT",
+                    "/test_cases/TC-race",
+                    &json!({"title": format!("W{i}")}),
+                ),
+            )
+            .await
+        }));
+    }
+    for handle in handles {
+        let (status, body) = handle.await.expect("writer");
+        assert_eq!(status, StatusCode::OK, "acknowledged: {body}");
+    }
+
+    let (_, document) = send_json(&app, get("/test_cases/TC-race")).await;
+    assert_eq!(
+        document["version"], 9,
+        "eight qualifying updates on top of the created v1: {document}"
+    );
+
+    let (_, history) = send_json(&app, get("/test_cases/TC-race/history")).await;
+    let mut versions: Vec<u64> = history
+        .as_array()
+        .expect("history array")
+        .iter()
+        .filter_map(|entry| entry["version"].as_u64())
+        .collect();
+    versions.sort_unstable();
+    assert_eq!(
+        versions,
+        (1_u64..=8).collect::<Vec<_>>(),
+        "gapless snapshot run: {history}"
+    );
+
+    // Every writer's body reads back from exactly one revision — the
+    // surviving chain is v1(create) → … → v9, so all eight titles appear
+    // across the snapshots plus the live document.
+    let mut surviving = vec![document["title"].as_str().expect("live title").to_owned()];
+    for version in 1..=8_u64 {
+        let (status, snapshot) =
+            send_json(&app, get(&format!("/test_cases/TC-race/history/{version}"))).await;
+        assert_eq!(status, StatusCode::OK, "revision {version} reads back");
+        surviving.push(
+            snapshot["title"]
+                .as_str()
+                .expect("snapshot title")
+                .to_owned(),
+        );
+    }
+    let writers: Vec<_> = surviving
+        .iter()
+        .filter(|t| t.starts_with('W'))
+        .cloned()
+        .collect();
+    let distinct: std::collections::BTreeSet<_> = writers.iter().cloned().collect();
+    assert_eq!(
+        distinct.len(),
+        8,
+        "every acknowledged writer survives in exactly one revision, saw {writers:?}"
+    );
+    assert_eq!(writers.len(), 8, "and appears exactly once: {writers:?}");
+}

@@ -4,6 +4,7 @@
 
 use axum::Router;
 use axum::body::Body;
+use axum::body::Bytes;
 use axum::extract::MatchedPath;
 use axum::http::{HeaderMap, Request, StatusCode, header};
 use axum::middleware::{self, Next};
@@ -14,7 +15,9 @@ use std::collections::BTreeSet;
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::pin::Pin;
 use std::sync::OnceLock;
+use std::task::{Context, Poll};
 use std::time::Duration;
 use tempfile::TempDir;
 use tower::ServiceExt;
@@ -275,11 +278,20 @@ pub fn multipart_request(uri: &str, filename: &str, contents: &[u8]) -> Request<
     multipart_with_body(uri, body)
 }
 
+/// A frame that announces a part and then just ENDS — no final boundary,
+/// the shape a killed upload leaves on the wire (#421).
+pub fn multipart_truncated(uri: &str) -> Request<Body> {
+    let body = format!(
+        "--{BOUNDARY}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"cut.bin\"\r\nContent-Type: text/plain\r\n\r\nhalf a file, and then the wire went dead"
+    );
+    multipart_with_body(uri, body.into_bytes())
+}
+
 pub fn multipart_without_file(uri: &str) -> Request<Body> {
     multipart_with_body(uri, format!("--{BOUNDARY}--\r\n").into_bytes())
 }
 
-fn multipart_with_body(uri: &str, body: Vec<u8>) -> Request<Body> {
+pub(crate) fn multipart_with_body(uri: &str, body: Vec<u8>) -> Request<Body> {
     Request::builder()
         .method("POST")
         .uri(uri)
@@ -590,4 +602,48 @@ pub fn role_checked_write(
         other => panic!("unknown role-checked operation: {other}"),
     };
     (method, request.0, request.1)
+}
+
+pub fn assert_challenge(headers: &HeaderMap) {
+    let challenge = headers
+        .get(header::WWW_AUTHENTICATE)
+        .and_then(|value| value.to_str().ok())
+        .expect("WWW-Authenticate challenge");
+    assert!(
+        challenge.starts_with("Bearer realm="),
+        "not a bearer challenge: {challenge}"
+    );
+}
+
+/// A body that delivers nothing until its sender is dropped, then ends: a
+/// client that stalls, and (in the releasing test) a client whose bytes do
+/// arrive and whose request is genuinely answered by the handler.
+struct EosBody {
+    rx: tokio::sync::oneshot::Receiver<Bytes>,
+}
+
+impl futures_core::Stream for EosBody {
+    type Item = Result<Bytes, std::io::Error>;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        match Pin::new(&mut self.rx).poll(cx) {
+            Poll::Ready(Ok(bytes)) => Poll::Ready(Some(Ok(bytes))),
+            // Sender dropped: the body ends empty, which the JSON extractor
+            // takes as the failure it is.
+            Poll::Ready(Err(_)) => Poll::Ready(None),
+            Poll::Pending => Poll::Pending,
+        }
+    }
+}
+
+/// A POST that stalls in the body until the returned sender is dropped.
+pub fn stalling_post(uri: &str) -> (Request<Body>, tokio::sync::oneshot::Sender<Bytes>) {
+    let (tx, rx) = tokio::sync::oneshot::channel::<Bytes>();
+    let request = Request::builder()
+        .method("POST")
+        .uri(uri)
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from_stream(EosBody { rx }))
+        .expect("stalling request");
+    (request, tx)
 }

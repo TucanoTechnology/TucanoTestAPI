@@ -299,6 +299,12 @@ document too. Documents stored before the limit read unchanged — only writes a
 bound exists because every later reader (scope-filtered listings, milestone progress, the
 reachability guards) pays per reference, so an unbounded array is a permanent tax on the store.
 
+Every `500` additionally writes one `error`-level line naming the cause the client must not see —
+the surviving `io::Error` kind and message, or the internal explanation — joined to the response by
+the same request id, so a full volume, a remounted read-only directory and a dying disk are three
+distinct log lines rather than one undifferentiable envelope (#417). The client answer is
+unchanged: the fixed `storage_error` envelope, never the cause.
+
 The full reconciliation of the documented error contract and schema strictness is recorded in
 [docs/contracts/api-compatibility.md](../contracts/api-compatibility.md).
 
@@ -323,9 +329,19 @@ and retired by every local write — exact within a replica. Across replicas tho
 out at 45 seconds; document routes are never cached and stay strongly consistent (see
 [the compatibility note](../contracts/api-compatibility.md)).
 
+Report and context filters (`milestoneId`, `configurationId`) resolve identifiers across the whole
+store, so for a restricted caller an unresolvable or wholly out-of-scope identifier answers the
+EMPTY report — identical to a filter that matched nothing — rather than the `404`/`409` that would
+disclose existence in tenants the caller cannot see (#422). Ambiguity within reach stays the
+documented `409`, and a trusted deployment keeps every genuine `404`.
+
 The API process is stateless: replicas do not keep sessions or in-memory records. Horizontal scaling
 requires a shared persistent POSIX volume mounted at the same `TUCANO_DATA_DIR` for every replica.
-Repository mutations use an advisory lock file and atomic same-directory renames. A write that
+Repository mutations use an advisory lock file and atomic same-directory renames. An atomic publish
+is complete only when the DIRECTORY agrees: after every rename, unlink and attachment creation the
+owning directory is fsynced best-effort, so a write acknowledged across a power loss is a write that
+comes back — and a revoked grant, synced before the project folder is deleted, never resurrects
+(#423). A write that
 cannot take the lock within `TUCANO_LOCK_TIMEOUT_MS` (default `5000` ms) is refused with
 `503 lock_timeout` and a `Retry-After`, so a busy volume is answered rather than queued behind
 indefinitely. Two ceilings stand beside it on the request path

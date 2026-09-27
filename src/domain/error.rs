@@ -15,22 +15,43 @@ pub enum DomainError {
     /// The requested resource does not exist.
     NotFound(String),
     /// The request was malformed; `code` is the stable machine-readable code.
-    InvalidRequest { code: &'static str, message: String },
+    InvalidRequest {
+        /// The stable machine-readable code the client is answered with.
+        code: &'static str,
+        /// The human-readable message rendered into the envelope.
+        message: String,
+    },
     /// The request conflicts with existing state.
     Conflict(String),
     /// The `If-Match` ETag does not match the stored document; another writer
     /// changed it between the client's read and its update.
-    PreconditionFailed { current_etag: String },
+    PreconditionFailed {
+        /// The digest the stored document carries NOW, for the client's retry.
+        current_etag: String,
+    },
     /// The uploaded attachment is larger than [`crate::domain::MAX_ATTACHMENT_BYTES`].
     PayloadTooLarge,
     /// An unexpected internal failure carrying a specific message.
     Internal(String),
     /// A storage failure whose details must not reach the client.
     Storage,
+    /// A storage failure that remembers WHY, server-side only (#417).
+    ///
+    /// The client still sees the fixed `storage_error` envelope — the
+    /// difference is that the cause survives the conversion far enough to
+    /// be LOGGED: an ENOSPC on a dying volume, an EACCES after a bad
+    /// mount, an EIO mid-rename. Without this variant every one of those
+    /// collapses into an identical, undebuggable 500.
+    StorageWithCause(String),
     /// The advisory lock could not be acquired within the configured timeout.
     LockTimeout,
     /// The request carried no usable credential; `code` names what was wrong.
-    Unauthenticated { code: &'static str, message: String },
+    Unauthenticated {
+        /// Which of `missing_token`, `invalid_token` or `token_expired` this is.
+        code: &'static str,
+        /// The message rendered into the envelope.
+        message: String,
+    },
     /// The credential is valid, but the caller may not perform this request.
     Forbidden(String),
 }
@@ -132,8 +153,7 @@ impl DomainError {
             Self::Conflict(_) => "conflict",
             Self::PreconditionFailed { .. } => "conflict",
             Self::PayloadTooLarge => "payload_too_large",
-            Self::Internal(_) => "storage_error",
-            Self::Storage => "storage_error",
+            Self::Internal(_) | Self::Storage | Self::StorageWithCause(_) => "storage_error",
             Self::LockTimeout => "lock_timeout",
             Self::Unauthenticated { code, .. } => code,
             Self::Forbidden(_) => "forbidden",
@@ -152,7 +172,9 @@ impl Display for DomainError {
             }
             Self::PayloadTooLarge => write!(formatter, "payload too large"),
             Self::Internal(message) => write!(formatter, "internal error: {message}"),
-            Self::Storage => write!(formatter, "storage operation failed"),
+            Self::Storage | Self::StorageWithCause(_) => {
+                write!(formatter, "storage operation failed")
+            }
             Self::LockTimeout => write!(formatter, "lock acquisition timed out"),
             Self::Unauthenticated { code, message } => write!(formatter, "{code}: {message}"),
             Self::Forbidden(message) => write!(formatter, "forbidden: {message}"),
@@ -179,7 +201,9 @@ impl From<io::Error> for DomainError {
             io::ErrorKind::InvalidInput => Self::invalid_request("Invalid request"),
             io::ErrorKind::AlreadyExists => Self::Conflict("Resource already exists".to_owned()),
             io::ErrorKind::WouldBlock => Self::LockTimeout,
-            _ => Self::Storage,
+            // The kinds no client needs to know: keep the WHY for the log
+            // and answer the same fixed envelope anyway (#417).
+            kind => Self::StorageWithCause(format!("{kind:?}: {error}")),
         }
     }
 }

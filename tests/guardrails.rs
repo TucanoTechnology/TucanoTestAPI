@@ -7,53 +7,16 @@
 
 mod common;
 
-use std::{
-    pin::Pin,
-    task::{Context, Poll},
-    time::Duration,
-};
+use std::time::Duration;
 
 use axum::{
-    body::{Body, Bytes},
+    body::Body,
     http::{Request, StatusCode, header},
 };
 use tower::ServiceExt;
 
-use common::{app_at_with_guardrails, send_full, send_json};
+use common::{app_at_with_guardrails, send_full, send_json, stalling_post};
 use tucano_test::api::{MAX_BODY_BYTES, guardrails::Guardrails};
-
-/// A body that delivers nothing until its sender is dropped, then ends: a
-/// client that stalls, and (in the releasing test) a client whose bytes do
-/// arrive and whose request is genuinely answered by the handler.
-struct EosBody {
-    rx: tokio::sync::oneshot::Receiver<Bytes>,
-}
-
-impl futures_core::Stream for EosBody {
-    type Item = Result<Bytes, std::io::Error>;
-
-    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        match Pin::new(&mut self.rx).poll(cx) {
-            Poll::Ready(Ok(bytes)) => Poll::Ready(Some(Ok(bytes))),
-            // Sender dropped: the body ends empty, which the JSON extractor
-            // takes as the failure it is.
-            Poll::Ready(Err(_)) => Poll::Ready(None),
-            Poll::Pending => Poll::Pending,
-        }
-    }
-}
-
-/// A POST that stalls in the body until the returned sender is dropped.
-fn stalling_post(uri: &str) -> (Request<Body>, tokio::sync::oneshot::Sender<Bytes>) {
-    let (tx, rx) = tokio::sync::oneshot::channel::<Bytes>();
-    let request = Request::builder()
-        .method("POST")
-        .uri(uri)
-        .header(header::CONTENT_TYPE, "application/json")
-        .body(Body::from_stream(EosBody { rx }))
-        .expect("stalling request");
-    (request, tx)
-}
 
 fn get(uri: &str) -> Request<Body> {
     Request::get(uri).body(Body::empty()).expect("get request")

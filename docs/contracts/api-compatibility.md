@@ -72,6 +72,20 @@ which are never cached. Coverage reports are deliberately not cached: their
 invalidation surface is the case/suite folder tree, whose copy and move
 routes do not funnel through the write choke points the cache hooks.
 
+### Report-filter existence masking (Issue #422)
+
+For callers restricted to a project scope, `GET /reports/summary` filters
+`milestoneId` and `configurationId` no longer answer `404`/`409` for
+identifiers that exist only outside the caller's reach (or nowhere): both
+probe shapes answer the empty report, byte-identical to a filter that
+matched no results. Behaviour a documented contract still owes:
+ambiguity among homes at least one of which the caller can see stays
+`409`; a trusted deployment (or a system administrator) keeps the
+genuine `404`/`409`. Rationale: the filters resolved globally, which made
+the report endpoint a cross-tenant existence oracle even though every
+result row was properly scoped. Pinned by
+`foreign_and_absent_identifiers_answer_identically_to_a_restricted_caller`.
+
 ### Cross-reference limits (Issue #414)
 
 A run body may carry at most 512 entries in each of `projects`, `testSuites` and `testCases`;

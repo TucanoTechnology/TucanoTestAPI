@@ -29,7 +29,7 @@ use tucano_test::auth::{
 };
 use tucano_test::{api, repository::FileRepository};
 
-use common::{ROLE_CHECKED_WRITE_OPERATIONS, role_checked_write};
+use common::{ROLE_CHECKED_WRITE_OPERATIONS, assert_challenge, role_checked_write};
 
 const SECRET: &[u8] = b"an-integration-test-secret-of-32-plus!";
 const PASSWORD: &str = "correct horse battery staple";
@@ -240,17 +240,6 @@ async fn sign_in(app: &Router) -> Value {
 
 fn error_code(body: &Value) -> &str {
     body["error"]["code"].as_str().expect("error code")
-}
-
-fn assert_challenge(headers: &HeaderMap) {
-    let challenge = headers
-        .get(header::WWW_AUTHENTICATE)
-        .and_then(|value| value.to_str().ok())
-        .expect("WWW-Authenticate challenge");
-    assert!(
-        challenge.starts_with("Bearer realm="),
-        "not a bearer challenge: {challenge}"
-    );
 }
 
 fn access_token(session: &Value) -> &str {
@@ -553,6 +542,46 @@ async fn assert_forbidden(app: &Router, token: &str, method: &str, uri: &str, bo
     assert_eq!(error_code(&answer), "forbidden", "{method} {uri}: {answer}");
 }
 
+/// Every (method, path) the served openapi document does not declare
+/// `security: []`, with identifiers substituted by the matrix's standing
+/// `missing.json` placeholder — the guard answers before the resource
+/// resolves, so the placeholder only needs to be path-shaped.
+fn guarded_operations() -> Vec<(String, String)> {
+    let spec: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/openapi.json"))
+            .expect("the served contract must parse for its matrix"),
+    )
+    .expect("openapi.json must be valid JSON");
+    let mut operations = Vec::new();
+    for (path, item) in spec["paths"].as_object().expect("paths object") {
+        let Some(item) = item.as_object() else {
+            continue;
+        };
+        for method in ["get", "post", "put", "delete"] {
+            let Some(operation) = item.get(method) else {
+                continue;
+            };
+            if operation.get("security") == Some(&serde_json::json!([])) {
+                continue;
+            }
+            let concrete = path
+                .split('/')
+                .map(|segment| {
+                    if segment.starts_with('{') {
+                        "missing.json"
+                    } else {
+                        segment
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join("/");
+            operations.push((method.to_uppercase(), concrete));
+        }
+    }
+    operations.sort();
+    operations
+}
+
 async fn assert_anonymous_refused(app: &Router, method: &str, uri: &str) {
     let (status, headers, answer) = send(app, request(method, uri, None, None)).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED, "{method} {uri}: {answer}");
@@ -684,95 +713,44 @@ async fn every_guarded_operation_refuses_an_anonymous_caller() {
     let directory = tempfile::tempdir().expect("temp dir");
     let app = enforcing_app(directory.path());
 
-    let operations: Vec<(&str, &str)> = vec![
-        ("GET", "/projects"),
-        ("POST", "/projects"),
-        ("GET", "/projects/missing.json"),
-        ("PUT", "/projects/missing.json"),
-        ("DELETE", "/projects/missing.json"),
-        ("POST", "/projects/missing.json/duplicate"),
-        ("GET", "/test_suites"),
-        ("POST", "/test_suites"),
-        ("GET", "/test_suites/missing.json"),
-        ("PUT", "/test_suites/missing.json"),
-        ("DELETE", "/test_suites/missing.json"),
-        ("POST", "/test_suites/missing.json/duplicate"),
-        ("GET", "/test_suites/missing.json/test_cases"),
-        ("POST", "/test_suites/missing.json/test_cases"),
-        ("DELETE", "/test_suites/missing.json/test_cases/missing"),
-        ("GET", "/projects/missing.json/test_suites"),
-        ("POST", "/projects/missing.json/test_suites"),
-        ("DELETE", "/projects/missing.json/test_suites/missing.json"),
-        ("GET", "/test_cases"),
-        ("POST", "/test_cases"),
-        ("GET", "/test_cases/missing"),
-        ("PUT", "/test_cases/missing"),
-        ("DELETE", "/test_cases/missing"),
-        ("POST", "/test_cases/missing/duplicate"),
-        ("POST", "/test_cases/missing/attachments"),
-        ("GET", "/test_cases/missing/attachments/report.txt"),
-        ("DELETE", "/test_cases/missing/attachments/report.txt"),
-        ("GET", "/test_cases/missing/steps/0/attachments"),
-        ("POST", "/test_cases/missing/steps/0/attachments"),
-        ("GET", "/test_cases/missing/steps/0/attachments/report.txt"),
-        (
-            "DELETE",
-            "/test_cases/missing/steps/0/attachments/report.txt",
-        ),
-        ("GET", "/test_cases/missing/history"),
-        ("GET", "/test_cases/missing/history/1"),
-        ("GET", "/projects/missing.json/test_cases"),
-        ("POST", "/projects/missing.json/test_cases"),
-        ("DELETE", "/projects/missing.json/test_cases/missing"),
-        ("GET", "/test_runs"),
-        ("POST", "/test_runs"),
-        ("GET", "/test_runs/missing.json"),
-        ("PUT", "/test_runs/missing.json"),
-        ("DELETE", "/test_runs/missing.json"),
-        ("POST", "/test_runs/missing.json/duplicate"),
-        ("POST", "/test_runs/missing.json/test_suites"),
-        ("POST", "/test_runs/missing.json/test_cases"),
-        ("POST", "/test_runs/missing.json/results"),
-        ("PUT", "/test_runs/missing.json/results/missing"),
-        ("DELETE", "/test_runs/missing.json/results/missing"),
-        ("GET", "/test_runs/missing.json/results/missing/defects"),
-        ("POST", "/test_runs/missing.json/results/missing/defects"),
-        (
-            "DELETE",
-            "/test_runs/missing.json/results/missing/defects/link-1",
-        ),
-        ("POST", "/test_runs/missing.json/import/junit"),
-        ("POST", "/test_runs/missing.json/import/json"),
-        ("POST", "/test_runs/missing.json/configurations"),
-        ("DELETE", "/test_runs/missing.json/configurations/config-1"),
-        ("GET", "/milestones"),
-        ("POST", "/milestones"),
-        ("GET", "/milestones/missing.json"),
-        ("PUT", "/milestones/missing.json"),
-        ("DELETE", "/milestones/missing.json"),
-        ("POST", "/milestones/missing.json/duplicate"),
-        ("GET", "/milestones/missing.json/progress"),
-        ("GET", "/releases"),
-        ("GET", "/environments"),
-        ("GET", "/configurations"),
-        ("POST", "/configurations"),
-        ("GET", "/configurations/missing.json"),
-        ("PUT", "/configurations/missing.json"),
-        ("DELETE", "/configurations/missing.json"),
-        ("GET", "/reports/coverage"),
-        ("GET", "/reports/summary"),
-        ("POST", "/auth/logout"),
-        ("GET", "/auth/me"),
-    ];
+    // The probe set is DERIVED from the served contract: every operation
+    // openapi.json does not explicitly mark `security: []` must answer an
+    // anonymous caller with the bearer challenge. A route added without a
+    // thought about authentication can no longer slip past a stale manual
+    // matrix — the matrix IS the contract, and drift is impossible (#421).
+    let operations = guarded_operations();
     assert_eq!(
         operations.len(),
-        72,
-        "the guarded surface changed; update this matrix with it"
+        83,
+        "the guarded surface changed with openapi.json; this assertion is the drift trip-wire"
     );
 
     for (method, uri) in operations {
-        assert_anonymous_refused(&app, method, uri).await;
+        assert_anonymous_refused(&app, &method, &uri).await;
     }
+}
+
+/// An expired-but-genuine token is its own contract line: 401, the
+/// `token_expired` code, and the bearer challenge — the unit surface had
+/// expiry covered; over the ROUTER nothing exercised it until #421.
+#[tokio::test]
+async fn an_expired_access_token_is_refused_as_expired_over_the_router() {
+    let directory = tempfile::tempdir().expect("temp dir");
+    let app = enforcing_app(directory.path());
+    // Signed by the deployment's own secret, minted in 2023, valid for
+    // fifteen minutes: the only thing wrong with it is that time moved.
+    let stale = tucano_test::auth::mint_access_token(
+        SECRET,
+        "account-1",
+        false,
+        std::time::Duration::from_secs(900),
+        1_700_000_000,
+    );
+    let (status, headers, answer) =
+        send(&app, request("GET", "/projects", Some(&stale), None)).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "{answer}");
+    assert_eq!(error_code(&answer), "token_expired", "{answer}");
+    assert_challenge(&headers);
 }
 
 /// The endpoints that exist before a caller does stay open, and the ones a

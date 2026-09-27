@@ -137,7 +137,9 @@ unknown refresh token is recorded as `replay`) and logout write the same event k
 body, credential, or attachment's contents are ever logged.
 
 `TUCANO_LOG` is the `tracing-subscriber` directive set, defaulting to `info` — the request spans, the
-audit lines and the failures, without the per-connection noise `debug` adds. `TUCANO_LOG_FORMAT` is
+audit lines and the failures, without the per-connection noise `debug` adds — including an `error`
+line for every 500 that names the server-side cause (the client keeps receiving the fixed,
+redacted envelope, #417). `TUCANO_LOG_FORMAT` is
 `compact` (the default, one human-readable line per event, coloured only when stdout is a terminal)
 or `json` (one object per event, uncoloured, for a collector to parse). Both are read once at
 startup, so an unparseable directive set or an unknown format stops the server rather than a

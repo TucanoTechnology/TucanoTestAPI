@@ -35,11 +35,17 @@ pub const MAX_COMPONENT_BYTES: usize = 255;
 /// A resource collection known to the storage layout.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Resource {
+    /// Projects live at the top: one folder each, named by the wire id.
     Projects,
+    /// Cases are documents inside a project or suite folder.
     Cases,
+    /// Suites are folders inside a project, carrying their cases.
     Suites,
+    /// Runs are documents in a project's `test_runs` collection.
     Runs,
+    /// Milestones are documents in a project's `milestones` collection.
     Milestones,
+    /// Configurations are documents in a project's `configurations` collection.
     Configurations,
 }
 
@@ -128,8 +134,15 @@ impl Resource {
 /// Identifiers are wire ids, so `checkout.json` names the folder `checkout`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Parent {
+    /// The project folder itself, named by its wire id.
     Project(String),
-    Suite { project: String, suite: String },
+    /// A suite folder inside a project; the pair addresses it exactly.
+    Suite {
+        /// Wire id of the owning project.
+        project: String,
+        /// Wire id of the suite folder.
+        suite: String,
+    },
 }
 
 impl Parent {

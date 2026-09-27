@@ -169,6 +169,38 @@ impl<R: Repository + 'static> TestService<R> {
         serde_json::from_value(value).map_err(|error| DomainError::Internal(error.to_string()))
     }
 
+    /// Whether an identifier-filter resolution failure must be answered as
+    /// the empty report rather than echoed to the caller (#422).
+    ///
+    /// The scope-filtered report is the one endpoint a restricted caller may
+    /// probe with identifiers it does not own; until now a 404 meant "no
+    /// such milestone anywhere" and a 409 meant "several" — across EVERY
+    /// tenant's data, an existence oracle smuggled inside a properly scoped
+    /// answer. Errors that are not NotFound/Conflict (a real storage
+    /// failure) are never masked, and a caller that CAN see one of the
+    /// homes keeps receiving the documented 409 for genuine ambiguity: what
+    /// disappears is only the cross-tenant signal, never a stated contract.
+    fn filter_out_of_reach(
+        &self,
+        resource: Resource,
+        id: &str,
+        reachable: Option<&[String]>,
+        error: &DomainError,
+    ) -> bool {
+        if !matches!(error, DomainError::NotFound(_) | DomainError::Conflict(_)) {
+            return false;
+        }
+        let Some(reachable) = reachable else {
+            return false;
+        };
+        !self
+            .repository
+            .locate(resource, id)
+            .unwrap_or_default()
+            .iter()
+            .any(|home| reachable.contains(&home.project().to_owned()))
+    }
+
     fn summary_report_uncached(
         &self,
         filters: &reports::SummaryFilters,
@@ -182,26 +214,43 @@ impl<R: Repository + 'static> TestService<R> {
         let milestone_runs = match filters.milestone_id.as_deref() {
             Some(id) => {
                 // A filter names no home to prefer, so the milestone resolves
-                // globally exactly as the route that reads it does.
-                let home = self.resolve(Resource::Milestones, id, None, "Milestone not found")?;
-                let value = self
-                    .repository
-                    .read_at(Resource::Milestones, Some(&home), id)
-                    .map_err(error::milestone_error)?;
-                let milestone: Milestone = serde_json::from_value(value).map_err(|_| {
-                    DomainError::Internal("Stored milestone JSON is invalid".to_owned())
-                })?;
-                Some(milestone.test_run_ids.unwrap_or_default())
+                // globally exactly as the route that reads it does — but the
+                // ANSWER a restricted caller gets for an identifier outside
+                // its scope is the empty report, never the 404 or 409 that
+                // would betray whether it exists at all (#422).
+                match self.resolve(Resource::Milestones, id, None, "Milestone not found") {
+                    Ok(home) => {
+                        let value = self
+                            .repository
+                            .read_at(Resource::Milestones, Some(&home), id)
+                            .map_err(error::milestone_error)?;
+                        let milestone: Milestone = serde_json::from_value(value).map_err(|_| {
+                            DomainError::Internal("Stored milestone JSON is invalid".to_owned())
+                        })?;
+                        Some(milestone.test_run_ids.unwrap_or_default())
+                    }
+                    Err(error) => {
+                        if self.filter_out_of_reach(Resource::Milestones, id, reachable, &error) {
+                            return Ok(reports::summary(&[]));
+                        }
+                        return Err(error);
+                    }
+                }
             }
             None => None,
         };
 
         if let Some(config_id) = filters.configuration_id.as_deref() {
             // A filter value is not a dereference, so an identifier two projects
-            // hold is not a conflict here; one none holds is still absent.
+            // hold is not a conflict here; one none holds is absent — and for a
+            // restricted caller, absent and invisible answer identically: the
+            // empty report, like any unmatched filter (#422).
             match self.repository.locate(Resource::Configurations, config_id) {
                 Ok(homes) if !homes.is_empty() => {}
                 Ok(_) => {
+                    if reachable.is_some() {
+                        return Ok(reports::summary(&[]));
+                    }
                     return Err(DomainError::NotFound(
                         entity_missing_message(Resource::Configurations).to_owned(),
                     ));

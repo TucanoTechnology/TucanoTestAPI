@@ -38,22 +38,29 @@ pub const MAX_ATTACHMENT_BYTES: usize = 50 * 1024 * 1024;
 /// references; the other listings ignore it.
 #[derive(Debug, Clone, Deserialize, Default)]
 pub struct ListQuery {
+    /// `?filter=`: a case-insensitive substring of the identifier.
     pub filter: Option<String>,
+    /// `?tags=`: comma-separated labels, any-of semantics.
     pub tags: Option<String>,
+    /// `?configuration=`: runs linking this configuration identifier.
     pub configuration: Option<String>,
 }
 
 /// Identifier assigned to a freshly created resource.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Created {
+    /// The identifier the API assigned to the new resource.
     pub id: String,
 }
 
 /// Metadata describing an attachment that was just persisted.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StoredAttachment {
+    /// The name the file is stored under.
     pub filename: String,
+    /// The name the uploader supplied.
     pub original_name: String,
+    /// Bytes stored.
     pub size: usize,
 }
 
