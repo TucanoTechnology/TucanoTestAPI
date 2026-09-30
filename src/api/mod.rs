@@ -298,6 +298,7 @@ pub const ROUTES: &[&str] = &[
     "/milestones/{id}/duplicate",
     "/milestones/{id}/progress",
     "/reports/coverage",
+    "/reports/last-results",
     "/reports/summary",
     "/releases",
     "/environments",

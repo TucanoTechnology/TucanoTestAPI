@@ -13,7 +13,7 @@ use crate::{
         DomainError,
         reports::{self, SummaryFilters},
     },
-    models::{CoverageReport, SummaryReport},
+    models::{CoverageReport, LastResultsReport, SummaryReport},
     storage::Repository,
 };
 
@@ -37,6 +37,16 @@ struct SummaryQuery {
     configuration_id: Option<String>,
     from: Option<String>,
     to: Option<String>,
+}
+
+/// Query parameters of the last-results report. `projectId` restricts the
+/// report to one project exactly as it does for coverage: supplied, the answer
+/// covers that project alone and echoes the identifier back; omitted, the
+/// report covers every project the caller can reach.
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct LastResultsQuery {
+    project_id: Option<String>,
 }
 
 async fn get_coverage<R: Repository + 'static>(
@@ -91,8 +101,43 @@ async fn get_summary<R: Repository + 'static>(
     .await
 }
 
+async fn get_last_results<R: Repository + 'static>(
+    State(service): State<AppState<R>>,
+    principal: Principal,
+    Query(query): Query<LastResultsQuery>,
+) -> Result<Json<LastResultsReport>, DomainError> {
+    // The walk reads every run in scope, so it is parked on the blocking
+    // pool like the other reports (#410).
+    super::on_blocking(move || -> Result<Json<LastResultsReport>, DomainError> {
+        let reachable = access::scope(service.auth(), &principal)?;
+        // The scope resolves exactly as coverage resolves it — a named
+        // project must carry the caller's Viewer grant before its results are
+        // read — and the reachable set travels on as the run-level filter:
+        // a home the caller can reach can still hold runs whose `projects`
+        // snapshot reaches beyond it (#399).
+        let scope = match query.project_id {
+            Some(id) => {
+                if reachable.is_some() {
+                    access::require(&service, &principal, &id, Role::Viewer)?;
+                }
+                reports::Scope::Project(id)
+            }
+            None => match reachable.as_ref() {
+                None => reports::Scope::All,
+                Some(reachable) => reports::Scope::Projects(reachable.iter().cloned().collect()),
+            },
+        };
+        let reachable = reachable.map(|set| set.into_iter().collect::<Vec<String>>());
+        Ok(Json(
+            service.last_results_report(scope, reachable.as_deref())?,
+        ))
+    })
+    .await
+}
+
 pub(crate) fn routes<R: Repository + 'static>() -> Router<AppState<R>> {
     Router::new()
         .route("/reports/coverage", get(get_coverage::<R>))
+        .route("/reports/last-results", get(get_last_results::<R>))
         .route("/reports/summary", get(get_summary::<R>))
 }

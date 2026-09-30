@@ -18,8 +18,8 @@ use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 
 use crate::models::{
-    CaseHistoryEntry, CoverageReport, DefectLink, ImportCounts, ImportSummary, Milestone,
-    MilestoneProgress, SummaryReport, TestCase, TestConfiguration, TestRun, TestSuite,
+    CaseHistoryEntry, CoverageReport, DefectLink, ImportCounts, ImportSummary, LastResultsReport,
+    Milestone, MilestoneProgress, SummaryReport, TestCase, TestConfiguration, TestRun, TestSuite,
 };
 use crate::storage::{
     MAX_COMPONENT_BYTES, Parent, Placement, Repository, Resource, StorageProbe, unique_suffix,

@@ -1058,7 +1058,7 @@ async fn openapi_documents_the_error_contract_of_every_operation() {
 /// Neither half subsumes the other. The table names a test but cannot see
 /// whether it reaches the route; the recording sees a success but cannot say
 /// which test produced it, only that one in the run did. Keep both.
-const CONTRACT_COVERAGE: [(&str, &str); 91] = [
+const CONTRACT_COVERAGE: [(&str, &str); 92] = [
     ("get /health", "health_reports_filesystem_storage"),
     (
         "get /openapi.json",
@@ -1372,6 +1372,10 @@ const CONTRACT_COVERAGE: [(&str, &str); 91] = [
         "a_global_report_sums_every_project",
     ),
     (
+        "get /reports/last-results",
+        "last_results_report_the_latest_result_per_case",
+    ),
+    (
         "get /reports/summary",
         "an_empty_tree_reports_an_all_zero_summary",
     ),
@@ -1625,7 +1629,7 @@ async fn openapi_declares_the_security_posture_of_every_operation() {
     ];
 
     let operations = documented_operations(&document);
-    assert_eq!(operations.len(), 91, "the documented surface changed");
+    assert_eq!(operations.len(), 92, "the documented surface changed");
 
     for (label, operation) in &operations {
         let responses = operation["responses"].as_object().expect("responses");
@@ -1683,7 +1687,7 @@ async fn openapi_declares_the_security_posture_of_every_operation() {
         .filter(|(_, operation)| operation["responses"].get("403").is_some())
         .count();
     assert_eq!(
-        refuses, 80,
+        refuses, 81,
         "the 403 surface changed; update this count with it"
     );
 }
@@ -1894,7 +1898,7 @@ async fn openapi_operations_carry_stable_ids_and_resource_tags() {
             "{label} carries an undeclared tag: {tag}"
         );
     }
-    assert_eq!(ids.len(), 91, "every documented operation is named");
+    assert_eq!(ids.len(), 92, "every documented operation is named");
 }
 
 #[tokio::test]
