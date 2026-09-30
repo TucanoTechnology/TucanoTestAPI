@@ -70,6 +70,7 @@ example is a gap, not a deferral.
 | 28 | Authorization enforcement | an `editor` token writes the content inside its project — `POST /projects/{id}/test_suites` is accepted — while `PUT /projects/{id}` on the same project is refused with `forbidden`, because the project document needs `owner`. The `viewer`-scoped token proves reads succeed and a write needing a grant it does not hold is refused | any guarded write with the scoped token | n/a (the acceptance and the refusal are the evidence) |
 | 29 | Sessions | sign in, refresh (rotating the refresh token once), sign out, `GET /auth/me` | `POST /auth/login`, `POST /auth/refresh`, `POST /auth/logout`, `GET /auth/me` | n/a (`auth/users.json` carries the revocable refresh tokens) |
 | 30 | Service surface | `GET /health`, `GET /ready`, `GET /diagnostics`, `GET /openapi.json`, `GET /metrics` | the service routes | n/a (read-only) |
+| 31 | Last-results report | `GET /reports/last-results`, global and `?projectId=checkout.json` — the latest recorded result per case, with the run that recorded it (#457) | the report routes | n/a (read-only — no new files) |
 
 Rows 23, 24, 28, 29 and 30 are coverage of behaviour rather than of stored
 documents: their evidence is the response the call returns, and they exist so

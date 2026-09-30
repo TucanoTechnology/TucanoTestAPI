@@ -441,9 +441,7 @@ pub struct SummaryReport {
 }
 
 /// The latest result one case holds among the runs in scope, as the
-/// [`last_results`] report lists them.
-///
-/// [`last_results`]: crate::domain::reports::last_results
+/// `last_results` report (#457) lists them.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct LastCaseResult {
@@ -465,8 +463,7 @@ pub struct LastCaseResult {
 /// One entry per case that at least one in-scope run recorded a result for; a
 /// case no run has covered is **absent** rather than reported as `Untested`,
 /// because absence and untested are different statements. `cases` is sorted by
-/// `testCaseId`. See [`domain::reports::last_results`] for the reduction the
-/// entries name.
+/// `testCaseId`. The reduction is the `last_results` aggregation (#457).
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct LastResultsReport {

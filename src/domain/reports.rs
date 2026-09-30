@@ -170,7 +170,7 @@ fn result_recency(timestamp: &str) -> (u8, i64, &str) {
 
 /// Reduces every result the walk observed to the latest one per case.
 ///
-/// "Latest" is [`result_recency`]'s order; an exact tie — same timestamp, so
+/// "Latest" is the order of `result_recency`; an exact tie — same timestamp, so
 /// the clock cannot separate the records — is broken by the run key, so the
 /// answer depends on the stored tree alone and not on the order two callers'
 /// walks happened to read it in. A case no in-scope run recorded is
