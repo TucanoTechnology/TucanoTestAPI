@@ -5,7 +5,10 @@
 //! response models. Keeping the arithmetic separate from the walk keeps it
 //! testable without a filesystem.
 
-use crate::models::{CoverageReport, SuiteCoverage, SummaryReport, TestCaseResult, TestRun};
+use crate::models::{
+    CoverageReport, LastCaseResult, LastResultsReport, SuiteCoverage, SummaryReport,
+    TestCaseResult, TestRun,
+};
 
 use super::error::DomainError;
 
@@ -139,6 +142,81 @@ pub fn summary(results: &[TestCaseResult]) -> SummaryReport {
     }
 }
 
+/// One result the report walk observed, kept with the address of the run
+/// that recorded it. The run's listing key travels with the result because
+/// the answer names where the full record lives, not just what it said.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ObservedResult {
+    /// The listing key of the run that holds the result.
+    pub run_id: String,
+    /// The result the run records.
+    pub result: TestCaseResult,
+}
+
+/// How recent a stored timestamp string is, as the ordering key of the
+/// [`last_results`] reduction.
+///
+/// A value that reads as a whole number of epoch seconds ranks by that number
+/// and beats one that does not parse at all; unparseable values — a
+/// hand-edited document, an ISO date where the record route writes seconds —
+/// order lexicographically among themselves. The point is a total order a
+/// reader can reproduce from the contract, never a dropped or guessed result.
+fn result_recency(timestamp: &str) -> (u8, i64, &str) {
+    match timestamp.trim().parse::<i64>() {
+        Ok(seconds) => (1, seconds, ""),
+        Err(_) => (0, 0, timestamp),
+    }
+}
+
+/// Reduces every result the walk observed to the latest one per case.
+///
+/// "Latest" is [`result_recency`]'s order; an exact tie — same timestamp, so
+/// the clock cannot separate the records — is broken by the run key, so the
+/// answer depends on the stored tree alone and not on the order two callers'
+/// walks happened to read it in. A case no in-scope run recorded is
+/// **absent**: absence and `Untested` are different statements, and the
+/// caller that means "never run" reads the case list beside this report.
+/// The `cases` are sorted by identifier, and `project_id` is the scope echo
+/// the route resolved, `None` for a global report.
+pub fn last_results(project_id: Option<&str>, observed: Vec<ObservedResult>) -> LastResultsReport {
+    let mut winners: std::collections::HashMap<&str, &ObservedResult> =
+        std::collections::HashMap::new();
+    for entry in &observed {
+        let candidate = (
+            result_recency(&entry.result.timestamp),
+            entry.run_id.as_str(),
+        );
+        let replace = winners
+            .get(entry.result.test_case_id.as_str())
+            .is_none_or(|current| {
+                candidate
+                    > (
+                        result_recency(&current.result.timestamp),
+                        current.run_id.as_str(),
+                    )
+            });
+        if replace {
+            winners.insert(entry.result.test_case_id.as_str(), entry);
+        }
+    }
+
+    let mut cases: Vec<LastCaseResult> = winners
+        .values()
+        .map(|entry| LastCaseResult {
+            test_case_id: entry.result.test_case_id.clone(),
+            status: entry.result.status.clone(),
+            run_id: entry.run_id.clone(),
+            timestamp: entry.result.timestamp.clone(),
+        })
+        .collect();
+    cases.sort_by(|a, b| a.test_case_id.cmp(&b.test_case_id));
+
+    LastResultsReport {
+        project_id: project_id.map(str::to_owned),
+        cases,
+    }
+}
+
 /// Whether a run belongs in a summary report.
 ///
 /// `home` is the project the run is stored in, which counts as a match for a
@@ -268,6 +346,91 @@ mod tests {
             name: suite_id.trim_end_matches(".json").to_owned(),
             case_count,
         }
+    }
+
+    fn observed(run_id: &str, case_id: &str, status: &str, timestamp: &str) -> ObservedResult {
+        ObservedResult {
+            run_id: run_id.to_owned(),
+            result: TestCaseResult {
+                test_case_id: case_id.to_owned(),
+                status: status.to_owned(),
+                timestamp: timestamp.to_owned(),
+                notes: None,
+                duration_ms: None,
+                attachments: None,
+                defect_links: None,
+            },
+        }
+    }
+
+    #[test]
+    fn last_results_keeps_the_latest_timestamp_per_case() {
+        let report = last_results(
+            None,
+            vec![
+                observed("early.json", "TC-1.json", "Passed", "1757800000"),
+                observed("late.json", "TC-1.json", "Failed", "1757800001"),
+                observed("late.json", "TC-2.json", "Blocked", "5"),
+            ],
+        );
+        assert_eq!(report.project_id, None);
+        assert_eq!(report.cases.len(), 2);
+        assert_eq!(report.cases[0].test_case_id, "TC-1.json");
+        assert_eq!(report.cases[0].status, "Failed");
+        assert_eq!(report.cases[0].run_id, "late.json");
+        assert_eq!(report.cases[0].timestamp, "1757800001");
+        assert_eq!(report.cases[1].test_case_id, "TC-2.json");
+    }
+
+    #[test]
+    fn a_parseable_recency_beats_a_garbage_one_however_late_it_sorts() {
+        let report = last_results(
+            None,
+            vec![
+                observed("a.json", "TC-1.json", "Passed", "zzz-not-a-date"),
+                observed("b.json", "TC-1.json", "Retest", "1"),
+            ],
+        );
+        assert_eq!(report.cases[0].status, "Retest");
+
+        // Among garbage values the lexicographically greater one wins, so the
+        // answer is still determined by the tree alone.
+        let report = last_results(
+            None,
+            vec![
+                observed("a.json", "TC-1.json", "Passed", "abc"),
+                observed("b.json", "TC-1.json", "Blocked", "abd"),
+            ],
+        );
+        assert_eq!(report.cases[0].status, "Blocked");
+    }
+
+    #[test]
+    fn an_exact_tie_breaks_on_the_run_key_not_on_walk_order() {
+        let forward = last_results(
+            None,
+            vec![
+                observed("first.json", "TC-1.json", "Passed", "1757800000"),
+                observed("second.json", "TC-1.json", "Failed", "1757800000"),
+            ],
+        );
+        let backward = last_results(
+            None,
+            vec![
+                observed("second.json", "TC-1.json", "Failed", "1757800000"),
+                observed("first.json", "TC-1.json", "Passed", "1757800000"),
+            ],
+        );
+        assert_eq!(forward, backward);
+        assert_eq!(forward.cases[0].run_id, "second.json");
+    }
+
+    #[test]
+    fn a_case_no_run_recorded_is_absent_from_the_report() {
+        let report = last_results(None, Vec::new());
+        assert!(report.cases.is_empty());
+        let report = last_results(Some("checkout.json"), Vec::new());
+        assert_eq!(report.project_id.as_deref(), Some("checkout.json"));
     }
 
     #[test]

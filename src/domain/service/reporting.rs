@@ -310,4 +310,102 @@ impl<R: Repository + 'static> TestService<R> {
 
         Ok(reports::summary(&results))
     }
+
+    /// Reports the latest result recorded for each case the runs in `scope`
+    /// have covered, with the run each answer was read from.
+    ///
+    /// The walk follows [`Self::summary_report`]'s rules for reachability: a
+    /// restricted caller only sees results recorded in runs reachable to it,
+    /// and runs that cannot be read or decoded are skipped rather than
+    /// failing the whole report, matching [`Self::milestone_progress`]. The
+    /// `scope` decides which projects are walked exactly as it does for
+    /// coverage; `reachable` is the authorisation filter over the runs inside
+    /// them, so a trusted caller passing `None` sees every run.
+    pub fn last_results_report(
+        &self,
+        scope: reports::Scope,
+        reachable: Option<&[String]>,
+    ) -> Result<LastResultsReport, DomainError> {
+        // Reads and deserializes EVERY run in scope per call (#415), so it is
+        // cached like the summary: keyed by the resolved scope and the
+        // reachable set, because a restricted caller and a system
+        // administrator must never share one answer. Per-caller scope
+        // resolution happens in the route before this runs, so a cached key
+        // already carries the authorisation the answer depends on.
+        let scope_key = match &scope {
+            reports::Scope::All => "all".to_owned(),
+            reports::Scope::Project(id) => format!("project|{id}"),
+            reports::Scope::Projects(ids) => {
+                let mut sorted = ids.clone();
+                sorted.sort();
+                format!("projects|{}", sorted.join(","))
+            }
+        };
+        let key = format!(
+            "last-results|{}|{scope_key}",
+            super::cache::scope_key(reachable)
+        );
+        let value = self.cached_derivations(&key, || {
+            serde_json::to_value(self.last_results_report_uncached(&scope, reachable)?)
+                .map_err(|error| DomainError::Internal(error.to_string()))
+        })?;
+        serde_json::from_value(value).map_err(|error| DomainError::Internal(error.to_string()))
+    }
+
+    fn last_results_report_uncached(
+        &self,
+        scope: &reports::Scope,
+        reachable: Option<&[String]>,
+    ) -> Result<LastResultsReport, DomainError> {
+        // The scope resolves exactly as coverage resolves it: a named project
+        // is verified to exist and is echoed back; a reachable set is taken as
+        // given, so a project deleted since the filter answered contributes
+        // nothing rather than failing the report.
+        let (echo, projects): (Option<String>, Vec<String>) = match scope {
+            reports::Scope::All => (
+                None,
+                self.repository
+                    .list(Resource::Projects)
+                    .map_err(error::read_error)?,
+            ),
+            reports::Scope::Project(id) => {
+                self.require_parent(&Parent::Project(id.clone()))?;
+                (Some(id.clone()), vec![id.clone()])
+            }
+            reports::Scope::Projects(ids) => (None, ids.clone()),
+        };
+
+        let mut observed = Vec::new();
+        for project in projects {
+            let home = Parent::Project(project);
+            let run_ids = self
+                .repository
+                .list_children(&home, Resource::Runs)
+                .map_err(error::read_error)?;
+            for run_id in run_ids {
+                let Ok(value) = self
+                    .repository
+                    .read_at(Resource::Runs, Some(&home), &run_id)
+                else {
+                    continue;
+                };
+                let Ok(run) = serde_json::from_value::<TestRun>(value) else {
+                    continue;
+                };
+                if let Some(reachable) = reachable
+                    && !reports::run_reachable(&run, home.project(), reachable)
+                {
+                    continue;
+                }
+                observed.extend(run.results.unwrap_or_default().into_iter().map(|result| {
+                    reports::ObservedResult {
+                        run_id: run_id.clone(),
+                        result,
+                    }
+                }));
+            }
+        }
+
+        Ok(reports::last_results(echo.as_deref(), observed))
+    }
 }
