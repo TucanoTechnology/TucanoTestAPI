@@ -1,10 +1,7 @@
 mod common;
 
 use axum::http::StatusCode;
-use common::{
-    assert_error_envelope, delete, fixture_home, get, json_request, send_json,
-    test_app,
-};
+use common::{assert_error_envelope, delete, fixture_home, get, json_request, send_json, test_app};
 use serde_json::json;
 
 #[tokio::test]
