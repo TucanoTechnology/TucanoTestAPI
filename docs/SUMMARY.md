@@ -31,6 +31,7 @@
 - [ADR: object storage declined](architecture/adr-object-storage.md)
 - [Storage backends](architecture/storage-backends.md)
 - [ADR: storage layout v3](architecture/adr-storage-layout-v3.md)
+- [ADR: workflow definitions](architecture/adr-workflow-definitions.md)
 - [Wiki structure and publication](architecture/wiki-structure-and-publication.md)
 - [Performance baselines](architecture/performance.md)
 
