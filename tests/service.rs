@@ -1058,7 +1058,7 @@ async fn openapi_documents_the_error_contract_of_every_operation() {
 /// Neither half subsumes the other. The table names a test but cannot see
 /// whether it reaches the route; the recording sees a success but cannot say
 /// which test produced it, only that one in the run did. Keep both.
-const CONTRACT_COVERAGE: [(&str, &str); 98] = [
+const CONTRACT_COVERAGE: [(&str, &str); 106] = [
     ("get /health", "health_reports_filesystem_storage"),
     (
         "get /openapi.json",
@@ -1420,6 +1420,38 @@ const CONTRACT_COVERAGE: [(&str, &str); 98] = [
         "configurations_support_the_full_crud_lifecycle",
     ),
     (
+        "get /workflows",
+        "workflows_are_created_inside_a_project",
+    ),
+    (
+        "post /workflows",
+        "workflows_are_created_inside_a_project",
+    ),
+    (
+        "get /workflows/{id}",
+        "workflows_support_the_full_crud_lifecycle",
+    ),
+    (
+        "put /workflows/{id}",
+        "workflows_support_the_full_crud_lifecycle",
+    ),
+    (
+        "delete /workflows/{id}",
+        "workflows_support_the_full_crud_lifecycle",
+    ),
+    (
+        "get /projects/{id}/workflows",
+        "workflows_are_created_inside_a_project",
+    ),
+    (
+        "post /projects/{id}/workflows",
+        "workflows_are_created_inside_a_project",
+    ),
+    (
+        "delete /projects/{id}/workflows/{workflow_id}",
+        "workflows_support_the_full_crud_lifecycle",
+    ),
+    (
         "get /environments",
         "environment_names_are_distinct_sorted_and_scoped_to_the_caller",
     ),
@@ -1653,7 +1685,7 @@ async fn openapi_declares_the_security_posture_of_every_operation() {
     ];
 
     let operations = documented_operations(&document);
-    assert_eq!(operations.len(), 98, "the documented surface changed");
+    assert_eq!(operations.len(), 106, "the documented surface changed");
 
     for (label, operation) in &operations {
         let responses = operation["responses"].as_object().expect("responses");
@@ -1711,7 +1743,7 @@ async fn openapi_declares_the_security_posture_of_every_operation() {
         .filter(|(_, operation)| operation["responses"].get("403").is_some())
         .count();
     assert_eq!(
-        refuses, 87,
+        refuses, 95,
         "the 403 surface changed; update this count with it"
     );
 }
@@ -1886,6 +1918,7 @@ async fn openapi_operations_carry_stable_ids_and_resource_tags() {
             "TestRuns",
             "Milestones",
             "Configurations",
+            "Workflows",
             "Reports",
             "Auth",
         ],
@@ -1922,7 +1955,7 @@ async fn openapi_operations_carry_stable_ids_and_resource_tags() {
             "{label} carries an undeclared tag: {tag}"
         );
     }
-    assert_eq!(ids.len(), 98, "every documented operation is named");
+    assert_eq!(ids.len(), 106, "every documented operation is named");
 }
 
 #[tokio::test]

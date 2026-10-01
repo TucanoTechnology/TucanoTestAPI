@@ -633,6 +633,9 @@ async fn the_tags_parameter_is_published_only_where_a_tag_can_be_stored() {
             "TestRunUpdateRequest",
             "TestSuite",
             "TestSuiteUpdateRequest",
+            "Workflow",
+            "WorkflowCreateRequest",
+            "WorkflowUpdateRequest",
         ],
         "the schemas publishing a tags array are the models that store one and the write bodies that accept one"
     );

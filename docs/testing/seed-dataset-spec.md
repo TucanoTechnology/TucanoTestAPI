@@ -191,6 +191,14 @@ the check.
 | `PUT /test_suites/{id}/test_cases/{case_id}` | the #462 parent-scoped edit door through the suite home; exempt for the same reason as its project sibling |
 | `GET /test_suites/{id}/test_cases/{case_id}/history` | the #462 parent-scoped history door through the suite home; exempt for the same reason as its project sibling |
 | `GET /test_suites/{id}/test_cases/{case_id}/history/{version}` | read companion of the suite-scoped history listing above, same reason |
+| `GET /workflows` | retired flat collection route; the seed creates workflows through the project-scoped route |
+| `POST /workflows` | retired flat creation route; workflows are created inside a project |
+| `GET /workflows/{id}` | read companion of the project-scoped creation; the seed creates workflows through the project-scoped route |
+| `PUT /workflows/{id}` | replace companion of the project-scoped creation; the seed does not update workflows |
+| `DELETE /workflows/{id}` | delete companion of the project-scoped creation; the seed does not delete workflows |
+| `GET /projects/{id}/workflows` | list companion of the project-scoped creation; the seed creates workflows through the project-scoped route |
+| `POST /projects/{id}/workflows` | the project-scoped creation route; the seed does not create workflows |
+| `DELETE /projects/{id}/workflows/{workflow_id}` | delete companion of the project-scoped creation; the seed does not delete workflows |
 | `GET /api-docs` | the Swagger UI page, not part of the data model |
 | `GET /openapi.json` | the contract itself; row 30 covers it as a service-surface assertion |
 
