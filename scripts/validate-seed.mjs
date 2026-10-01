@@ -51,54 +51,44 @@ const EDITOR_PASSWORD = process.env.TUCANO_SEED_EDITOR_PASSWORD ?? "editor-seed-
 
 const PROJECTS = ["checkout.json", "payments.json"];
 const SUITES = {
-  "checkout.json": ["smoke.checkout.json", "regression.checkout.json", "portable.checkout.json"],
+  "checkout.json": ["smoke.checkout.json", "regression.checkout.json"],
   "payments.json": ["smoke.payments.json", "portable.checkout.json"],
 };
-// The suite the composition places between the two projects, so its identifier
-// has two homes and the routes that resolve it from a bare id are refused.
-const PORTABLE = "portable.checkout.json";
 // The seed's suite duplication (spec row 21) derives its identifier from the
 // source's, and the route returns it; the project's own listing is what proves
 // the copy reached the disk under that derived name.
 const DUPLICATE_PREFIX = "smoke.checkout-copy-";
-// Which cases each project owns directly, from the spec's rows 3 and 22:
-// `TC-PROJECT-1` and `TC-ORDERS-1` are created in `checkout.json`, and row 22
-// copies `TC-ORDERS-1` into `payments.json` beside `TC-CATALOG-1`, which is
-// created there, and `TC-LOGIN-1`, which row 22 copies out of its suite.
+// Which cases each project owns directly, from the spec's rows 3 and 22.
+// Row 22 still copies across parents, but every copy is undone by a scoped
+// delete, so the final tree holds each identifier in exactly one place.
 const HOMES = {
   "checkout.json": ["TC-PROJECT-1", "TC-ORDERS-1"],
-  "payments.json": ["TC-LOGIN-1", "TC-CATALOG-1", "TC-ORDERS-1"],
+  "payments.json": ["TC-CATALOG-1"],
 };
 // Which cases each suite holds, from the target tree of spec §2. The empty
 // expectation is an assertion too: the move of row 22 passes through
 // `regression.checkout.json` and leaves it holding no case at all, which is the
 // "a suite may be empty" shape made observable rather than assumed.
 const SUITE_HOMES = {
-  "smoke.checkout.json": ["TC-CART-1", "TC-LOGIN-1", "TC-LOGIN-2", "TC-CATALOG-1", "TC-SEARCH-1"],
+  "smoke.checkout.json": ["TC-CART-1", "TC-LOGIN-1", "TC-LOGIN-2"],
   "smoke.payments.json": ["TC-MOVE-1", "TC-SEARCH-1"],
   "regression.checkout.json": [],
+  "portable.checkout.json": [],
 };
-// Every case the seed creates, where its document is read from, and how many of
-// its steps carry an attachment. Four cases keep one home and are read through
-// the bare document route; the four row 22 composes into a second home are read
-// through `parent`, a home a listing is known to hold them in, because the bare
-// route answers their identifier with `409`. `parent` follows the seed's own
-// recording, so a case that left a suite by moving is expected in the suite it
-// ended in.
+// Every case the seed creates and how many of its steps carry an attachment.
+// Each identifier has exactly one home in the final tree, so each document
+// reads through the bare route — the single-home loop below is also what
+// proves it: an id with two homes would answer `409` there and fail.
 const CASES = [
-  { id: "TC-LOGIN-1", parent: { kind: "project", id: "payments.json" }, stepAttachments: 1 },
-  { id: "TC-LOGIN-2", parent: null, stepAttachments: 2 },
-  { id: "TC-CART-1", parent: null, stepAttachments: 1 },
-  { id: "TC-MOVE-1", parent: null, stepAttachments: 1 },
-  { id: "TC-PROJECT-1", parent: null, stepAttachments: 0 },
-  { id: "TC-ORDERS-1", parent: { kind: "project", id: "payments.json" }, stepAttachments: 1 },
-  { id: "TC-CATALOG-1", parent: { kind: "suite", id: "smoke.checkout.json" }, stepAttachments: 0 },
-  { id: "TC-SEARCH-1", parent: { kind: "suite", id: "smoke.checkout.json" }, stepAttachments: 1 },
+  { id: "TC-LOGIN-1", stepAttachments: 1 },
+  { id: "TC-LOGIN-2", stepAttachments: 2 },
+  { id: "TC-CART-1", stepAttachments: 1 },
+  { id: "TC-MOVE-1", stepAttachments: 1 },
+  { id: "TC-PROJECT-1", stepAttachments: 0 },
+  { id: "TC-ORDERS-1", stepAttachments: 1 },
+  { id: "TC-CATALOG-1", stepAttachments: 0 },
+  { id: "TC-SEARCH-1", stepAttachments: 1 },
 ];
-// The two halves of the table above: cases with exactly one home, and cases a
-// composition placed so that the bare document route cannot resolve them.
-const SINGLE_HOME_CASES = CASES.filter((testCase) => testCase.parent === null);
-const COMPOSED_CASES = CASES.filter((testCase) => testCase.parent !== null);
 const RUNS = ["nightly.json", "nightly-import.json"];
 const PROGRESS_RUN = "nightly.json";
 const MILESTONE = "v1.0.json";
@@ -211,24 +201,6 @@ async function assertRefused(what, path, status, token, { method = "GET", body }
       fail(what, error.message);
     }
   }
-}
-
-/**
- * Reads a case's own document out of the parent that holds it.
- *
- * A bare `GET /test_cases/{id}` is the natural read for a case with one home,
- * but the composed cases have two and the contract refuses the bare identifier.
- * The assembled project document carries the project's direct cases in
- * `testCases` and each of its suites' cases in that suite's `testCases`, so the
- * parent the case is known to be in is the parent the document is read from.
- */
-async function caseDocument(token, testCase) {
-  if (testCase.parent.kind === "project") {
-    const project = await request(`/projects/${testCase.parent.id}`, { token });
-    return (project?.testCases ?? []).find((entry) => entry?.testCaseId === testCase.id) ?? null;
-  }
-  const suite = await getOrNull(`/test_suites/${testCase.parent.id}`, token);
-  return (suite?.testCases ?? []).find((entry) => entry?.testCaseId === testCase.id) ?? null;
 }
 
 // --- Signing in -------------------------------------------------------------
@@ -353,13 +325,11 @@ async function stepDocuments(token) {
     JSON.stringify(duplicated),
   );
 
-  // Cases are read through their parents' listings rather than through a bare
-  // `GET /test_cases/<id>`: the composition of row 22 copies four cases into a
-  // second home while the sources stay where they were, and the contract
-  // answers a bare identifier with several homes `409` by design. Which parent
-  // owns which case is part of what this step checks, so the expectation is
-  // written down rather than inferred from whatever the listing happens to
-  // return.
+  // Which parent owns which case is part of what this step checks, so the
+  // expectation is written down rather than inferred from whatever the listing
+  // happens to return. Row 22's copies are all undone before the seed ends, so
+  // every identifier has one home and the bare document route below can
+  // resolve every one of them.
   for (const [project, expected] of Object.entries(HOMES)) {
     const listing = await request(`/projects/${project}/test_cases`, { token });
     ok(
@@ -378,9 +348,10 @@ async function stepDocuments(token) {
     );
   }
 
-  // A case with one home answers the bare document route; the loop that asserts
-  // steps, attachments and the revision below reads those cases the same way.
-  for (const { id } of SINGLE_HOME_CASES) {
+  // Every seeded identifier answers the bare document route — a case left with
+  // two homes would answer `409` here and fail the seed. The loop below that
+  // asserts steps, attachments and revisions reads the documents the same way.
+  for (const { id } of CASES) {
     const testCase = await getOrNull(`/test_cases/${id}`, token);
     ok(Boolean(testCase), `GET /test_cases/${id} reads the seeded case back`);
     ok(
@@ -390,30 +361,14 @@ async function stepDocuments(token) {
     );
   }
 
-  // An ambiguous identifier is a documented refusal, not a crash: proving it
-  // here keeps the two-home placements of row 22 observable through the API.
-  for (const { id } of COMPOSED_CASES) {
-    await assertRefused(
-      `GET /test_cases/${id} is refused with 409 because the id has two homes`,
-      `/test_cases/${id}`,
-      409,
-      token,
-    );
-  }
-  // The composed suite is refused the same way, on the document route and on
-  // the route for its own cases: both resolve the suite's parent from its bare
-  // identifier, so a suite with two homes cannot name which one is meant.
-  await assertRefused(
-    `GET /test_suites/${PORTABLE} is refused with 409 because the suite has two homes`,
-    `/test_suites/${PORTABLE}`,
-    409,
-    token,
-  );
-  await assertRefused(
-    `GET /test_suites/${PORTABLE}/test_cases is refused with 409 because the suite has two homes`,
-    `/test_suites/${PORTABLE}/test_cases`,
-    409,
-    token,
+  // The moved suite reads the same singular way: one home, bare routes.
+  const portable = await getOrNull("/test_suites/portable.checkout.json", token);
+  ok(Boolean(portable), "GET /test_suites/portable.checkout.json reads the moved suite back");
+  const portableCases = await request("/test_suites/portable.checkout.json/test_cases", { token });
+  ok(
+    Array.isArray(portableCases) && portableCases.length === 0,
+    "the moved suite holds no case, as it was created and travelled",
+    JSON.stringify(portableCases),
   );
 
   // Every case carries ordered steps, at least one attachment and the revision
@@ -421,9 +376,7 @@ async function stepDocuments(token) {
   // Reading a composed case through a parent is what makes it assertable at
   // all: its bare identifier is the refusal proved above.
   for (const testCase of CASES) {
-    const document = testCase.parent
-      ? await caseDocument(token, testCase)
-      : await getOrNull(`/test_cases/${testCase.id}`, token);
+    const document = await getOrNull(`/test_cases/${testCase.id}`, token);
     ok(Boolean(document), `${testCase.id} reads the seeded case document back`);
     ok(
       Array.isArray(document?.steps) && document.steps.length >= 1,
@@ -450,11 +403,45 @@ async function stepDocuments(token) {
     );
   }
 
+  // TC-LOGIN-2 carries the seed's second qualifying update, so its history
+  // holds two revisions and the live document reads version 3.
   const history = await request("/test_cases/TC-LOGIN-2/history", { token });
   ok(
-    Array.isArray(history) && history.length >= 1,
-    "GET /test_cases/TC-LOGIN-2/history reports the update's revision",
+    Array.isArray(history) && history.length >= 2,
+    "GET /test_cases/TC-LOGIN-2/history reports both updates' revisions",
     JSON.stringify(history),
+  );
+
+  // The seeded binaries ride where the GUI reads them: an image for the inline
+  // preview, a document for the download.
+  const loginProof = await getOrNull("/test_cases/TC-LOGIN-1", token);
+  ok(
+    (loginProof?.attachments ?? []).some((a) => a?.mimeType === "image/png"),
+    "TC-LOGIN-1 carries an image attachment (preview path)",
+    JSON.stringify(loginProof?.attachments),
+  );
+  const pageManual = await getOrNull("/test_cases/TC-PROJECT-1", token);
+  ok(
+    (pageManual?.attachments ?? []).some((a) => a?.mimeType === "application/pdf"),
+    "TC-PROJECT-1 carries a document attachment (download path)",
+    JSON.stringify(pageManual?.attachments),
+  );
+
+  // #460: the defect links the seed hung off nightly's Failed result live on
+  // the case, and the result-scoped route answers them from there.
+  const linkedCase = await getOrNull("/test_cases/TC-LOGIN-2", token);
+  ok(
+    (linkedCase?.defectLinks ?? []).length === 3,
+    "TC-LOGIN-2 owns three defect links (the unlinked github one is gone)",
+    JSON.stringify(linkedCase?.defectLinks),
+  );
+  const routeDefects = await request("/test_runs/nightly.json/results/TC-LOGIN-2/defects", {
+    token,
+  });
+  ok(
+    Array.isArray(routeDefects?.defects) && routeDefects.defects.length === 3,
+    "GET /test_runs/…/defects answers the case's list",
+    JSON.stringify(routeDefects),
   );
 
   for (const configuration of CONFIGURATIONS) {
