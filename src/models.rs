@@ -114,6 +114,13 @@ pub struct TestCase {
     #[serde(skip_serializing_if = "Option::is_none")]
     /// API-managed timestamp of the current version; a supplied value is ignored.
     pub last_modified: Option<String>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    /// The defects linked to this case (#460). The case owns the list: every
+    /// run recording this case surfaces the same defects, and no re-recording
+    /// can touch them, because no result field holds them. Written only by
+    /// the defects routes — a document body that names the field is refused.
+    pub defect_links: Option<Vec<DefectLink>>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq)]

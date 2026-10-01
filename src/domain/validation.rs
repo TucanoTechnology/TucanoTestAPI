@@ -40,6 +40,7 @@ pub fn known_fields(resource: Resource) -> &'static [&'static str] {
             "tags",
             "version",
             "lastModified",
+            "defectLinks",
         ],
         Resource::Runs => &[
             "testRunId",
@@ -76,6 +77,14 @@ pub fn validate_payload(resource: Resource, value: &Value) -> Result<(), DomainE
         .as_object()
         .ok_or_else(|| DomainError::invalid_request("Request body must be a JSON object"))?;
 
+    // A case's defect list is known to the model — it is a stored field — but
+    // the defects routes write it alone: a body that carries it would replace
+    // the case's links through the back door (#460).
+    if resource == Resource::Cases && object.contains_key("defectLinks") {
+        return Err(DomainError::invalid_request(
+            "Field `defectLinks` is maintained by the defect routes",
+        ));
+    }
     let allowed = known_fields(resource);
     for key in object.keys() {
         if !allowed.contains(&key.as_str()) {
@@ -478,6 +487,7 @@ mod tests {
                     tags: None,
                     version: Some(1),
                     last_modified: Some("1970-01-01T00:00:00Z".to_owned()),
+                    defect_links: None,
                 })
                 .expect("serialisable case"),
             ),

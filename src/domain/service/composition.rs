@@ -82,7 +82,14 @@ impl<R: Repository + 'static> TestService<R> {
     /// A run only records results for the cases it holds — the ones it declares,
     /// or ones it already records a result for — so a result for a case the run
     /// never picked up is a `404` rather than a stray entry in the run.
-    pub fn record_run_result(&self, run_id: &str, body: &Value) -> Result<(), DomainError> {
+    /// Records a result and answers with the result as stored, so the route
+    /// can echo what the merge produced (#459): the timestamp the API filled,
+    /// the notes a re-recording kept, the merged shape overall.
+    pub fn record_run_result(
+        &self,
+        run_id: &str,
+        body: &Value,
+    ) -> Result<crate::models::TestCaseResult, DomainError> {
         let update = result_update(body, None)?;
 
         audited(
@@ -111,8 +118,19 @@ impl<R: Repository + 'static> TestService<R> {
                             .map_or(&update.test_case_id, |case| &case.test_case_id),
                         held.as_ref().and_then(|case| case.version),
                     );
+                    let pinned_case_id = update.test_case_id.clone();
                     composition::upsert_result(run, update);
-                    Ok(())
+                    run.results
+                        .as_ref()
+                        .and_then(|results| {
+                            results
+                                .iter()
+                                .find(|result| result.test_case_id == pinned_case_id)
+                                .cloned()
+                        })
+                        .ok_or_else(|| {
+                            DomainError::Internal("recorded result not stored".to_owned())
+                        })
                 })
             },
         )
@@ -131,16 +149,28 @@ impl<R: Repository + 'static> TestService<R> {
         run_id: &str,
         case_id: &str,
         body: &Value,
-    ) -> Result<(), DomainError> {
+    ) -> Result<crate::models::TestCaseResult, DomainError> {
         let update = result_update(body, Some(case_id))?;
+        let addressed = update.test_case_id.clone();
 
         audited(
             resource_noun(Resource::Runs),
             "replace_result",
             run_id,
             || {
-                self.mutate_run(run_id, |run, _home| {
-                    composition::replace_result(run, update)
+                self.mutate_run(run_id, move |run, _home| {
+                    composition::replace_result(run, update)?;
+                    run.results
+                        .as_ref()
+                        .and_then(|results| {
+                            results
+                                .iter()
+                                .find(|result| result.test_case_id == addressed)
+                                .cloned()
+                        })
+                        .ok_or_else(|| {
+                            DomainError::Internal("replaced result not stored".to_owned())
+                        })
                 })
             },
         )
@@ -164,23 +194,72 @@ impl<R: Repository + 'static> TestService<R> {
         )
     }
 
-    /// Lists the defects linked to one case's result in a run.
+    /// Resolves the case behind a run's result — the store #460 moved defect
+    /// links into — and refuses a run that records no result for it.
     ///
-    /// A run that does not exist, or one that records no result for `case_id`,
-    /// answers `404`: an empty list means "this result has no linked defect",
-    /// which is a different answer from "there is no result to link to".
-    pub fn list_defects(
-        &self,
-        run_id: &str,
-        case_id: &str,
-    ) -> Result<Vec<DefectLink>, DomainError> {
-        let run = self.load::<TestRun>(Resource::Runs, run_id, None, "Test run not found")?;
-        let result = run
+    /// The home is decided inside the projects the run itself reaches: the
+    /// run's own home first, so the seeded case two projects hold stays
+    /// addressable from both of its runs, then the run's `projects` snapshot.
+    /// A case no reached project holds is `404`; one two of them hold is the
+    /// same `409` the parent-scoped routes raise for an ambiguous identifier.
+    pub fn resolve_result_case(&self, run_id: &str, case_id: &str) -> Result<Parent, DomainError> {
+        let home = self.run_home(run_id)?;
+        let run =
+            self.load::<TestRun>(Resource::Runs, run_id, Some(&home), "Test run not found")?;
+        let records = run
             .results
             .as_ref()
-            .and_then(|results| results.iter().find(|result| result.test_case_id == case_id))
-            .ok_or_else(|| DomainError::NotFound("Test result not found in test run".to_owned()))?;
-        Ok(result.defect_links.clone().unwrap_or_default())
+            .is_some_and(|results| results.iter().any(|result| result.test_case_id == case_id));
+        if !records {
+            return Err(DomainError::NotFound(
+                "Test result not found in test run".to_owned(),
+            ));
+        }
+        let parents = self
+            .repository
+            .locate(Resource::Cases, case_id)
+            .map_err(error::read_error)?;
+        if let Some(at_home) = parents
+            .iter()
+            .find(|parent| parent.project() == home.project())
+        {
+            return Ok(at_home.clone());
+        }
+        let mut named: Vec<&str> = vec![home.project()];
+        for project in run.projects.as_deref().unwrap_or_default() {
+            let id = project.project_id.as_str();
+            if !named.contains(&id) {
+                named.push(id);
+            }
+        }
+        let in_reach: Vec<Parent> = parents
+            .into_iter()
+            .filter(|parent| named.contains(&parent.project()))
+            .collect();
+        match in_reach.as_slice() {
+            [] => Err(DomainError::NotFound("Test case not found".to_owned())),
+            [one] => Ok(one.clone()),
+            _ => Err(ambiguous(Resource::Cases, &in_reach)),
+        }
+    }
+
+    /// Lists the defects the case behind a result carries.
+    ///
+    /// An empty list means "this case has no linked defect", which is a
+    /// different answer from the 404 `resolve_result_case` raises when there
+    /// is no result — or no case — to speak of.
+    pub fn case_defects(
+        &self,
+        parent: &Parent,
+        case_id: &str,
+    ) -> Result<Vec<DefectLink>, DomainError> {
+        let case = self.load::<TestCase>(
+            Resource::Cases,
+            case_id,
+            Some(parent),
+            "Test case not found",
+        )?;
+        Ok(case.defect_links.unwrap_or_default())
     }
 
     /// Imports a JUnit report's testcases into a run's results.
@@ -355,9 +434,9 @@ impl<R: Repository + 'static> TestService<R> {
     /// must use to unlink from `id` and reads the rest from the listing route.
     /// The URL is checked against the tracker it claims to belong to, and a
     /// defect the result already links is a conflict.
-    pub fn link_defect_to_result(
+    pub fn link_defect_to_case(
         &self,
-        run_id: &str,
+        parent: &Parent,
         case_id: &str,
         body: &Value,
     ) -> Result<DefectLink, DomainError> {
@@ -368,32 +447,77 @@ impl<R: Repository + 'static> TestService<R> {
             current_timestamp_string(),
         );
 
-        audited(resource_noun(Resource::Runs), "link_defect", run_id, || {
-            self.mutate_run(run_id, |run, _home| {
-                composition::attach_defect_to_result(run, case_id, link.clone())
-            })
-        })?;
+        let written = link.clone();
+        audited(
+            resource_noun(Resource::Cases),
+            "link_defect",
+            case_id,
+            || {
+                self.mutate_case_document(parent, case_id, |case| {
+                    composition::attach_defect_to_case(case, written.clone())
+                })
+            },
+        )?;
         Ok(link)
     }
 
-    /// Removes the defect link `link_id` from the result a run records for
-    /// `case_id`; a link the result does not carry is a 404.
-    pub fn unlink_defect_from_result(
+    /// Removes the defect link `link_id` from the case's own list; a link the
+    /// case does not carry is a 404, whichever run the route arrived through.
+    pub fn unlink_defect_from_case(
         &self,
-        run_id: &str,
+        parent: &Parent,
         case_id: &str,
         link_id: &str,
     ) -> Result<(), DomainError> {
         audited(
-            resource_noun(Resource::Runs),
+            resource_noun(Resource::Cases),
             "unlink_defect",
-            run_id,
+            case_id,
             || {
-                self.mutate_run(run_id, |run, _home| {
-                    composition::detach_defect_from_result(run, case_id, link_id)
+                self.mutate_case_document(parent, case_id, |case| {
+                    composition::detach_defect_from_case(case, link_id)
                 })
             },
         )
+    }
+
+    /// Read-modify-write one case document, mirroring `mutate_run`'s
+    /// transaction shape: one lock acquisition, a refusal from the closure
+    /// surfaces its own domain error and writes nothing.
+    fn mutate_case_document<T>(
+        &self,
+        parent: &Parent,
+        case_id: &str,
+        mutate: impl FnOnce(&mut TestCase) -> Result<T, DomainError>,
+    ) -> Result<T, DomainError> {
+        let mut refusal: Option<DomainError> = None;
+        let mut produced: Option<T> = None;
+        let outcome =
+            self.repository
+                .transform_at(Resource::Cases, Some(parent), case_id, None, |stored| {
+                    let mut case: TestCase = serde_json::from_value(stored)
+                        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+                    match mutate(&mut case) {
+                        Ok(value) => match serde_json::to_value(&case) {
+                            Ok(document) => {
+                                produced = Some(value);
+                                Ok(document)
+                            }
+                            Err(error) => Err(io::Error::new(io::ErrorKind::InvalidData, error)),
+                        },
+                        Err(error) => {
+                            refusal = Some(error);
+                            Err(io::Error::other("case mutation refused"))
+                        }
+                    }
+                });
+        if let Some(error) = refusal {
+            return Err(error);
+        }
+        let _ = outcome.map_err(|error| map_mutation_error(error, "Test case not found"))?;
+        self.derivations.invalidate();
+        produced
+            .ok_or_else(|| DomainError::Internal("case mutation produced no outcome".to_owned()))
     }
 }
 

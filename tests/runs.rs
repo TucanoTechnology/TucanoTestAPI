@@ -467,9 +467,15 @@ async fn a_re_recorded_result_keeps_what_the_request_leaves_out() {
     );
     assert_eq!(result["notes"], "card declined");
     assert_eq!(result["durationMs"], 1200);
-    // ...including the defect links, which a recording request cannot describe
-    // at all: they survive a re-recording because the body never mentions them.
-    assert_eq!(result["defectLinks"][0]["defectId"], "BUG-1");
+    // ...including the defect links, which live on the case document (#460):
+    // the result cannot lose what it never held, and the listing route still
+    // answers them.
+    assert!(
+        result.get("defectLinks").is_none(),
+        "links are not stored inside a result any more: {result}"
+    );
+    let (_, listed) = send_json(&app, get("/test_runs/nightly.json/results/TC-1/defects")).await;
+    assert_eq!(listed["defects"][0]["defectId"], "BUG-1");
 
     // An explicit `null` is how a request clears a field it no longer carries,
     // and a value it supplies is written over the stored one.
@@ -498,7 +504,11 @@ async fn a_re_recorded_result_keeps_what_the_request_leaves_out() {
         "an explicit null clears the stored notes: {result}"
     );
     assert_eq!(result["durationMs"], 900);
-    assert_eq!(result["defectLinks"][0]["defectId"], "BUG-1");
+    let (_, listed) = send_json(&app, get("/test_runs/nightly.json/results/TC-1/defects")).await;
+    assert_eq!(
+        listed["defects"][0]["defectId"], "BUG-1",
+        "clearing result fields never reaches the case's links"
+    );
 }
 
 #[tokio::test]
@@ -656,7 +666,16 @@ async fn replacing_a_result_keeps_the_defects_it_cannot_describe() {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "replacing: {body}");
-    assert_eq!(body, json!({"message": "Test result replaced in run"}));
+    // #459: the response echoes the stored result, not just a message. What
+    // the client gets here must be what the store holds — checked against
+    // the read below.
+    assert_eq!(body["message"], "Test result replaced in run");
+    let echoed = body["result"].clone();
+    assert_eq!(echoed["status"], "Passed");
+    assert_eq!(
+        echoed["notes"], "card declined",
+        "the merge is visible in the echo"
+    );
 
     // It rewrites the stored result rather than adding one, and keeps what the
     // body cannot describe: the links already hanging off the result survive,
@@ -669,7 +688,20 @@ async fn replacing_a_result_keeps_the_defects_it_cannot_describe() {
     assert_eq!(result["status"], "Passed");
     assert_eq!(result["notes"], "card declined");
     assert_eq!(result["durationMs"], 1200);
-    assert_eq!(result["defectLinks"][0]["defectId"], "BUG-1");
+    assert!(
+        result.get("defectLinks").is_none(),
+        "the link lives on the case, not the result (#460): {result}"
+    );
+    let (_, listed) = send_json(&app, get("/test_runs/nightly.json/results/TC-1/defects")).await;
+    assert_eq!(
+        listed["defects"][0]["defectId"], "BUG-1",
+        "a replacement leaves the case's links alone"
+    );
+    assert_eq!(
+        serde_json::to_value(result).expect("serialise stored"),
+        serde_json::to_value(&echoed).expect("serialise echo"),
+        "the echoed result is the stored one"
+    );
 
     // `status` and `timestamp` are the two fields a replacement always
     // describes, exactly as a recording does, so an omitted `timestamp` is the
@@ -708,7 +740,11 @@ async fn replacing_a_result_keeps_the_defects_it_cannot_describe() {
         result.get("notes").is_none(),
         "an explicit null clears the stored notes: {result}"
     );
-    assert_eq!(result["defectLinks"][0]["defectId"], "BUG-1");
+    let (_, listed) = send_json(&app, get("/test_runs/nightly.json/results/TC-1/defects")).await;
+    assert_eq!(
+        listed["defects"][0]["defectId"], "BUG-1",
+        "replacing result fields never reaches the case's links"
+    );
 
     // A body that points the replacement at another case is refused rather than
     // quietly retargeted, and the mismatch writes nothing.
@@ -1172,6 +1208,24 @@ async fn create_run(app: &Router, name: &str) -> String {
 /// on the run being a place where anything can be written.
 async fn create_run_holding(app: &Router, name: &str, cases: &[&str]) -> String {
     let project = fixture_home(app).await;
+    // #460: the case behind a result owns its defect links, so it has to be a
+    // real case rather than only the snapshot the run embeds. The snapshot is
+    // still declared, exactly as before.
+    for id in cases {
+        let (status, created) = send_json(
+            app,
+            json_request(
+                "POST",
+                &format!("/projects/{project}/test_cases"),
+                &common::case_body(id),
+            ),
+        )
+        .await;
+        assert!(
+            [StatusCode::CREATED, StatusCode::CONFLICT].contains(&status),
+            "creating case {id}: {created}"
+        );
+    }
     let declared: Vec<serde_json::Value> = cases.iter().map(|id| common::case_body(id)).collect();
     let (status, created) = send_json(
         app,
@@ -1739,50 +1793,123 @@ async fn listing_defects_returns_the_links_a_result_carries() {
     .await;
     assert_eq!(status, StatusCode::OK);
 
-    // The links belong to the result, not the run, so they are written where the
-    // route that will create them stores them — and read back through the same
-    // document the API serves. A run lives in its project's folder.
-    let home = fixture_home(&app).await;
-    let path = directory.path().join(format!(
-        "projects/{}/test_runs/nightly.json",
-        common::project_folder(&home)
-    ));
-    let mut run: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(&path).expect("run readable"))
-            .expect("run is valid JSON");
-    run["results"][0]["defectLinks"] = json!([
-        {
-            "linkId": "L-1",
-            "defectId": "BUG-42",
-            "defectUrl": "https://tracker.example/BUG-42",
-            "trackerType": "jira",
-            "title": "Card is declined twice",
-            "status": "Open",
-            "linkedAt": "1",
-        }
-    ]);
-    std::fs::write(
-        &path,
-        serde_json::to_string_pretty(&run).expect("run serialises"),
-    )
-    .expect("run written");
-
-    let (status, body) = send_json(&app, get("/test_runs/nightly.json/results/TC-1/defects")).await;
-    assert_eq!(status, StatusCode::OK, "listing: {body}");
-    assert_eq!(
-        body,
-        json!({
-            "defects": [{
-                "linkId": "L-1",
+    // #460: the links belong to the case. Link one through the result route and
+    // it lands in the case document — the run document is untouched.
+    let (status, created) = send_json(
+        &app,
+        json_request(
+            "POST",
+            "/test_runs/nightly.json/results/TC-1/defects",
+            &json!({
                 "defectId": "BUG-42",
-                "defectUrl": "https://tracker.example/BUG-42",
+                "defectUrl": "https://acme.atlassian.net/browse/BUG-42",
                 "trackerType": "jira",
                 "title": "Card is declined twice",
                 "status": "Open",
-                "linkedAt": "1",
-            }]
-        })
+            }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "linking: {created}");
+
+    let home = fixture_home(&app).await;
+    let case_path = directory.path().join(format!(
+        "projects/{}/TC-1/test-case.json",
+        common::project_folder(&home)
+    ));
+    let case_document: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&case_path).expect("case readable"))
+            .expect("case is valid JSON");
+    assert_eq!(case_document["defectLinks"][0]["defectId"], "BUG-42");
+    assert_eq!(case_document["defectLinks"][0]["linkId"], created["id"]);
+
+    let run_path = directory.path().join(format!(
+        "projects/{}/test_runs/nightly.json",
+        common::project_folder(&home)
+    ));
+    let run_document: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&run_path).expect("run readable"))
+            .expect("run is valid JSON");
+    assert!(
+        run_document["results"][0].get("defectLinks").is_none(),
+        "the run document holds no links to drift: {run_document}"
     );
+
+    let (status, body) = send_json(&app, get("/test_runs/nightly.json/results/TC-1/defects")).await;
+    assert_eq!(status, StatusCode::OK, "listing: {body}");
+    assert_eq!(body["defects"].as_array().expect("defects").len(), 1);
+    assert_eq!(body["defects"][0]["defectId"], "BUG-42");
+    assert_eq!(body["defects"][0]["title"], "Card is declined twice");
+}
+
+#[tokio::test]
+async fn a_case_links_its_defects_once_and_every_run_sees_them() {
+    let (_directory, app) = test_app();
+    let home = fixture_home(&app).await;
+    let (status, _) = send_json(
+        &app,
+        json_request(
+            "POST",
+            &format!("/projects/{home}/test_cases"),
+            &common::case_body("TC-1"),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    create_run_holding(&app, "first", &["TC-1"]).await;
+    create_run_holding(&app, "second", &["TC-1"]).await;
+    for run in ["first.json", "second.json"] {
+        let (status, _) = send_json(
+            &app,
+            json_request(
+                "POST",
+                &format!("/test_runs/{run}/results"),
+                &json!({"testCaseId": "TC-1", "status": "Failed", "timestamp": "1"}),
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "recording in {run}");
+    }
+
+    let (status, _) = send_json(
+        &app,
+        json_request(
+            "POST",
+            "/test_runs/first.json/results/TC-1/defects",
+            &json!({
+                "defectId": "BUG-1",
+                "defectUrl": "https://tracker.example/BUG-1",
+                "trackerType": "custom",
+            }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    // The list belongs to the case: the second run, which never saw the link
+    // request, answers the same single defect (#460).
+    for run in ["first.json", "second.json"] {
+        let (status, listed) =
+            send_json(&app, get(&format!("/test_runs/{run}/results/TC-1/defects"))).await;
+        assert_eq!(status, StatusCode::OK, "{run}");
+        let defects = listed["defects"].as_array().expect("defects");
+        assert_eq!(defects.len(), 1, "{run}: {listed}");
+        assert_eq!(defects[0]["defectId"], "BUG-1");
+    }
+
+    // And unlinking through one run removes it from both.
+    let (_, listed) = send_json(&app, get("/test_runs/first.json/results/TC-1/defects")).await;
+    let link_id = listed["defects"][0]["linkId"].as_str().expect("link id");
+    let (status, _) = send_json(
+        &app,
+        delete(&format!(
+            "/test_runs/first.json/results/TC-1/defects/{link_id}"
+        )),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (_, listed) = send_json(&app, get("/test_runs/second.json/results/TC-1/defects")).await;
+    assert_eq!(listed, json!({ "defects": [] }));
 }
 
 #[tokio::test]

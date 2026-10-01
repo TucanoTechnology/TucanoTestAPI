@@ -841,6 +841,35 @@ way to *read* the defects it raised; this issue gives it a way to name and unnam
   unknown `link_id` — plus `tests/service.rs` holding `DefectLinkRequest` to `additionalProperties: false` and
   `openapi.json` documenting both routes, the `link_id` parameter and the new schema.
 
+## Case-Owned Defect Links (Issue #460)
+
+Issue: [#460](https://github.com/TucanoTechnology/TucanoTestAPI/issues/460) — a defect link is a fact about
+the **test case**, not about whichever run happened to be recording it. This section supersedes the storage
+rule of the Issue #87 and #88 plans ("links live on the result, inside the run"); the routes, verbs and
+response shapes of both plans stand unchanged.
+
+- **The case document is the store.** `TestCase` gains an optional `defectLinks` array; the defects routes
+  write it there and read it back. `TestCaseResult.defectLinks` is legacy: links written by a deployment
+  before this change read back unchanged inside the run document and still survive re-recordings, but the
+  API writes no new link into a result.
+- **One list, seen from every run.** Linking through any run that records the case makes the link visible
+  from every other such run, and unlinking removes it from all of them — there is one list, and it belongs
+  to the case. A re-recording cannot disturb it because no result field holds it any more.
+- **The case behind a result resolves inside the run's own reach.** The run's home project is preferred,
+  then its `projects` snapshot; a case no reached project holds answers `404` (including a phantom case the
+  run only carries as a snapshot — a result whose case has no document can be recorded but cannot carry
+  links), and a case two of those projects hold is the same `409` ambiguity the parent-scoped routes raise.
+- **Writes need the case's permission too.** Linking and unlinking require `editor` where Issue #88 required
+  it (every project the run reaches) **and** on the case's own project — a run cannot open defects onto a
+  case its caller may not write. Listing requires `viewer` on both sides.
+- **The document body cannot write the list.** A create or update body naming `defectLinks` is refused
+  `400 invalid_request` — unlike the API-managed `version`, which is ignored, because silently dropping a
+  client's attempt to write live tracker state would hide exactly the drift this move exists to prevent.
+- **Migration is scripted, not silent.** `scripts/migrate-defect-links.mjs` moves links stored inside run
+  documents (pre-change deployments) onto their cases through the public routes; the API itself never
+  rewrites a stored document for this. The seed dataset carries no embedded links, so the matrix is
+  unaffected.
+
 ## Test Case Versioning Plan (Issue #90)
 
 Issue: [#90](https://github.com/TucanoTechnology/TucanoTestAPI/issues/90) — persists the version numbers and
