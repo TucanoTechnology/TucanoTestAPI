@@ -85,6 +85,7 @@ pub const MILESTONE: DuplicateSpec = DuplicateSpec {
     already_exists_message: "Milestone already exists",
 };
 
+/// Duplication spec for workflows.
 pub const WORKFLOW: DuplicateSpec = DuplicateSpec {
     resource: Resource::Workflows,
     id_field: "workflowId",
