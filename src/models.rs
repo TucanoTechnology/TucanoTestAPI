@@ -440,6 +440,40 @@ pub struct SummaryReport {
     pub total_duration_ms: u64,
 }
 
+/// The latest result one case holds among the runs in scope, as the
+/// `last_results` report (#457) lists them.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct LastCaseResult {
+    /// The case's identity as the result stored it, and its wire address.
+    pub test_case_id: String,
+    /// The recorded status, verbatim from the winning result: the report does
+    /// not reject a hand-edited value outside the five the record route writes.
+    pub status: String,
+    /// The listing key of the run that recorded it — the address
+    /// `GET /test_runs/{id}` takes, where the full result lives.
+    pub run_id: String,
+    /// The stored timestamp string of the winning result.
+    pub timestamp: String,
+}
+
+/// The latest recorded result per case, for one project or for every project
+/// the caller can reach.
+///
+/// One entry per case that at least one in-scope run recorded a result for; a
+/// case no run has covered is **absent** rather than reported as `Untested`,
+/// because absence and untested are different statements. `cases` is sorted by
+/// `testCaseId`. The reduction is the `last_results` aggregation (#457).
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct LastResultsReport {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Report filter or scoped-report echo: the project a report covers.
+    pub project_id: Option<String>,
+    /// The latest result per covered case, sorted by case identifier.
+    pub cases: Vec<LastCaseResult>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

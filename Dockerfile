@@ -26,7 +26,7 @@ ARG BUILD_NUMBER=local
 # releases published after the layer was written, and the image keeps reporting
 # fixes it cannot reach. Changing it guarantees a fresh index, which is what
 # makes "rebuild to pick up security updates" actually work.
-ARG CACHE_BUSTER=2026-09-14
+ARG CACHE_BUSTER=2026-09-30
 
 RUN apt-get update \
     && apt-get upgrade --yes \

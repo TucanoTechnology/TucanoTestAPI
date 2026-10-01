@@ -173,6 +173,103 @@ fn result(case_id: &str, status: &str, duration_ms: Option<u64>) -> Value {
     result
 }
 
+/// The last-results report: one entry per covered case carrying the latest
+/// result and the run that recorded it (#457).
+#[tokio::test]
+async fn last_results_report_the_latest_result_per_case() {
+    let (_directory, app) = test_app();
+
+    // The early run exists to be superseded: its key must not appear in the
+    // answer once `later` has recorded the same cases.
+    let _early = record_run(
+        &app,
+        "early",
+        "2026-09-01T00:00:00Z",
+        json!([
+            {"testCaseId": "TC-1.json", "status": "Passed", "timestamp": "1757800000"},
+            {"testCaseId": "TC-2.json", "status": "Untested", "timestamp": "abc"},
+        ]),
+    )
+    .await;
+    let later = record_run(
+        &app,
+        "later",
+        "2026-09-02T00:00:00Z",
+        json!([
+            {"testCaseId": "TC-1.json", "status": "Failed", "timestamp": "1757800010"},
+            {"testCaseId": "TC-2.json", "status": "Passed", "timestamp": "abd"},
+            {"testCaseId": "TC-3.json", "status": "weird", "timestamp": "5"},
+        ]),
+    )
+    .await;
+
+    let (status, body) = send_json(&app, get("/reports/last-results")).await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        !body.to_string().contains(&_early),
+        "the superseded run must not name the winner's source: {body}"
+    );
+    // `TC-1` reads from the later timestamp, `TC-2` from the lexicographically
+    // greater unparseable one — the parseable `TC-1` comparison is exact
+    // seconds — and an unrecognised status rides out verbatim. A global
+    // report echoes no project, and the cases arrive sorted by identifier.
+    assert_eq!(
+        body,
+        json!({
+            "cases": [
+                {"testCaseId": "TC-1.json", "status": "Failed", "runId": later, "timestamp": "1757800010"},
+                {"testCaseId": "TC-2.json", "status": "Passed", "runId": later, "timestamp": "abd"},
+                {"testCaseId": "TC-3.json", "status": "weird", "runId": later, "timestamp": "5"},
+            ]
+        })
+    );
+}
+
+#[tokio::test]
+async fn last_results_scope_to_one_project_and_echo_it() {
+    let (_directory, app) = test_app();
+    let home = fixture_home(&app).await;
+    record_run(
+        &app,
+        "nightly",
+        "2026-09-01T00:00:00Z",
+        json!([{"testCaseId": "TC-1.json", "status": "Passed", "timestamp": "1757800000"}]),
+    )
+    .await;
+
+    let (status, body) = send_json(
+        &app,
+        get(&format!("/reports/last-results?projectId={home}")),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["projectId"], home);
+    assert_eq!(body["cases"].as_array().expect("cases").len(), 1);
+
+    // The scope answers the way coverage answers it: no such project is a
+    // 404, an unusable identifier is `invalid_id`, and an unfiltered empty
+    // tree is the empty report, never a fabricated `Untested`.
+    let (status, body) = send_json(&app, get("/reports/last-results?projectId=missing.json")).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_error_envelope(&body, "not_found");
+
+    let (status, body) = send_json(&app, get("/reports/last-results?projectId=nope")).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_error_envelope(&body, "invalid_id");
+}
+
+#[tokio::test]
+async fn an_empty_tree_reports_no_last_results() {
+    let (_directory, app) = test_app();
+
+    let (status, body) = send_json(&app, get("/reports/last-results")).await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body, json!({"cases": []}));
+}
+
 #[tokio::test]
 async fn an_empty_tree_reports_an_all_zero_summary() {
     let (_directory, app) = test_app();
