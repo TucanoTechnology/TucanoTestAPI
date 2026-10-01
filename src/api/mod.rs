@@ -24,6 +24,7 @@ mod reports;
 mod request_id;
 mod runs;
 mod suites;
+mod workflows;
 
 use std::sync::Arc;
 
@@ -362,6 +363,7 @@ where
         .merge(milestones::routes::<R>())
         .merge(reports::routes::<R>())
         .merge(configurations::routes::<R>())
+        .merge(workflows::routes::<R>())
         .merge(auth::routes::<R>())
         .layer(RequestBodyLimitLayer::new(
             state.guardrails().limits.max_body_bytes,
