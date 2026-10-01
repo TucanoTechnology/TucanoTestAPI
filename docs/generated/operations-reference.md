@@ -10,7 +10,7 @@ operation index — method, path, `operationId` and summary. Schemas, parameters
 and status codes are the contract itself: read them in [`openapi.json`](../../openapi.json) or in
 the Swagger UI at `/api-docs`, which is rendered from the same document.
 
-The contract currently registers **92** operations.
+The contract currently registers **98** operations.
 
 | Method | Path | Operation | Summary |
 | --- | --- | --- | --- |
@@ -46,10 +46,13 @@ The contract currently registers **92** operations.
 | `DELETE` | `/projects/{id}/milestones/{milestone_id}` | `removeProjectMilestone` | Delete a milestone a project owns |
 | `GET` | `/projects/{id}/test_cases` | `listProjectTestCases` | List the test cases a project directly owns |
 | `POST` | `/projects/{id}/test_cases` | `addProjectTestCase` | Create a test case in a project, or place an existing one |
+| `PUT` | `/projects/{id}/test_cases/{case_id}` | `updateProjectTestCase` | Update a test case in a project |
 | `DELETE` | `/projects/{id}/test_cases/{case_id}` | `removeProjectTestCase` | Delete a test case a project owns |
 | `POST` | `/projects/{id}/test_cases/{case_id}/attachments` | `uploadProjectTestCaseAttachment` | Upload attachment to a project test case |
 | `GET` | `/projects/{id}/test_cases/{case_id}/attachments/{filename}` | `downloadProjectTestCaseAttachment` | Download a project test case attachment |
 | `DELETE` | `/projects/{id}/test_cases/{case_id}/attachments/{filename}` | `deleteProjectTestCaseAttachment` | Delete a project test case attachment |
+| `GET` | `/projects/{id}/test_cases/{case_id}/history` | `listProjectTestCaseHistory` | List the revisions of a test case in a project |
+| `GET` | `/projects/{id}/test_cases/{case_id}/history/{version}` | `readProjectTestCaseRevision` | Read a test-case revision in a project |
 | `GET` | `/projects/{id}/test_cases/{case_id}/steps/{step_index}/attachments` | `listProjectTestCaseStepAttachments` | List a project test case's step attachments |
 | `POST` | `/projects/{id}/test_cases/{case_id}/steps/{step_index}/attachments` | `uploadProjectTestCaseStepAttachment` | Upload a project test case step attachment |
 | `DELETE` | `/projects/{id}/test_cases/{case_id}/steps/{step_index}/attachments/{filename}` | `deleteProjectTestCaseStepAttachment` | Delete a project test case step attachment |
@@ -99,10 +102,13 @@ The contract currently registers **92** operations.
 | `POST` | `/test_suites/{id}/duplicate` | `duplicateTestSuite` | Duplicate test suite |
 | `GET` | `/test_suites/{id}/test_cases` | `listTestSuiteCases` | List the test cases a suite holds |
 | `POST` | `/test_suites/{id}/test_cases` | `addTestSuiteCase` | Create a test case in a suite, or place an existing one |
+| `PUT` | `/test_suites/{id}/test_cases/{case_id}` | `updateTestSuiteCase` | Update a test case in a suite |
 | `DELETE` | `/test_suites/{id}/test_cases/{case_id}` | `removeTestSuiteCase` | Remove a test case from a suite |
 | `POST` | `/test_suites/{id}/test_cases/{case_id}/attachments` | `uploadTestSuiteTestCaseAttachment` | Upload attachment to a suite test case |
 | `GET` | `/test_suites/{id}/test_cases/{case_id}/attachments/{filename}` | `downloadTestSuiteTestCaseAttachment` | Download a suite test case attachment |
 | `DELETE` | `/test_suites/{id}/test_cases/{case_id}/attachments/{filename}` | `deleteTestSuiteTestCaseAttachment` | Delete a suite test case attachment |
+| `GET` | `/test_suites/{id}/test_cases/{case_id}/history` | `listTestSuiteCaseHistory` | List the revisions of a test case in a suite |
+| `GET` | `/test_suites/{id}/test_cases/{case_id}/history/{version}` | `readTestSuiteCaseRevision` | Read a test-case revision in a suite |
 | `GET` | `/test_suites/{id}/test_cases/{case_id}/steps/{step_index}/attachments` | `listTestSuiteTestCaseStepAttachments` | List a suite test case's step attachments |
 | `POST` | `/test_suites/{id}/test_cases/{case_id}/steps/{step_index}/attachments` | `uploadTestSuiteTestCaseStepAttachment` | Upload a suite test case step attachment |
 | `DELETE` | `/test_suites/{id}/test_cases/{case_id}/steps/{step_index}/attachments/{filename}` | `deleteTestSuiteTestCaseStepAttachment` | Delete a suite test case step attachment |

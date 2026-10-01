@@ -721,7 +721,7 @@ async fn every_guarded_operation_refuses_an_anonymous_caller() {
     let operations = guarded_operations();
     assert_eq!(
         operations.len(),
-        84,
+        90,
         "the guarded surface changed with openapi.json; this assertion is the drift trip-wire"
     );
 
@@ -1006,7 +1006,7 @@ async fn a_viewer_reads_the_projects_it_reaches_and_cannot_write() {
         .collect();
     assert_eq!(
         writes.len(),
-        41,
+        43,
         "the write surface changed; update this matrix with it"
     );
 

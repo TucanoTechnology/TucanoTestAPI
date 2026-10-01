@@ -153,6 +153,9 @@ the check.
 | `DELETE /projects/{id}/test_cases/{case_id}/steps/{step_index}/attachments/{filename}` | teardown is scoped to the case folder |
 | `POST /projects/{id}/test_cases/{case_id}/attachments` | upload companion of row 6, addressed through the project that holds the case: the seed uploads through the bare route, which reaches a case by its identifier alone, while every case it uploads to still has one home |
 | `POST /projects/{id}/test_cases/{case_id}/steps/{step_index}/attachments` | upload companion of row 7, addressed through the project that holds the case |
+| `PUT /projects/{id}/test_cases/{case_id}` | the #462 parent-scoped edit door: the seed amends cases through the bare route (row 9) because every seeded identifier has one home — the door serves customer data that really duplicates, and the API suite is where it is proven |
+| `GET /projects/{id}/test_cases/{case_id}/history` | the #462 parent-scoped history door; the seed lists history through the bare route (row 9), which resolves every seeded identifier |
+| `GET /projects/{id}/test_cases/{case_id}/history/{version}` | read companion of the project-scoped history door above, same reason |
 | `GET /projects/{id}/test_suites` | list companion of `POST /projects/{id}/test_suites` (row 2); the seed reads this listing to learn the duplicate's derived identifier; after row 22 `portable.checkout.json` appears in `payments.json`'s listing alone, its one home |
 | `DELETE /projects/{id}/test_suites/{suite_id}` | teardown-scope call ([§4](#4-teardown-scope)) |
 | `GET /test_cases/{id}` | read companion of the case routes: row 22 copies four cases into a second parent and deletes each copy again, so every seeded identifier has one home and the bare route resolves all of them — asserted in [§3 step 12](#step-12--validation-of-the-seeded-environment). The two-homes `409` itself stays the contract tests' ground |
@@ -185,6 +188,9 @@ the check.
 | `DELETE /test_suites/{id}/test_cases/{case_id}/steps/{step_index}/attachments/{filename}` | teardown is scoped to the case folder |
 | `POST /test_suites/{id}/test_cases/{case_id}/attachments` | upload companion of row 6, addressed through the suite that holds the case: the seed uploads through the bare route, which reaches a case by its identifier alone, while every case it uploads to still has one home |
 | `POST /test_suites/{id}/test_cases/{case_id}/steps/{step_index}/attachments` | upload companion of row 7, addressed through the suite that holds the case |
+| `PUT /test_suites/{id}/test_cases/{case_id}` | the #462 parent-scoped edit door through the suite home; exempt for the same reason as its project sibling |
+| `GET /test_suites/{id}/test_cases/{case_id}/history` | the #462 parent-scoped history door through the suite home; exempt for the same reason as its project sibling |
+| `GET /test_suites/{id}/test_cases/{case_id}/history/{version}` | read companion of the suite-scoped history listing above, same reason |
 | `GET /api-docs` | the Swagger UI page, not part of the data model |
 | `GET /openapi.json` | the contract itself; row 30 covers it as a service-surface assertion |
 
