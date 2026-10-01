@@ -10,7 +10,7 @@ use std::fmt::{self, Display, Formatter};
 
 use argon2::Argon2;
 use argon2::password_hash::{PasswordHasher, PasswordVerifier, phc::PasswordHash};
-use rand::RngCore;
+use rand::RngExt;
 
 /// Salt length, in bytes, for a freshly hashed credential.
 const SALT_BYTES: usize = 16;
@@ -37,7 +37,7 @@ impl Error for HashError {}
 /// [`HashError`] if the salt cannot be built or the hash cannot be produced.
 pub fn hash_password(password: &str) -> Result<String, HashError> {
     let mut salt_bytes = [0_u8; SALT_BYTES];
-    rand::rng().fill_bytes(&mut salt_bytes);
+    rand::rng().fill(&mut salt_bytes);
     // password-hash 0.6 takes the raw salt bytes and encodes them into the PHC
     // string itself; the stored form is unchanged across the upgrade, so
     // records hashed under 0.5 verify exactly as before.
