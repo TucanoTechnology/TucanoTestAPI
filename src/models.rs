@@ -969,3 +969,37 @@ mod tests {
         assert!(serde_json::from_str::<Project>("{ not json }").is_err());
     }
 }
+
+/// A workflow definition: an ordered list of references to live cases and suites.
+///
+/// Workflows are project-scoped documents that name a sequence of steps to
+/// execute. Each step references either a test case or a test suite; suite
+/// steps expand to their current cases at materialisation time.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct Workflow {
+    /// The workflow's identity, always derived from its name as `<name>.json`.
+    pub workflow_id: String,
+    /// The document's display name.
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Optional description.
+    pub description: Option<String>,
+    /// Ordered list of steps. Each step references either a case or a suite.
+    pub steps: Vec<WorkflowStep>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Optional tags for filtering.
+    pub tags: Option<Vec<String>>,
+}
+
+/// One step in a workflow: a reference to either a test case or a test suite.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkflowStep {
+    /// The test case this step references, if any.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub test_case_id: Option<String>,
+    /// The test suite this step references, if any.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub suite_id: Option<String>,
+}

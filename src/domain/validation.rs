@@ -14,7 +14,9 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 
-use crate::models::{Milestone, Project, TestCase, TestConfiguration, TestRun, TestSuite};
+use crate::models::{
+    Milestone, Project, TestCase, TestConfiguration, TestRun, TestSuite, Workflow,
+};
 use crate::storage::Resource;
 
 use super::error::DomainError;
@@ -65,6 +67,7 @@ pub fn known_fields(resource: Resource) -> &'static [&'static str] {
             "testRunIds",
         ],
         Resource::Configurations => &["configId", "name", "browser", "os", "device", "resolution"],
+        Resource::Workflows => &["workflowId", "name", "description", "steps", "tags"],
     }
 }
 
@@ -103,6 +106,7 @@ pub fn validate_payload(resource: Resource, value: &Value) -> Result<(), DomainE
         Resource::Runs => check_against_model::<TestRun>(object),
         Resource::Milestones => check_against_model::<Milestone>(object),
         Resource::Configurations => check_against_model::<TestConfiguration>(object),
+        Resource::Workflows => check_against_model::<Workflow>(object),
     }
 }
 
@@ -192,6 +196,7 @@ pub fn document_matches_model(resource: Resource, value: &Value) -> bool {
         Resource::Runs => deserialises::<TestRun>(value),
         Resource::Milestones => deserialises::<Milestone>(value),
         Resource::Configurations => deserialises::<TestConfiguration>(value),
+        Resource::Workflows => deserialises::<Workflow>(value),
     }
 }
 

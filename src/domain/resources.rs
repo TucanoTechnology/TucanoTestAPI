@@ -58,7 +58,7 @@ pub fn derive_create_id(resource: Resource, value: &Value) -> Result<String, Dom
                 None => Ok(format!("{name}.json")),
             }
         }
-        Resource::Suites | Resource::Runs | Resource::Configurations => {
+        Resource::Suites | Resource::Runs | Resource::Configurations | Resource::Workflows => {
             let name = required_string(value, "name").ok_or_else(missing)?;
             Ok(format!("{name}.json"))
         }

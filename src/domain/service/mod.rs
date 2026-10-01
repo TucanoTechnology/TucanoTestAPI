@@ -879,6 +879,7 @@ fn normalise_marker(resource: Resource, id: &str, document: &mut Value) {
         Resource::Runs => (None, "testRunId"),
         Resource::Milestones => (None, "milestoneId"),
         Resource::Configurations => (None, "configId"),
+        Resource::Workflows => (None, "workflowId"),
         // A test case cannot arrive without its identity: the id is derived from
         // it, so a body that omits `testCaseId` is refused before storage.
         Resource::Cases => return,

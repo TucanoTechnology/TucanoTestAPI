@@ -20,7 +20,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 /// A suite or a case folder taking one of these names would be created inside
 /// that collection, where its marker would be listed as a document of a
 /// resource it is not, so the name is refused instead.
-pub const RESERVED_PROJECT_CHILDREN: [&str; 3] = ["test_runs", "milestones", "configurations"];
+pub const RESERVED_PROJECT_CHILDREN: [&str; 4] =
+    ["test_runs", "milestones", "configurations", "workflows"];
 
 /// Longest name one stored component may have, counted in bytes.
 ///
@@ -47,17 +48,20 @@ pub enum Resource {
     Milestones,
     /// Configurations are documents in a project's `configurations` collection.
     Configurations,
+    /// Workflows are documents in a project's `workflows` collection.
+    Workflows,
 }
 
 impl Resource {
     /// Every resource the layout knows about.
-    pub const ALL: [Resource; 6] = [
+    pub const ALL: [Resource; 7] = [
         Resource::Projects,
         Resource::Cases,
         Resource::Suites,
         Resource::Runs,
         Resource::Milestones,
         Resource::Configurations,
+        Resource::Workflows,
     ];
 
     /// Collections stored directly below the data root. Every other resource
@@ -79,6 +83,7 @@ impl Resource {
             Resource::Runs => Some("test_runs"),
             Resource::Milestones => Some("milestones"),
             Resource::Configurations => Some("configurations"),
+            Resource::Workflows => Some("workflows"),
             Resource::Projects | Resource::Suites | Resource::Cases => None,
         }
     }
@@ -89,7 +94,10 @@ impl Resource {
             Resource::Projects => Some("project.json"),
             Resource::Suites => Some("suite.json"),
             Resource::Cases => Some("test-case.json"),
-            Resource::Runs | Resource::Milestones | Resource::Configurations => None,
+            Resource::Runs
+            | Resource::Milestones
+            | Resource::Configurations
+            | Resource::Workflows => None,
         }
     }
 
@@ -871,7 +879,7 @@ mod tests {
     fn a_project_reserves_the_names_of_its_collections() {
         assert_eq!(
             RESERVED_PROJECT_CHILDREN,
-            ["test_runs", "milestones", "configurations"]
+            ["test_runs", "milestones", "configurations", "workflows"]
         );
         // Every reserved name is a collection directory of one resource, so the
         // two lists can never drift apart.

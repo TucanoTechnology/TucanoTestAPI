@@ -24,6 +24,7 @@ mod reports;
 mod request_id;
 mod runs;
 mod suites;
+mod workflows;
 
 use std::sync::Arc;
 
@@ -264,6 +265,9 @@ pub const ROUTES: &[&str] = &[
     "/projects/{id}/milestones/{milestone_id}",
     "/projects/{id}/configurations",
     "/projects/{id}/configurations/{config_id}",
+    "/projects/{id}/workflows",
+    "/projects/{id}/workflows/{workflow_id}",
+    "/projects/{id}/workflows/{workflow_id}/run",
     "/test_suites",
     "/test_suites/{id}",
     "/test_suites/{id}/duplicate",
@@ -308,6 +312,9 @@ pub const ROUTES: &[&str] = &[
     "/environments",
     "/configurations",
     "/configurations/{id}",
+    "/workflows",
+    "/workflows/{id}",
+    "/workflows/{id}/duplicate",
     "/auth/login",
     "/auth/refresh",
     "/auth/logout",
@@ -362,6 +369,7 @@ where
         .merge(milestones::routes::<R>())
         .merge(reports::routes::<R>())
         .merge(configurations::routes::<R>())
+        .merge(workflows::routes::<R>())
         .merge(auth::routes::<R>())
         .layer(RequestBodyLimitLayer::new(
             state.guardrails().limits.max_body_bytes,

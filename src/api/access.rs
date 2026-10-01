@@ -250,7 +250,7 @@ fn projects_of<R: Repository + 'static>(
 ) -> Result<Vec<String>, DomainError> {
     match resource {
         Resource::Projects => Ok(vec![id.to_owned()]),
-        Resource::Suites | Resource::Cases | Resource::Configurations => {
+        Resource::Suites | Resource::Cases | Resource::Configurations | Resource::Workflows => {
             Ok(vec![state.project_of(resource, id, missing(resource))?])
         }
         Resource::Runs | Resource::Milestones => reachable_projects(state, resource, id),
@@ -280,9 +280,11 @@ fn require_every(
 fn write_role(resource: Resource) -> Role {
     match resource {
         Resource::Projects | Resource::Milestones => Role::Owner,
-        Resource::Suites | Resource::Cases | Resource::Runs | Resource::Configurations => {
-            Role::Editor
-        }
+        Resource::Suites
+        | Resource::Cases
+        | Resource::Runs
+        | Resource::Configurations
+        | Resource::Workflows => Role::Editor,
     }
 }
 
@@ -295,6 +297,7 @@ fn missing(resource: Resource) -> &'static str {
         Resource::Runs => "Test run not found",
         Resource::Milestones => "Milestone not found",
         Resource::Configurations => "Test configuration not found",
+        Resource::Workflows => "Workflow not found",
     }
 }
 
@@ -769,10 +772,12 @@ pub(crate) fn filter_list<R: Repository + 'static>(
             // A suite, a case and a configuration answer to the one project
             // holding it; an identifier two homes claim stays as ambiguous
             // as it has always been listed.
-            Resource::Suites | Resource::Cases | Resource::Configurations => match &homes[..] {
-                [Some(home)] => allowed(Some(reachable), home.project()),
-                _ => false,
-            },
+            Resource::Suites | Resource::Cases | Resource::Configurations | Resource::Workflows => {
+                match &homes[..] {
+                    [Some(home)] => allowed(Some(reachable), home.project()),
+                    _ => false,
+                }
+            }
             // A run or a milestone is governed by its home AND every project
             // its references reach; the document is read once, AT THE HOME,
             // instead of being resolved and read again as before.
