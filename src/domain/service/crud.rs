@@ -133,6 +133,7 @@ impl<R: Repository + 'static> TestService<R> {
     /// never store a document the API cannot read back.
     pub fn update(&self, resource: Resource, id: &str, value: &Value) -> Result<(), DomainError> {
         self.update_with_etag(resource, id, value, None)
+            .map(std::mem::drop)
     }
 
     /// Validates a partial body, checks an optional `If-Match` ETag, and merges
@@ -147,13 +148,15 @@ impl<R: Repository + 'static> TestService<R> {
     /// The write goes back to the addressed identifier, so an identity field
     /// the body carries is checked rather than obeyed by
     /// `refuse_foreign_identity` below.
+    /// The value returned is the document as now stored, so the route can
+    /// echo the server-managed fields a request cannot know (#459).
     pub fn update_with_etag(
         &self,
         resource: Resource,
         id: &str,
         value: &Value,
         expected_etag: Option<String>,
-    ) -> Result<(), DomainError> {
+    ) -> Result<Value, DomainError> {
         validation::validate_payload(resource, value)?;
         let parent = self.owner_for_write(resource, id, "Resource not found")?;
         self.refuse_foreign_identity(resource, parent.as_ref(), id, value)?;

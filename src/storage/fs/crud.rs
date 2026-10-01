@@ -226,7 +226,7 @@ impl FileRepository {
         id: &str,
         expected_etag: Option<&str>,
         transform: F,
-    ) -> io::Result<()>
+    ) -> io::Result<Value>
     where
         F: FnOnce(Value) -> io::Result<Value>,
     {
@@ -267,7 +267,8 @@ impl FileRepository {
                 }
                 self.ensure_kind_available(resource, Some(parent), id)?;
             }
-            self.write_json(&path, &new_value)
+            self.write_json(&path, &new_value)?;
+            Ok(new_value)
         })();
         lock.unlock()?;
         result

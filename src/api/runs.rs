@@ -140,8 +140,14 @@ async fn record_run_result<R: Repository + 'static>(
     // pool so lock waits and fsyncs never occupy an async worker (#410).
     super::on_blocking(move || -> Result<Json<Value>, DomainError> {
         access::require_run(&service, &principal, &id, Role::Editor)?;
-        service.record_run_result(&id, &body)?;
-        Ok(Json(json!({ "message": "Test result recorded in run" })))
+        let stored = service.record_run_result(&id, &body)?;
+        Ok(Json(json!({
+            "message": "Test result recorded in run",
+            // The result as stored, so a client paints the row without a
+            // re-read: merged notes, the timestamp the API filled (#459).
+            "result": serde_json::to_value(stored)
+                .map_err(|e| DomainError::Internal(e.to_string()))?,
+        })))
     })
     .await
 }
@@ -156,8 +162,12 @@ async fn replace_run_result<R: Repository + 'static>(
     // pool so lock waits and fsyncs never occupy an async worker (#410).
     super::on_blocking(move || -> Result<Json<Value>, DomainError> {
         access::require_run(&service, &principal, &id, Role::Editor)?;
-        service.replace_run_result(&id, &case_id, &body)?;
-        Ok(Json(json!({ "message": "Test result replaced in run" })))
+        let stored = service.replace_run_result(&id, &case_id, &body)?;
+        Ok(Json(json!({
+            "message": "Test result replaced in run",
+            "result": serde_json::to_value(stored)
+                .map_err(|e| DomainError::Internal(e.to_string()))?,
+        })))
     })
     .await
 }
@@ -186,7 +196,11 @@ async fn list_result_defects<R: Repository + 'static>(
     // pool so lock waits and fsyncs never occupy an async worker (#410).
     super::on_blocking(move || -> Result<Json<Value>, DomainError> {
         access::require_run(&service, &principal, &id, Role::Viewer)?;
-        let defects = service.list_defects(&id, &case_id)?;
+        // #460: the links are the case's, so the case's project must be in
+        // view too — a run cannot be used to read a foreign case's defects.
+        let parent = service.resolve_result_case(&id, &case_id)?;
+        access::require(&service, &principal, parent.project(), Role::Viewer)?;
+        let defects = service.case_defects(&parent, &case_id)?;
         Ok(Json(json!({ "defects": defects })))
     })
     .await
@@ -202,7 +216,9 @@ async fn link_result_defect<R: Repository + 'static>(
     // pool so lock waits and fsyncs never occupy an async worker (#410).
     super::on_blocking(move || -> Result<(StatusCode, Json<Value>), DomainError> {
         access::require_run(&service, &principal, &id, Role::Editor)?;
-        let link = service.link_defect_to_result(&id, &case_id, &body)?;
+        let parent = service.resolve_result_case(&id, &case_id)?;
+        access::require(&service, &principal, parent.project(), Role::Editor)?;
+        let link = service.link_defect_to_case(&parent, &case_id, &body)?;
         Ok((
             StatusCode::CREATED,
             Json(json!({ "message": "Defect linked to test result", "id": link.link_id })),
@@ -220,7 +236,9 @@ async fn unlink_result_defect<R: Repository + 'static>(
     // pool so lock waits and fsyncs never occupy an async worker (#410).
     super::on_blocking(move || -> Result<Json<Value>, DomainError> {
         access::require_run(&service, &principal, &id, Role::Editor)?;
-        service.unlink_defect_from_result(&id, &case_id, &link_id)?;
+        let parent = service.resolve_result_case(&id, &case_id)?;
+        access::require(&service, &principal, parent.project(), Role::Editor)?;
+        service.unlink_defect_from_case(&parent, &case_id, &link_id)?;
         Ok(Json(
             json!({ "message": "Defect unlinked from test result" }),
         ))

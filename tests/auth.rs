@@ -1482,6 +1482,136 @@ async fn a_configuration_is_written_by_an_editor_of_its_project() {
     .await;
 }
 
+/// #460: a defect link is written to the CASE, so the caller must be able to
+/// write there — an editor of the run's project is not, by itself, an editor
+/// of the project the case lives in. Reading is the symmetric story: the case
+/// home must be in view.
+#[tokio::test]
+async fn linking_a_defect_needs_write_access_to_the_case_home_too() {
+    let directory = tempfile::tempdir().expect("temp dir");
+    let seeder = seeding_app(directory.path());
+
+    let alpha = id_of(
+        &call_ok(
+            &seeder,
+            None,
+            "POST",
+            "/projects",
+            Some(json!({ "name": "alpha" })),
+        )
+        .await,
+    );
+    let beta = id_of(
+        &call_ok(
+            &seeder,
+            None,
+            "POST",
+            "/projects",
+            Some(json!({ "name": "beta" })),
+        )
+        .await,
+    );
+    // The case lives in beta; the run lives in alpha and reaches the case
+    // through its own projects snapshot.
+    call_ok(
+        &seeder,
+        None,
+        "POST",
+        &format!("/projects/{beta}/test_cases"),
+        Some(case_body("TC-BETA")),
+    )
+    .await;
+    let run = id_of(
+        &call_ok(
+            &seeder,
+            None,
+            "POST",
+            &format!("/projects/{alpha}/test_runs"),
+            Some(json!({
+                "name": "cross",
+                "projects": [
+                    { "projectId": alpha.clone(), "name": "alpha", "testSuites": [] },
+                    { "projectId": beta.clone(), "name": "beta", "testSuites": [] },
+                ],
+                "testCases": [case_body("TC-BETA")],
+            })),
+        )
+        .await,
+    );
+    call_ok(
+        &seeder,
+        None,
+        "POST",
+        &format!("/test_runs/{run}/results"),
+        Some(json!({"testCaseId": "TC-BETA", "status": "Failed", "timestamp": "1"})),
+    )
+    .await;
+
+    // editor on alpha, viewer on beta: reads reach the case, writes do not.
+    let app = enforcing_app_with_grants(
+        directory.path(),
+        &[
+            (alpha.as_str(), Role::Editor),
+            (beta.as_str(), Role::Viewer),
+        ],
+    );
+    let token = sign_in_token(&app).await;
+    let listed = call_ok(
+        &app,
+        Some(token.as_str()),
+        "GET",
+        &format!("/test_runs/{run}/results/TC-BETA/defects"),
+        None,
+    )
+    .await;
+    assert_eq!(listed, json!({ "defects": [] }));
+
+    let (status, _, answer) = send(
+        &app,
+        request(
+            "POST",
+            &format!("/test_runs/{run}/results/TC-BETA/defects"),
+            Some(token.as_str()),
+            Some(json!({
+                "defectId": "BUG-1",
+                "defectUrl": "https://tracker.example/BUG-1",
+                "trackerType": "custom",
+            })),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "linking: {answer}");
+
+    // Granted editor on beta as well — the store is a file, so the live
+    // router sees the grant — and the same call now writes the case document.
+    let store = AuthStore::new(directory.path()).expect("store");
+    store
+        .set_role(beta.as_str(), USER_ID, Role::Editor)
+        .expect("grant the case home");
+    let linked = call_ok(
+        &app,
+        Some(token.as_str()),
+        "POST",
+        &format!("/test_runs/{run}/results/TC-BETA/defects"),
+        Some(json!({
+            "defectId": "BUG-1",
+            "defectUrl": "https://tracker.example/BUG-1",
+            "trackerType": "custom",
+        })),
+    )
+    .await;
+    assert!(linked["id"].is_string(), "{linked}");
+    let listed = call_ok(
+        &app,
+        Some(token.as_str()),
+        "GET",
+        &format!("/test_runs/{run}/results/TC-BETA/defects"),
+        None,
+    )
+    .await;
+    assert_eq!(listed["defects"].as_array().expect("array").len(), 1);
+}
+
 /// A caller granted a role in a project that does not exist reaches nothing:
 /// listings come back empty and every direct read is a 403.
 #[tokio::test]

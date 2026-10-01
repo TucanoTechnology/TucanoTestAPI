@@ -730,6 +730,77 @@ async fn a_case_persisted_before_versioning_stays_readable_and_versions_on_deman
 }
 
 #[tokio::test]
+async fn a_case_body_cannot_write_the_defect_list_behind_the_routes() {
+    let (_directory, app) = test_app();
+    let project = create_project(&app, "checkout").await;
+    create_case_in(&app, &format!("/projects/{project}/test_cases"), "TC-001").await;
+
+    // #460: the links are the case's, but the defects routes write them alone.
+    // A document body that names the field is refused, not ignored.
+    for (method, uri) in [
+        ("PUT", "/test_cases/TC-001".to_owned()),
+        ("POST", format!("/projects/{project}/test_cases")),
+    ] {
+        let (status, body) = send_json(
+            &app,
+            json_request(
+                method,
+                &uri,
+                &json!({
+                    "testCaseId": "TC-001",
+                    "title": "Login",
+                    "expectedResult": "Stored",
+                    "defectLinks": [{"defectId": "SNEAK", "linkId": "L", "defectUrl": "https://x/1", "trackerType": "custom", "linkedAt": "1"}],
+                }),
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{method} {uri}: {body}");
+        assert_error_envelope(&body, "invalid_request");
+        assert!(
+            body["error"]["message"]
+                .as_str()
+                .is_some_and(|message| message.contains("defectLinks")),
+            "the refusal names the field: {body}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn an_update_echoes_the_stored_document_so_clients_skip_the_re_read() {
+    let (_directory, app) = test_app();
+    let project = create_project(&app, "checkout").await;
+    create_case_in(&app, &format!("/projects/{project}/test_cases"), "TC-001").await;
+
+    let (status, body) = send_json(
+        &app,
+        json_request(
+            "PUT",
+            "/test_cases/TC-001",
+            &json!({"title": "Renamed once"}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "echoing: {body}");
+    // #459: the message survives, and the stored document rides with it.
+    assert_eq!(body["message"], "Resource updated");
+    let document = &body["document"];
+    assert_eq!(document["testCaseId"], "TC-001");
+    assert_eq!(document["title"], "Renamed once");
+    assert_eq!(
+        document["version"],
+        json!(2),
+        "the advanced revision is echoed"
+    );
+    assert_iso8601(&document["lastModified"]);
+
+    // The echo is not a guess about the store: it is the document, field for
+    // field, as the next read returns it.
+    let (_, stored) = send_json(&app, get("/test_cases/TC-001")).await;
+    assert_eq!(stored, body["document"]);
+}
+
+#[tokio::test]
 async fn a_copied_case_carries_the_revision_snapshots_of_its_source() {
     let (directory, app) = test_app();
     let project = create_project(&app, "checkout").await;
