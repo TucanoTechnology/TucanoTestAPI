@@ -488,7 +488,7 @@ impl Repository for FileRepository {
         id: &str,
         expected_etag: Option<&str>,
         transform: F,
-    ) -> io::Result<()>
+    ) -> io::Result<Value>
     where
         F: FnOnce(Value) -> io::Result<Value>,
     {

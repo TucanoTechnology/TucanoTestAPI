@@ -147,6 +147,8 @@ pub trait Repository: Send + Sync {
     /// to a SHA-256 digest of the raw bytes; a mismatch reports an
     /// [`io::ErrorKind::WouldBlock`] carrying an [`EtagMismatch`] payload, while
     /// a lock that times out reports a bare [`io::ErrorKind::WouldBlock`].
+    /// The value returned is the document as written, so a caller can answer
+    /// with what the store now holds without a second read (#459).
     fn transform_at<F>(
         &self,
         resource: Resource,
@@ -154,7 +156,7 @@ pub trait Repository: Send + Sync {
         id: &str,
         expected_etag: Option<&str>,
         transform: F,
-    ) -> io::Result<()>
+    ) -> io::Result<Value>
     where
         F: FnOnce(Value) -> io::Result<Value>;
 

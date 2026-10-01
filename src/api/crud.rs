@@ -103,8 +103,12 @@ macro_rules! crud_handlers {
                 } else {
                     Some(if_match.0)
                 };
-                state.update_with_etag($resource, &id, &body, expected_etag)?;
-                Ok(Json(json!({ "message": "Resource updated" })))
+                let document =
+                    state.update_with_etag($resource, &id, &body, expected_etag)?;
+                // The stored document rides along (#459): fields the API
+                // manages — a case's `version` and `lastModified` above all —
+                // are the ones a re-read exists to discover.
+                Ok(Json(json!({ "message": "Resource updated", "document": document })))
 
             }).await
         }
