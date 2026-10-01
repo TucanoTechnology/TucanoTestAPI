@@ -111,7 +111,7 @@ impl FileRepository {
                 let parent = required_parent(parent)?;
                 case_marker(&self.root, parent, id)
             }
-            Resource::Runs | Resource::Milestones | Resource::Configurations => {
+            Resource::Runs | Resource::Milestones | Resource::Configurations | Resource::Workflows => {
                 let project = project_parent(parent)?;
                 project_document_path(&self.root, project, resource, id)
             }
@@ -748,6 +748,7 @@ fn not_a_project_home(resource: Resource) -> io::Error {
         Resource::Runs => "runs",
         Resource::Milestones => "milestones",
         Resource::Configurations => "configurations",
+        Resource::Workflows => "workflows",
         Resource::Projects | Resource::Suites | Resource::Cases => "these resources",
     };
     io::Error::new(

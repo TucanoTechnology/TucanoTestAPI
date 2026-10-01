@@ -47,17 +47,20 @@ pub enum Resource {
     Milestones,
     /// Configurations are documents in a project's `configurations` collection.
     Configurations,
+    /// Workflows are documents in a project's `workflows` collection.
+    Workflows,
 }
 
 impl Resource {
     /// Every resource the layout knows about.
-    pub const ALL: [Resource; 6] = [
+    pub const ALL: [Resource; 7] = [
         Resource::Projects,
         Resource::Cases,
         Resource::Suites,
         Resource::Runs,
         Resource::Milestones,
         Resource::Configurations,
+        Resource::Workflows,
     ];
 
     /// Collections stored directly below the data root. Every other resource
@@ -79,6 +82,7 @@ impl Resource {
             Resource::Runs => Some("test_runs"),
             Resource::Milestones => Some("milestones"),
             Resource::Configurations => Some("configurations"),
+            Resource::Workflows => Some("workflows"),
             Resource::Projects | Resource::Suites | Resource::Cases => None,
         }
     }
@@ -89,7 +93,7 @@ impl Resource {
             Resource::Projects => Some("project.json"),
             Resource::Suites => Some("suite.json"),
             Resource::Cases => Some("test-case.json"),
-            Resource::Runs | Resource::Milestones | Resource::Configurations => None,
+            Resource::Runs | Resource::Milestones | Resource::Configurations | Resource::Workflows => None,
         }
     }
 

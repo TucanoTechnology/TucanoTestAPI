@@ -80,6 +80,7 @@ pub const fn resource_noun(resource: Resource) -> &'static str {
         Resource::Runs => "test_run",
         Resource::Milestones => "milestone",
         Resource::Configurations => "test_configuration",
+        Resource::Workflows => "workflow",
     }
 }
 

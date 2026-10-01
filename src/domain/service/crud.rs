@@ -111,6 +111,9 @@ impl<R: Repository + 'static> TestService<R> {
             Resource::Configurations => Err(DomainError::invalid_request(
                 "Configurations are created inside a project: POST /projects/{id}/configurations",
             )),
+            Resource::Workflows => Err(DomainError::invalid_request(
+                "Workflows are created inside a project: POST /projects/{id}/workflows",
+            )),
             Resource::Projects => self.create_at(resource, None, value),
         }
     }
@@ -376,6 +379,7 @@ fn body_identity_field(resource: Resource) -> Option<&'static str> {
         Resource::Runs => Some("testRunId"),
         Resource::Milestones => Some("milestoneId"),
         Resource::Configurations => Some("configId"),
+        Resource::Workflows => Some("workflowId"),
         Resource::Cases => None,
     }
 }
