@@ -199,6 +199,7 @@ the check.
 | `GET /projects/{id}/workflows` | list companion of the project-scoped creation; the seed creates workflows through the project-scoped route |
 | `POST /projects/{id}/workflows` | the project-scoped creation route; the seed does not create workflows |
 | `DELETE /projects/{id}/workflows/{workflow_id}` | delete companion of the project-scoped creation; the seed does not delete workflows |
+| `POST /projects/{id}/workflows/{workflow_id}/run` | run materialisation; the seed does not create runs from workflows |
 | `GET /api-docs` | the Swagger UI page, not part of the data model |
 | `GET /openapi.json` | the contract itself; row 30 covers it as a service-surface assertion |
 

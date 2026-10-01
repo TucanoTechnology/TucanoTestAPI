@@ -6140,6 +6140,85 @@
           }
         }
       }
+    },
+    "/projects/{id}/workflows/{workflow_id}/run": {
+      "post": {
+        "tags": [
+          "Projects"
+        ],
+        "summary": "Materialise a workflow into a run",
+        "description": "Creates a run from the workflow definition. Suite steps expand to their current cases; case steps are pinned as-is. The run carries sourceWorkflowId for provenance.",
+        "operationId": "runFromProjectWorkflow",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/id"
+          },
+          {
+            "$ref": "#/components/parameters/case_id"
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "description": "Run name; defaults to the workflow id."
+                  },
+                  "projects": {
+                    "type": "array",
+                    "items": {
+                      "type": "object"
+                    },
+                    "description": "Projects the run covers; defaults to the workflow home."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Run created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreateResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/XRequestId"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "413": {
+            "$ref": "#/components/responses/BodyTooLarge"
+          },
+          "503": {
+            "$ref": "#/components/responses/Overloaded"
+          },
+          "504": {
+            "$ref": "#/components/responses/RequestTimeout"
+          }
+        }
+      }
     }
   },
   "components": {

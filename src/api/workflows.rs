@@ -8,7 +8,7 @@ use axum::{
     Json, Router,
     extract::{Path, State},
     http::StatusCode,
-    routing::{delete, get},
+    routing::{delete, get, post},
 };
 use serde_json::{Value, json};
 
@@ -155,4 +155,67 @@ pub(crate) fn routes<R: Repository + 'static>() -> Router<AppState<R>> {
             "/projects/{id}/workflows/{workflow_id}",
             delete(delete_project_workflow::<R>),
         )
+        .route(
+            "/projects/{id}/workflows/{workflow_id}/run",
+            post(run_from_workflow::<R>),
+        )
+}
+
+async fn run_from_workflow<R: Repository + 'static>(
+    State(service): State<AppState<R>>,
+    principal: Principal,
+    Path((id, workflow_id)): Path<(String, String)>,
+    Json(body): Json<Value>,
+) -> Result<(StatusCode, Json<Value>), DomainError> {
+    super::on_blocking(move || -> Result<(StatusCode, Json<Value>), DomainError> {
+        access::require(&service, &principal, &id, crate::auth::Role::Editor)?;
+        
+        // Read the workflow.
+        let workflow = service.document_in(
+            Resource::Workflows,
+            &Parent::Project(id.clone()),
+            &workflow_id,
+            "Workflow not found",
+        )?;
+        
+        // Build run body from workflow steps.
+        let steps = workflow.get("steps").and_then(Value::as_array).ok_or_else(|| {
+            DomainError::invalid_request("Workflow has no steps")
+        })?;
+        
+        let mut test_cases = Vec::new();
+        let mut test_suites = Vec::new();
+        
+        for step in steps {
+            if let Some(obj) = step.as_object() {
+                if let Some(case_id) = obj.get("testCaseId").and_then(Value::as_str) {
+                    test_cases.push(json!({"testCaseId": case_id}));
+                } else if let Some(suite_id) = obj.get("suiteId").and_then(Value::as_str) {
+                    test_suites.push(json!({"suiteId": suite_id}));
+                }
+            }
+        }
+        
+        let run_name = body.get("name").and_then(Value::as_str).unwrap_or(&workflow_id);
+        let mut run_body = json!({
+            "name": run_name,
+            "testCases": test_cases,
+            "testSuites": test_suites,
+            "sourceWorkflowId": workflow_id
+        });
+        
+        // Add projects if specified.
+        if let Some(projects) = body.get("projects") {
+            run_body["projects"] = projects.clone();
+        } else {
+            run_body["projects"] = json!([{"projectId": id}]);
+        }
+        
+        let created = service.create_in(Resource::Runs, &Parent::Project(id), &run_body)?;
+        Ok((StatusCode::CREATED, Json(json!({
+            "message": "Run created from workflow",
+            "id": created.id
+        }))))
+    })
+    .await
 }

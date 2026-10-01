@@ -721,7 +721,7 @@ async fn every_guarded_operation_refuses_an_anonymous_caller() {
     let operations = guarded_operations();
     assert_eq!(
         operations.len(),
-        98,
+        99,
         "the guarded surface changed with openapi.json; this assertion is the drift trip-wire"
     );
 

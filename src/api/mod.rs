@@ -267,6 +267,7 @@ pub const ROUTES: &[&str] = &[
     "/projects/{id}/configurations/{config_id}",
     "/projects/{id}/workflows",
     "/projects/{id}/workflows/{workflow_id}",
+    "/projects/{id}/workflows/{workflow_id}/run",
     "/test_suites",
     "/test_suites/{id}",
     "/test_suites/{id}/duplicate",
