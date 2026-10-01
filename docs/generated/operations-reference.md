@@ -10,7 +10,7 @@ operation index — method, path, `operationId` and summary. Schemas, parameters
 and status codes are the contract itself: read them in [`openapi.json`](../../openapi.json) or in
 the Swagger UI at `/api-docs`, which is rendered from the same document.
 
-The contract currently registers **98** operations.
+The contract currently registers **108** operations.
 
 | Method | Path | Operation | Summary |
 | --- | --- | --- | --- |
@@ -62,6 +62,10 @@ The contract currently registers **98** operations.
 | `GET` | `/projects/{id}/test_suites` | `listProjectTestSuites` | List the test suites a project owns |
 | `POST` | `/projects/{id}/test_suites` | `addProjectTestSuite` | Create a test suite in a project, or place an existing one |
 | `DELETE` | `/projects/{id}/test_suites/{suite_id}` | `removeProjectTestSuite` | Delete a test suite a project owns |
+| `GET` | `/projects/{id}/workflows` | `listProjectWorkflows` | List the workflows a project owns |
+| `POST` | `/projects/{id}/workflows` | `createProjectWorkflow` | Create a workflow in a project |
+| `DELETE` | `/projects/{id}/workflows/{workflow_id}` | `deleteProjectWorkflow` | Delete a workflow a project owns |
+| `POST` | `/projects/{id}/workflows/{workflow_id}/run` | `runFromProjectWorkflow` | Materialise a workflow into a run |
 | `GET` | `/ready` | `getReady` | Readiness check |
 | `GET` | `/releases` | `listReleases` | List the releases available to the caller |
 | `GET` | `/reports/coverage` | `getCoverageReport` | Get the coverage report |
@@ -112,3 +116,9 @@ The contract currently registers **98** operations.
 | `GET` | `/test_suites/{id}/test_cases/{case_id}/steps/{step_index}/attachments` | `listTestSuiteTestCaseStepAttachments` | List a suite test case's step attachments |
 | `POST` | `/test_suites/{id}/test_cases/{case_id}/steps/{step_index}/attachments` | `uploadTestSuiteTestCaseStepAttachment` | Upload a suite test case step attachment |
 | `DELETE` | `/test_suites/{id}/test_cases/{case_id}/steps/{step_index}/attachments/{filename}` | `deleteTestSuiteTestCaseStepAttachment` | Delete a suite test case step attachment |
+| `GET` | `/workflows` | `listWorkflows` | List workflows (retired) |
+| `POST` | `/workflows` | `createWorkflow` | Create a workflow (retired) |
+| `GET` | `/workflows/{id}` | `getWorkflow` | Read a workflow |
+| `PUT` | `/workflows/{id}` | `updateWorkflow` | Update a workflow |
+| `DELETE` | `/workflows/{id}` | `deleteWorkflow` | Delete a workflow |
+| `POST` | `/workflows/{id}/duplicate` | `duplicateWorkflow` | Duplicate a workflow |
