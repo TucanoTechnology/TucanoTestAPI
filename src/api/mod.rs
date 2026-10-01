@@ -314,6 +314,7 @@ pub const ROUTES: &[&str] = &[
     "/configurations/{id}",
     "/workflows",
     "/workflows/{id}",
+    "/workflows/{id}/duplicate",
     "/auth/login",
     "/auth/refresh",
     "/auth/logout",

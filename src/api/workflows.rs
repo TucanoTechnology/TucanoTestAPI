@@ -13,7 +13,7 @@ use axum::{
 use serde_json::{Value, json};
 
 use crate::{
-    domain::DomainError,
+    domain::{DomainError, duplicate},
     storage::{Parent, Repository, Resource},
 };
 
@@ -21,7 +21,7 @@ use super::{
     AppState,
     access,
     crud::prelude::*,
-    crud::{composed_response, crud_handlers},
+    crud::{composed_response, crud_handlers, duplicate_handler},
 };
 
 crud_handlers!(
@@ -32,6 +32,8 @@ crud_handlers!(
     delete_workflow,
     Resource::Workflows
 );
+
+duplicate_handler!(duplicate_workflow, duplicate::WORKFLOW);
 
 async fn create_project_workflow<R: Repository + 'static>(
     State(service): State<AppState<R>>,
@@ -44,6 +46,82 @@ async fn create_project_workflow<R: Repository + 'static>(
         validate_workflow_steps(&service, &id, &body)?;
         let composed = service.compose(Resource::Workflows, &Parent::Project(id), &body)?;
         Ok(composed_response(&composed, "Workflow created"))
+    })
+    .await
+}
+
+async fn delete_project_workflow<R: Repository + 'static>(
+    State(service): State<AppState<R>>,
+    principal: Principal,
+    Path((id, workflow_id)): Path<(String, String)>,
+) -> Result<Json<Value>, DomainError> {
+    super::on_blocking(move || -> Result<Json<Value>, DomainError> {
+        access::require(&service, &principal, &id, crate::auth::Role::Editor)?;
+        service.delete_in(Resource::Workflows, &Parent::Project(id), &workflow_id)?;
+        Ok(Json(json!({ "message": "Workflow deleted" })))
+    })
+    .await
+}
+
+async fn run_from_workflow<R: Repository + 'static>(
+    State(service): State<AppState<R>>,
+    principal: Principal,
+    Path((id, workflow_id)): Path<(String, String)>,
+    Json(body): Json<Value>,
+) -> Result<(StatusCode, Json<Value>), DomainError> {
+    super::on_blocking(move || -> Result<(StatusCode, Json<Value>), DomainError> {
+        access::require(&service, &principal, &id, crate::auth::Role::Editor)?;
+        
+        // Read the workflow.
+        let workflow = service.document_in(
+            Resource::Workflows,
+            &Parent::Project(id.clone()),
+            &workflow_id,
+            "Workflow not found",
+        )?;
+        
+        // Build run body from workflow steps.
+        let steps = workflow.get("steps").and_then(Value::as_array).ok_or_else(|| {
+            DomainError::invalid_request("Workflow has no steps")
+        })?;
+        
+        let mut test_cases = Vec::new();
+        let mut test_suites = Vec::new();
+        let mut seen_cases = std::collections::HashSet::new();
+        
+        for step in steps {
+            if let Some(obj) = step.as_object() {
+                if let Some(case_id) = obj.get("testCaseId").and_then(Value::as_str) {
+                    // First-position dedup.
+                    if seen_cases.insert(case_id.to_string()) {
+                        test_cases.push(json!({"testCaseId": case_id}));
+                    }
+                } else if let Some(suite_id) = obj.get("suiteId").and_then(Value::as_str) {
+                    test_suites.push(json!({"suiteId": suite_id}));
+                }
+            }
+        }
+        
+        let run_name = body.get("name").and_then(Value::as_str).unwrap_or(&workflow_id);
+        let mut run_body = json!({
+            "name": run_name,
+            "testCases": test_cases,
+            "testSuites": test_suites,
+            "sourceWorkflowId": workflow_id
+        });
+        
+        // Add projects if specified.
+        if let Some(projects) = body.get("projects") {
+            run_body["projects"] = projects.clone();
+        } else {
+            run_body["projects"] = json!([{"projectId": id}]);
+        }
+        
+        let created = service.create_in(Resource::Runs, &Parent::Project(id), &run_body)?;
+        Ok((StatusCode::CREATED, Json(json!({
+            "message": "Run created from workflow",
+            "id": created.id
+        }))))
     })
     .await
 }
@@ -120,19 +198,6 @@ fn validate_workflow_steps<R: Repository + 'static>(
     Ok(())
 }
 
-async fn delete_project_workflow<R: Repository + 'static>(
-    State(service): State<AppState<R>>,
-    principal: Principal,
-    Path((id, workflow_id)): Path<(String, String)>,
-) -> Result<Json<Value>, DomainError> {
-    super::on_blocking(move || -> Result<Json<Value>, DomainError> {
-        access::require(&service, &principal, &id, crate::auth::Role::Editor)?;
-        service.delete_in(Resource::Workflows, &Parent::Project(id), &workflow_id)?;
-        Ok(Json(json!({ "message": "Workflow deleted" })))
-    })
-    .await
-}
-
 pub(crate) fn routes<R: Repository + 'static>() -> Router<AppState<R>> {
     Router::new()
         // Retired: a workflow is created inside a project. The handler
@@ -148,6 +213,10 @@ pub(crate) fn routes<R: Repository + 'static>() -> Router<AppState<R>> {
                 .delete(delete_workflow::<R>),
         )
         .route(
+            "/workflows/{id}/duplicate",
+            post(duplicate_workflow::<R>),
+        )
+        .route(
             "/projects/{id}/workflows",
             get(list_workflows::<R>).post(create_project_workflow::<R>),
         )
@@ -159,63 +228,4 @@ pub(crate) fn routes<R: Repository + 'static>() -> Router<AppState<R>> {
             "/projects/{id}/workflows/{workflow_id}/run",
             post(run_from_workflow::<R>),
         )
-}
-
-async fn run_from_workflow<R: Repository + 'static>(
-    State(service): State<AppState<R>>,
-    principal: Principal,
-    Path((id, workflow_id)): Path<(String, String)>,
-    Json(body): Json<Value>,
-) -> Result<(StatusCode, Json<Value>), DomainError> {
-    super::on_blocking(move || -> Result<(StatusCode, Json<Value>), DomainError> {
-        access::require(&service, &principal, &id, crate::auth::Role::Editor)?;
-        
-        // Read the workflow.
-        let workflow = service.document_in(
-            Resource::Workflows,
-            &Parent::Project(id.clone()),
-            &workflow_id,
-            "Workflow not found",
-        )?;
-        
-        // Build run body from workflow steps.
-        let steps = workflow.get("steps").and_then(Value::as_array).ok_or_else(|| {
-            DomainError::invalid_request("Workflow has no steps")
-        })?;
-        
-        let mut test_cases = Vec::new();
-        let mut test_suites = Vec::new();
-        
-        for step in steps {
-            if let Some(obj) = step.as_object() {
-                if let Some(case_id) = obj.get("testCaseId").and_then(Value::as_str) {
-                    test_cases.push(json!({"testCaseId": case_id}));
-                } else if let Some(suite_id) = obj.get("suiteId").and_then(Value::as_str) {
-                    test_suites.push(json!({"suiteId": suite_id}));
-                }
-            }
-        }
-        
-        let run_name = body.get("name").and_then(Value::as_str).unwrap_or(&workflow_id);
-        let mut run_body = json!({
-            "name": run_name,
-            "testCases": test_cases,
-            "testSuites": test_suites,
-            "sourceWorkflowId": workflow_id
-        });
-        
-        // Add projects if specified.
-        if let Some(projects) = body.get("projects") {
-            run_body["projects"] = projects.clone();
-        } else {
-            run_body["projects"] = json!([{"projectId": id}]);
-        }
-        
-        let created = service.create_in(Resource::Runs, &Parent::Project(id), &run_body)?;
-        Ok((StatusCode::CREATED, Json(json!({
-            "message": "Run created from workflow",
-            "id": created.id
-        }))))
-    })
-    .await
 }

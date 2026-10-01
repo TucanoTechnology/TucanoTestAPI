@@ -85,6 +85,16 @@ pub const MILESTONE: DuplicateSpec = DuplicateSpec {
     already_exists_message: "Milestone already exists",
 };
 
+pub const WORKFLOW: DuplicateSpec = DuplicateSpec {
+    resource: Resource::Workflows,
+    id_field: "workflowId",
+    not_found_message: "Workflow not found",
+    rename: None,
+    reset_run_state: false,
+    duplicated_message: "Workflow duplicated",
+    already_exists_message: "Workflow already exists",
+};
+
 /// Applies the request-body overrides to a duplicated document and returns the
 /// identifier the copy should be stored under.
 ///
@@ -177,7 +187,7 @@ mod tests {
 
     #[test]
     fn derived_ids_carry_the_suffix_the_storage_layer_requires() {
-        for spec in [PROJECT, SUITE, RUN, MILESTONE] {
+        for spec in [PROJECT, SUITE, RUN, MILESTONE, WORKFLOW] {
             let mut document = json!({});
             let id = apply_overrides(&spec, "source.json", &json!({}), &mut document);
 

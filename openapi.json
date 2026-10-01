@@ -6219,6 +6219,78 @@
           }
         }
       }
+    },
+    "/workflows/{id}/duplicate": {
+      "post": {
+        "tags": [
+          "Workflows"
+        ],
+        "summary": "Duplicate a workflow",
+        "description": "Creates a copy of the workflow. The copy is refused if any step target is not reachable in the destination project.",
+        "operationId": "duplicateWorkflow",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/id"
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "newId": {
+                    "type": "string",
+                    "description": "Identifier for the copy; derived from the source when omitted."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Workflow duplicated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreateResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/XRequestId"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "413": {
+            "$ref": "#/components/responses/BodyTooLarge"
+          },
+          "503": {
+            "$ref": "#/components/responses/Overloaded"
+          },
+          "504": {
+            "$ref": "#/components/responses/RequestTimeout"
+          }
+        }
+      }
     }
   },
   "components": {

@@ -200,6 +200,7 @@ the check.
 | `POST /projects/{id}/workflows` | the project-scoped creation route; the seed does not create workflows |
 | `DELETE /projects/{id}/workflows/{workflow_id}` | delete companion of the project-scoped creation; the seed does not delete workflows |
 | `POST /projects/{id}/workflows/{workflow_id}/run` | run materialisation; the seed does not create runs from workflows |
+| `POST /workflows/{id}/duplicate` | duplication is seeded for milestones (row 21), not for workflows |
 | `GET /api-docs` | the Swagger UI page, not part of the data model |
 | `GET /openapi.json` | the contract itself; row 30 covers it as a service-surface assertion |
 
