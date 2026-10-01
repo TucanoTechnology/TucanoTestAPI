@@ -11,7 +11,7 @@ use serde_json::json;
 async fn workflows_are_created_inside_a_project() {
     let (_directory, app) = test_app();
 
-    // The retired flat routes still serve (for listing) but creation is refused.
+    // The retired flat routes explain where creation moved.
     let (status, listing) = send_json(&app, get("/workflows")).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(listing, json!([]));
@@ -26,6 +26,23 @@ async fn workflows_are_created_inside_a_project() {
 
     // Creation through the project-scoped route.
     let home = fixture_home(&app).await;
+    
+    // Create a case first so the workflow can reference it.
+    let (status, _) = send_json(
+        &app,
+        json_request(
+            "POST",
+            &format!("/projects/{home}/test_cases"),
+            &json!({
+                "testCaseId": "TC-001",
+                "title": "Test case",
+                "expectedResult": "It works"
+            }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+
     let (status, created) = send_json(
         &app,
         json_request(
@@ -51,6 +68,22 @@ async fn workflows_are_created_inside_a_project() {
 async fn workflows_support_the_full_crud_lifecycle() {
     let (_directory, app) = test_app();
     let home = fixture_home(&app).await;
+
+    // Create a case first.
+    let (status, _) = send_json(
+        &app,
+        json_request(
+            "POST",
+            &format!("/projects/{home}/test_cases"),
+            &json!({
+                "testCaseId": "TC-001",
+                "title": "Test case",
+                "expectedResult": "It works"
+            }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
 
     // Create
     let (status, created) = send_json(

@@ -8,7 +8,7 @@ use axum::{
     Json, Router,
     extract::{Path, State},
     http::StatusCode,
-    routing::{delete, get, post},
+    routing::{delete, get},
 };
 use serde_json::{Value, json};
 
@@ -41,10 +41,83 @@ async fn create_project_workflow<R: Repository + 'static>(
 ) -> Result<(StatusCode, Json<Value>), DomainError> {
     super::on_blocking(move || -> Result<(StatusCode, Json<Value>), DomainError> {
         access::guard_create(&service, &principal, Resource::Workflows, &body)?;
+        validate_workflow_steps(&service, &id, &body)?;
         let composed = service.compose(Resource::Workflows, &Parent::Project(id), &body)?;
         Ok(composed_response(&composed, "Workflow created"))
     })
     .await
+}
+
+/// Validates that every step target is reachable from the home project.
+///
+/// A case is reachable if it is held directly by the project or by one of its
+/// suites. A suite is reachable if it is held by the project. A step that
+/// names neither a reachable case nor a reachable suite is refused with
+/// `invalid_request` naming the offending index.
+fn validate_workflow_steps<R: Repository + 'static>(
+    service: &AppState<R>,
+    project_id: &str,
+    body: &Value,
+) -> Result<(), DomainError> {
+    let Some(steps) = body.get("steps").and_then(Value::as_array) else {
+        return Ok(());
+    };
+    let project_parent = Parent::Project(project_id.to_owned());
+    // Collect suite IDs once, to avoid re-listing per case step.
+    let suite_ids: Vec<String> = service.list_children(&project_parent, Resource::Suites)?;
+    for (index, step) in steps.iter().enumerate() {
+        let Some(step_obj) = step.as_object() else {
+            return Err(DomainError::invalid_request(format!(
+                "Step {index} is not an object"
+            )));
+        };
+        let case_id = step_obj.get("testCaseId").and_then(Value::as_str);
+        let suite_id = step_obj.get("suiteId").and_then(Value::as_str);
+        match (case_id, suite_id) {
+            (Some(case), None) => {
+                // Case must be held directly by the project or by one of its suites.
+                let direct = service
+                    .document_in(Resource::Cases, &project_parent, case, "")
+                    .is_ok();
+                if direct {
+                    continue;
+                }
+                let in_suite = suite_ids.iter().any(|sid| {
+                    service
+                        .document_in(
+                            Resource::Cases,
+                            &Parent::Suite {
+                                project: project_id.to_owned(),
+                                suite: sid.clone(),
+                            },
+                            case,
+                            "",
+                        )
+                        .is_ok()
+                });
+                if !in_suite {
+                    return Err(DomainError::invalid_request(format!(
+                        "Step {index} names case `{case}` which is not reachable from project `{project_id}`"
+                    )));
+                }
+            }
+            (None, Some(suite)) => {
+                // Suite must be held by the project.
+                service.document_in(Resource::Suites, &project_parent, suite, "Test suite not found")?;
+            }
+            (Some(_), Some(_)) => {
+                return Err(DomainError::invalid_request(format!(
+                    "Step {index} names both a case and a suite; exactly one is required"
+                )));
+            }
+            (None, None) => {
+                return Err(DomainError::invalid_request(format!(
+                    "Step {index} names neither a case nor a suite; exactly one is required"
+                )));
+            }
+        }
+    }
+    Ok(())
 }
 
 async fn delete_project_workflow<R: Repository + 'static>(
