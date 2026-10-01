@@ -20,7 +20,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 /// A suite or a case folder taking one of these names would be created inside
 /// that collection, where its marker would be listed as a document of a
 /// resource it is not, so the name is refused instead.
-pub const RESERVED_PROJECT_CHILDREN: [&str; 3] = ["test_runs", "milestones", "configurations"];
+pub const RESERVED_PROJECT_CHILDREN: [&str; 4] = ["test_runs", "milestones", "configurations", "workflows"];
 
 /// Longest name one stored component may have, counted in bytes.
 ///
@@ -875,7 +875,7 @@ mod tests {
     fn a_project_reserves_the_names_of_its_collections() {
         assert_eq!(
             RESERVED_PROJECT_CHILDREN,
-            ["test_runs", "milestones", "configurations"]
+            ["test_runs", "milestones", "configurations", "workflows"]
         );
         // Every reserved name is a collection directory of one resource, so the
         // two lists can never drift apart.

@@ -62,6 +62,12 @@ async fn delete_project_workflow<R: Repository + 'static>(
 
 pub(crate) fn routes<R: Repository + 'static>() -> Router<AppState<R>> {
     Router::new()
+        // Retired: a workflow is created inside a project. The handler
+        // answers with an explanation rather than a document.
+        .route(
+            "/workflows",
+            get(list_workflows::<R>).post(create_workflow::<R>),
+        )
         .route(
             "/workflows/{id}",
             get(get_workflow::<R>)

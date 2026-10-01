@@ -521,7 +521,7 @@ proptest! {
             Resource::Projects | Resource::Suites => id
                 .strip_suffix(".json")
                 .is_some_and(|folder| validate_component(folder).is_ok()),
-            Resource::Runs | Resource::Milestones | Resource::Configurations => false,
+            Resource::Runs | Resource::Milestones | Resource::Configurations | Resource::Workflows => false,
         };
         prop_assert_eq!(
             node_folder(resource, &id).is_ok(),
