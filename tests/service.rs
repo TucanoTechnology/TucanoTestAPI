@@ -1058,7 +1058,7 @@ async fn openapi_documents_the_error_contract_of_every_operation() {
 /// Neither half subsumes the other. The table names a test but cannot see
 /// whether it reaches the route; the recording sees a success but cannot say
 /// which test produced it, only that one in the run did. Keep both.
-const CONTRACT_COVERAGE: [(&str, &str); 92] = [
+const CONTRACT_COVERAGE: [(&str, &str); 98] = [
     ("get /health", "health_reports_filesystem_storage"),
     (
         "get /openapi.json",
@@ -1348,6 +1348,30 @@ const CONTRACT_COVERAGE: [(&str, &str); 92] = [
         "a_recorded_revision_is_returned_verbatim_and_the_live_version_is_not_a_snapshot",
     ),
     (
+        "put /projects/{id}/test_cases/{case_id}",
+        "a_duplicated_case_is_edited_through_each_parent_and_only_its_copy_moves",
+    ),
+    (
+        "put /test_suites/{id}/test_cases/{case_id}",
+        "a_duplicated_case_is_edited_through_each_parent_and_only_its_copy_moves",
+    ),
+    (
+        "get /projects/{id}/test_cases/{case_id}/history",
+        "parent_scoped_history_reads_the_copy_the_bare_route_refuses",
+    ),
+    (
+        "get /test_suites/{id}/test_cases/{case_id}/history",
+        "parent_scoped_history_reads_the_copy_the_bare_route_refuses",
+    ),
+    (
+        "get /projects/{id}/test_cases/{case_id}/history/{version}",
+        "parent_scoped_history_reads_the_copy_the_bare_route_refuses",
+    ),
+    (
+        "get /test_suites/{id}/test_cases/{case_id}/history/{version}",
+        "parent_scoped_history_reads_the_copy_the_bare_route_refuses",
+    ),
+    (
         "get /milestones/{id}",
         "a_milestone_created_from_a_name_alone_reads_back_and_reports_progress",
     ),
@@ -1629,7 +1653,7 @@ async fn openapi_declares_the_security_posture_of_every_operation() {
     ];
 
     let operations = documented_operations(&document);
-    assert_eq!(operations.len(), 92, "the documented surface changed");
+    assert_eq!(operations.len(), 98, "the documented surface changed");
 
     for (label, operation) in &operations {
         let responses = operation["responses"].as_object().expect("responses");
@@ -1687,7 +1711,7 @@ async fn openapi_declares_the_security_posture_of_every_operation() {
         .filter(|(_, operation)| operation["responses"].get("403").is_some())
         .count();
     assert_eq!(
-        refuses, 81,
+        refuses, 87,
         "the 403 surface changed; update this count with it"
     );
 }
@@ -1898,7 +1922,7 @@ async fn openapi_operations_carry_stable_ids_and_resource_tags() {
             "{label} carries an undeclared tag: {tag}"
         );
     }
-    assert_eq!(ids.len(), 92, "every documented operation is named");
+    assert_eq!(ids.len(), 98, "every documented operation is named");
 }
 
 #[tokio::test]

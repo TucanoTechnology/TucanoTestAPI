@@ -427,7 +427,7 @@ pub fn assert_error_envelope(body: &Value, code: &str) {
 /// `403` in `openapi.json`. A route that gains or loses its guard therefore
 /// breaks one side or the other instead of quietly drifting out of the
 /// contract.
-pub const ROLE_CHECKED_WRITE_OPERATIONS: [&str; 41] = [
+pub const ROLE_CHECKED_WRITE_OPERATIONS: [&str; 43] = [
     "post /projects",
     "put /projects/{id}",
     "delete /projects/{id}",
@@ -443,6 +443,8 @@ pub const ROLE_CHECKED_WRITE_OPERATIONS: [&str; 41] = [
     "delete /test_cases/{id}",
     "post /test_cases/{id}/duplicate",
     "post /projects/{id}/test_cases",
+    "put /projects/{id}/test_cases/{case_id}",
+    "put /test_suites/{id}/test_cases/{case_id}",
     "delete /projects/{id}/test_cases/{case_id}",
     "post /projects/{id}/test_runs",
     "delete /projects/{id}/test_runs/{run_id}",
@@ -529,6 +531,14 @@ pub fn role_checked_write(
         "delete /projects/{id}/test_cases/{case_id}" => {
             (format!("/projects/{project}/test_cases/{case}"), None)
         }
+        "put /projects/{id}/test_cases/{case_id}" => (
+            format!("/projects/{project}/test_cases/{case}"),
+            Some(json!({})),
+        ),
+        "put /test_suites/{id}/test_cases/{case_id}" => (
+            format!("/test_suites/{suite}/test_cases/{case}"),
+            Some(json!({})),
+        ),
         "post /projects/{id}/test_runs" => (
             format!("/projects/{project}/test_runs"),
             Some(json!({

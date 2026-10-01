@@ -2,9 +2,10 @@
 //!
 //! A case has no top-level collection: it is created inside a project or a
 //! suite, either through the parent-scoped routes or by placing an existing
-//! case there. History addresses a case by its bare identifier and only works
-//! while one parent owns it; attachments are reachable both ways, from the bare
-//! identifier and from the parent a route names.
+//! case there. Edits, history and attachments are all reachable two ways: by
+//! the bare identifier — which answers a conflict while two parents hold it —
+//! and from the parent a route names, which addresses that occurrence directly
+//! (#462 completed the second door for updates and history).
 
 use axum::{
     Json, Router,
@@ -12,7 +13,7 @@ use axum::{
     extract::{Multipart, Path, State},
     http::{HeaderValue, StatusCode, header},
     response::{IntoResponse, Response},
-    routing::{delete, get, post},
+    routing::{delete, get, post, put},
 };
 use serde_json::{Value, json};
 
@@ -599,6 +600,123 @@ async fn read_case_revision<R: Repository + 'static>(
     .await
 }
 
+// --- parent-scoped edit and history (#462) --------------------------------
+//
+// The bare-addressed routes resolve the identifier globally, so they answer a
+// conflict while two parents hold it — and the error is honest that a
+// duplicated identifier exists, it just has no door. These routes name the
+// parent as well, exactly like the attachment routes already do, and reach the
+// same merge, revision stamping, echo and history calls one resolution step
+// later. The parent must really hold the case: naming a parent that keeps a
+// different copy answers `404`, never a silent redirect to the holder.
+
+async fn update_project_case<R: Repository + 'static>(
+    State(service): State<AppState<R>>,
+    principal: Principal,
+    Path((id, case_id)): Path<(String, String)>,
+    if_match: IfMatchHeader,
+    Json(body): Json<Value>,
+) -> Result<Json<Value>, DomainError> {
+    // The storage phase is synchronous by design; park it on the blocking
+    // pool so lock waits and fsyncs never occupy an async worker (#410).
+    super::on_blocking(move || -> Result<Json<Value>, DomainError> {
+        let parent = case_in_project(&service, &principal, id, &case_id, Role::Editor)?;
+        update_case_in(&service, &parent, &case_id, &if_match.0, &body)
+    })
+    .await
+}
+
+async fn update_suite_case<R: Repository + 'static>(
+    State(service): State<AppState<R>>,
+    principal: Principal,
+    Path((id, case_id)): Path<(String, String)>,
+    if_match: IfMatchHeader,
+    Json(body): Json<Value>,
+) -> Result<Json<Value>, DomainError> {
+    super::on_blocking(move || -> Result<Json<Value>, DomainError> {
+        let parent = case_in_suite(&service, &principal, &id, &case_id, Role::Editor)?;
+        update_case_in(&service, &parent, &case_id, &if_match.0, &body)
+    })
+    .await
+}
+
+/// The shared body of the two parent-scoped updates: identical merge,
+/// revision and echo to the global route, because it calls the same service
+/// write with the parent already resolved.
+fn update_case_in<R: Repository + 'static>(
+    service: &AppState<R>,
+    parent: &Parent,
+    case_id: &str,
+    if_match: &str,
+    body: &Value,
+) -> Result<Json<Value>, DomainError> {
+    let expected_etag = if if_match.is_empty() {
+        None
+    } else {
+        Some(if_match.to_owned())
+    };
+    let document = service.update_in(Resource::Cases, parent, case_id, body, expected_etag)?;
+    Ok(Json(
+        json!({ "message": "Resource updated", "document": document }),
+    ))
+}
+
+async fn list_project_case_history<R: Repository + 'static>(
+    State(service): State<AppState<R>>,
+    principal: Principal,
+    Path((id, case_id)): Path<(String, String)>,
+) -> Result<Json<Value>, DomainError> {
+    super::on_blocking(move || -> Result<Json<Value>, DomainError> {
+        let parent = case_in_project(&service, &principal, id, &case_id, Role::Viewer)?;
+        let history = service.list_case_history(&parent, &case_id)?;
+        Ok(Json(json!(history)))
+    })
+    .await
+}
+
+async fn list_suite_case_history<R: Repository + 'static>(
+    State(service): State<AppState<R>>,
+    principal: Principal,
+    Path((id, case_id)): Path<(String, String)>,
+) -> Result<Json<Value>, DomainError> {
+    super::on_blocking(move || -> Result<Json<Value>, DomainError> {
+        let parent = case_in_suite(&service, &principal, &id, &case_id, Role::Viewer)?;
+        let history = service.list_case_history(&parent, &case_id)?;
+        Ok(Json(json!(history)))
+    })
+    .await
+}
+
+async fn read_project_case_revision<R: Repository + 'static>(
+    State(service): State<AppState<R>>,
+    principal: Principal,
+    Path((id, case_id, version)): Path<(String, String, String)>,
+) -> Result<Json<Value>, DomainError> {
+    super::on_blocking(move || -> Result<Json<Value>, DomainError> {
+        let parent = case_in_project(&service, &principal, id, &case_id, Role::Viewer)?;
+        let version = parse_version(&version)?;
+        Ok(Json(
+            service.read_case_revision(&parent, &case_id, version)?,
+        ))
+    })
+    .await
+}
+
+async fn read_suite_case_revision<R: Repository + 'static>(
+    State(service): State<AppState<R>>,
+    principal: Principal,
+    Path((id, case_id, version)): Path<(String, String, String)>,
+) -> Result<Json<Value>, DomainError> {
+    super::on_blocking(move || -> Result<Json<Value>, DomainError> {
+        let parent = case_in_suite(&service, &principal, &id, &case_id, Role::Viewer)?;
+        let version = parse_version(&version)?;
+        Ok(Json(
+            service.read_case_revision(&parent, &case_id, version)?,
+        ))
+    })
+    .await
+}
+
 pub(crate) fn routes<R: Repository + 'static>() -> Router<AppState<R>> {
     Router::new()
         // Retired: a case is created inside a project or a suite. The handler
@@ -638,7 +756,15 @@ pub(crate) fn routes<R: Repository + 'static>() -> Router<AppState<R>> {
         )
         .route(
             "/projects/{id}/test_cases/{case_id}",
-            delete(delete_project_case::<R>),
+            put(update_project_case::<R>).delete(delete_project_case::<R>),
+        )
+        .route(
+            "/projects/{id}/test_cases/{case_id}/history",
+            get(list_project_case_history::<R>),
+        )
+        .route(
+            "/projects/{id}/test_cases/{case_id}/history/{version}",
+            get(read_project_case_revision::<R>),
         )
         .route(
             "/projects/{id}/test_cases/{case_id}/attachments",
@@ -656,6 +782,18 @@ pub(crate) fn routes<R: Repository + 'static>() -> Router<AppState<R>> {
         .route(
             "/projects/{id}/test_cases/{case_id}/steps/{step_index}/attachments/{filename}",
             delete(delete_project_case_step_attachment::<R>),
+        )
+        .route(
+            "/test_suites/{id}/test_cases/{case_id}",
+            put(update_suite_case::<R>),
+        )
+        .route(
+            "/test_suites/{id}/test_cases/{case_id}/history",
+            get(list_suite_case_history::<R>),
+        )
+        .route(
+            "/test_suites/{id}/test_cases/{case_id}/history/{version}",
+            get(read_suite_case_revision::<R>),
         )
         .route(
             "/test_suites/{id}/test_cases/{case_id}/attachments",

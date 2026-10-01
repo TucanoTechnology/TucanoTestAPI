@@ -1204,3 +1204,300 @@ async fn duplicating_a_test_case_copies_it_into_the_source_home() {
     assert_eq!(status, StatusCode::OK, "the copy survives: {survivor}");
     assert_eq!(survivor["title"], "Logout");
 }
+
+/// #462: the parent-scoped edit door. Two parents holding one identifier must
+/// each be editable through the route that names them, and only their own copy
+/// may move. The refusals the global door answers (unknown parent, unusable
+/// component, `defectLinks` body) stay the parent-scoped door's too.
+#[tokio::test]
+async fn a_duplicated_case_is_edited_through_each_parent_and_only_its_copy_moves() {
+    let (_directory, app) = test_app();
+    let project = create_project(&app, "checkout").await;
+    let other = create_project(&app, "payments").await;
+    let suite = create_suite(&app, &project, "smoke").await;
+    create_case_in(&app, &format!("/projects/{project}/test_cases"), "TC-001").await;
+    let (status, body) = send_json(
+        &app,
+        json_request(
+            "POST",
+            &format!("/test_suites/{suite}/test_cases"),
+            &json!({"testCaseId": "TC-001"}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+
+    // Edit the project's copy through the route that names the project. The
+    // echo (#459) carries the stored document: title moved, version advanced.
+    let (status, echo) = send_json(
+        &app,
+        json_request(
+            "PUT",
+            &format!("/projects/{project}/test_cases/TC-001"),
+            &json!({"title": "Project copy"}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{echo}");
+    assert_eq!(echo["document"]["title"], "Project copy");
+    assert_eq!(echo["document"]["version"], json!(2));
+
+    // The suite's copy is addressed by the suite-scoped route and versions
+    // independently: it has never had its own qualifying update, so its next
+    // version is 2 whatever the project's copy has done.
+    let (status, echo) = send_json(
+        &app,
+        json_request(
+            "PUT",
+            &format!("/test_suites/{suite}/test_cases/TC-001"),
+            &json!({"title": "Suite copy"}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{echo}");
+    assert_eq!(echo["document"]["title"], "Suite copy");
+    assert_eq!(echo["document"]["version"], json!(2));
+
+    // A non-qualifying update through the parent door keeps the version and
+    // shows the parent's own title — proving the two copies never merged.
+    let (status, echo) = send_json(
+        &app,
+        json_request(
+            "PUT",
+            &format!("/projects/{project}/test_cases/TC-001"),
+            &json!({"priority": "High"}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{echo}");
+    assert_eq!(
+        echo["document"]["version"],
+        json!(2),
+        "priority is not qualifying"
+    );
+    assert_eq!(echo["document"]["title"], "Project copy");
+    let (status, echo) = send_json(
+        &app,
+        json_request(
+            "PUT",
+            &format!("/test_suites/{suite}/test_cases/TC-001"),
+            &json!({"title": "Suite copy again"}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{echo}");
+    assert_eq!(
+        echo["document"]["version"],
+        json!(3),
+        "the suite copy advanced alone"
+    );
+
+    // A parent that does not hold the case is `404`, never a redirect: the
+    // project is real, the case is not its copy.
+    let (status, body) = send_json(
+        &app,
+        json_request(
+            "PUT",
+            &format!("/projects/{other}/test_cases/TC-001"),
+            &json!({"title": "Not mine"}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+    assert_error_envelope(&body, "not_found");
+    let (status, body) = send_json(
+        &app,
+        get(&format!("/projects/{other}/test_cases/TC-001/history")),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+
+    // The two components of the address keep their own rules at this door:
+    // the parent names a stored collection and is validated (`invalid_id`),
+    // while `case_id` is addressed verbatim like everywhere else (`404`).
+    let (status, body) = send_json(
+        &app,
+        json_request(
+            "PUT",
+            &format!("/projects/{project}/test_cases/BAD"),
+            &json!({"title": "X"}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+    assert_error_envelope(&body, "not_found");
+    let (status, body) = send_json(
+        &app,
+        json_request(
+            "PUT",
+            "/projects/BAD/test_cases/TC-001",
+            &json!({"title": "X"}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_error_envelope(&body, "invalid_id");
+
+    // The body rules are the global route's: `defectLinks` is still refused
+    // (#460), because one store means one validation.
+    let (status, body) = send_json(
+        &app,
+        json_request(
+            "PUT",
+            &format!("/projects/{project}/test_cases/TC-001"),
+            &json!({"defectLinks": [{"defectId": "BUG-1", "url": "https://x/y"}]}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_error_envelope(&body, "invalid_request");
+
+    // The global doors keep refusing the ambiguity they refused before (#462
+    // adds doors, it changes none): a bare write now has a workaround, not a
+    // different answer.
+    let (status, body) = send_json(
+        &app,
+        json_request("PUT", "/test_cases/TC-001", &json!({"title": "Ambiguous"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+}
+
+/// #462: the parent-scoped history door. Each holder lists and reads its own
+/// snapshots while the bare routes still answer a conflict — the History tab
+/// of a duplicated case has this door to go through.
+#[tokio::test]
+async fn parent_scoped_history_reads_the_copy_the_bare_route_refuses() {
+    let (_directory, app) = test_app();
+    let project = create_project(&app, "checkout").await;
+    let suite = create_suite(&app, &project, "smoke").await;
+    create_case_in(&app, &format!("/projects/{project}/test_cases"), "TC-001").await;
+    let (status, body) = send_json(
+        &app,
+        json_request(
+            "POST",
+            &format!("/test_suites/{suite}/test_cases"),
+            &json!({"testCaseId": "TC-001"}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+
+    // Before any qualifying update both holders list empty, and the bare
+    // route cannot be asked at all.
+    let (status, history) = send_json(
+        &app,
+        get(&format!("/projects/{project}/test_cases/TC-001/history")),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{history}");
+    assert_eq!(history, json!([]));
+    let (status, body) = send_json(&app, get("/test_cases/TC-001/history")).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+
+    // One qualifying edit on the project's copy records version 1 there and
+    // only there; the suite's copy has seen nothing.
+    let (status, body) = send_json(
+        &app,
+        json_request(
+            "PUT",
+            &format!("/projects/{project}/test_cases/TC-001"),
+            &json!({"title": "Project copy"}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let first_stamp = assert_iso8601(&body["document"]["lastModified"]).to_owned();
+
+    let (status, history) = send_json(
+        &app,
+        get(&format!("/projects/{project}/test_cases/TC-001/history")),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{history}");
+    assert_eq!(
+        history,
+        json!([{"version": 1, "lastModified": first_stamp, "changedFields": ["title"]}])
+    );
+    let (status, suite_history) = send_json(
+        &app,
+        get(&format!("/test_suites/{suite}/test_cases/TC-001/history")),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{suite_history}");
+    assert_eq!(
+        suite_history,
+        json!([]),
+        "the copy lists its own history, not the source's"
+    );
+
+    // The recorded snapshot reads back verbatim through the parent door; the
+    // live version is not a snapshot, and an unknown holder still cannot read
+    // either.
+    let (status, snapshot) = send_json(
+        &app,
+        get(&format!("/projects/{project}/test_cases/TC-001/history/1")),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{snapshot}");
+    assert_eq!(snapshot["title"], "Login");
+    assert_eq!(snapshot["version"], json!(1));
+    let (status, body) = send_json(
+        &app,
+        get(&format!("/projects/{project}/test_cases/TC-001/history/2")),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+    let (status, body) = send_json(
+        &app,
+        get(&format!("/projects/{project}/test_cases/TC-001/history/0")),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_error_envelope(&body, "invalid_request");
+    let (status, body) = send_json(
+        &app,
+        get(&format!("/test_suites/{suite}/test_cases/TC-001/history/1")),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+
+    // The suite's copy records its own history once it is edited through its
+    // own door, and its first snapshot is the copy's pre-edit document. The
+    // project's listing does not move when the suite copy is edited.
+    let (status, body) = send_json(
+        &app,
+        json_request(
+            "PUT",
+            &format!("/test_suites/{suite}/test_cases/TC-001"),
+            &json!({"title": "Suite copy"}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (status, snapshot) = send_json(
+        &app,
+        get(&format!("/test_suites/{suite}/test_cases/TC-001/history/1")),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{snapshot}");
+    assert_eq!(snapshot["title"], "Login", "the suite's own version 1");
+    let (status, suite_history) = send_json(
+        &app,
+        get(&format!("/test_suites/{suite}/test_cases/TC-001/history")),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{suite_history}");
+    assert_eq!(suite_history.as_array().expect("array").len(), 1);
+    let (status, project_history) = send_json(
+        &app,
+        get(&format!("/projects/{project}/test_cases/TC-001/history")),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{project_history}");
+    assert_eq!(
+        project_history.as_array().expect("array").len(),
+        1,
+        "the project's listing did not move when the suite copy was edited"
+    );
+}

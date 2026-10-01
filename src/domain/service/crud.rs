@@ -157,18 +157,57 @@ impl<R: Repository + 'static> TestService<R> {
         value: &Value,
         expected_etag: Option<String>,
     ) -> Result<Value, DomainError> {
-        validation::validate_payload(resource, value)?;
         let parent = self.owner_for_write(resource, id, "Resource not found")?;
-        self.refuse_foreign_identity(resource, parent.as_ref(), id, value)?;
+        self.write_document(resource, parent.as_ref(), id, value, expected_etag)
+    }
+
+    /// The parent-scoped twin of [`Self::update_with_etag`] (#462).
+    ///
+    /// The caller has already named the parent whose copy it means to edit, so
+    /// the ambiguous-identifier refusal the global write answers never arises:
+    /// the addressed document is the one filed in `parent`. Everything else is
+    /// the same door — same validation, same merge, same revision stamping,
+    /// same echoed document — because it is the same call below the resolution
+    /// step.
+    ///
+    /// # Errors
+    ///
+    /// Same as [`Self::update_with_etag`], with the parent resolution
+    /// replaced: a parent that does not hold the case is `NotFound`, and an
+    /// unknown parent itself is `NotFound`.
+    pub fn update_in(
+        &self,
+        resource: Resource,
+        parent: &Parent,
+        id: &str,
+        value: &Value,
+        expected_etag: Option<String>,
+    ) -> Result<Value, DomainError> {
+        self.require_parent(parent)?;
+        self.write_document(resource, Some(parent), id, value, expected_etag)
+    }
+
+    /// The shared write: validate, refuse a foreign identity, merge under one
+    /// lock, revise the case history, return the stored document (#459).
+    fn write_document(
+        &self,
+        resource: Resource,
+        parent: Option<&Parent>,
+        id: &str,
+        value: &Value,
+        expected_etag: Option<String>,
+    ) -> Result<Value, DomainError> {
+        validation::validate_payload(resource, value)?;
+        self.refuse_foreign_identity(resource, parent, id, value)?;
         let value = value.clone();
         let etag_ref = expected_etag.as_deref().filter(|s| !s.is_empty());
         audited(resource_noun(resource), "update", id, || {
             self.repository
-                .transform_at(resource, parent.as_ref(), id, etag_ref, |stored| {
+                .transform_at(resource, parent, id, etag_ref, |stored| {
                     let mut merged = merged_document(&stored, &value)
                         .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e.to_string()))?;
                     if resource == Resource::Cases {
-                        self.revise_case(parent.as_ref(), id, &stored, &mut merged)
+                        self.revise_case(parent, id, &stored, &mut merged)
                             .map_err(|e| io::Error::other(e.to_string()))?;
                     }
                     let mut document = merged;
