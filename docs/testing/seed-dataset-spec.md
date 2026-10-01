@@ -153,9 +153,9 @@ the check.
 | `DELETE /projects/{id}/test_cases/{case_id}/steps/{step_index}/attachments/{filename}` | teardown is scoped to the case folder |
 | `POST /projects/{id}/test_cases/{case_id}/attachments` | upload companion of row 6, addressed through the project that holds the case: the seed uploads through the bare route, which reaches a case by its identifier alone, while every case it uploads to still has one home |
 | `POST /projects/{id}/test_cases/{case_id}/steps/{step_index}/attachments` | upload companion of row 7, addressed through the project that holds the case |
-| `GET /projects/{id}/test_suites` | list companion of `POST /projects/{id}/test_suites` (row 2); the seed reads this listing to learn the duplicate's derived identifier, and after row 22 `portable.checkout.json` appears in **both** projects' listings |
+| `GET /projects/{id}/test_suites` | list companion of `POST /projects/{id}/test_suites` (row 2); the seed reads this listing to learn the duplicate's derived identifier; after row 22 `portable.checkout.json` appears in `payments.json`'s listing alone, its one home |
 | `DELETE /projects/{id}/test_suites/{suite_id}` | teardown-scope call ([§4](#4-teardown-scope)) |
-| `GET /test_cases/{id}` | read companion of the case routes, but only for a case with one home. Row 22 composes four cases — `TC-LOGIN-1`, `TC-ORDERS-1`, `TC-CATALOG-1` and `TC-SEARCH-1` — each into a second parent while its source keeps its home, so a bare `GET /test_cases/{id}` for any of the four is answered `409` by design and [§3 step 12](#step-12--validation-of-the-seeded-environment) asserts that refusal and reads them back through their parents' listings instead |
+| `GET /test_cases/{id}` | read companion of the case routes: row 22 copies four cases into a second parent and deletes each copy again, so every seeded identifier has one home and the bare route resolves all of them — asserted in [§3 step 12](#step-12--validation-of-the-seeded-environment). The two-homes `409` itself stays the contract tests' ground |
 | `DELETE /test_cases/{id}` | teardown-scope call, by parent ([§4](#4-teardown-scope)) |
 | `GET /test_cases/{id}/attachments/{filename}` | read-back companion of row 6 |
 | `DELETE /test_cases/{id}/attachments/{filename}` | teardown is scoped to the case folder, not to individual attachments |
@@ -174,10 +174,10 @@ the check.
 | `DELETE /test_runs/{id}/results/{case_id}` | delete companion of the result recording (rows 14 and 15): the seed leaves every recorded result in place, and teardown withdraws a run whole rather than one result of it ([§4](#4-teardown-scope), issue #283) |
 | `GET /test_runs/{id}/results/{case_id}/defects` | list companion of the defect-link creation (row 16) |
 | `DELETE /test_runs/{id}/results/{case_id}/defects/{link_id}` | row 17 unlinks the GitHub link the seed created; it writes the route with the link id it read back from the create response, which the check matches as the same shape |
-| `GET /test_suites/{id}` | read companion of the suite routes, exercised only for a suite with one home; [§3 step 12](#step-12--validation-of-the-seeded-environment) reads the single-homed seeded suites back this way and asserts that the dual-homed `portable.checkout.json` is refused `409` |
+| `GET /test_suites/{id}` | read companion of the suite routes, exercised for every seeded suite: [§3 step 12](#step-12--validation-of-the-seeded-environment) reads them back this way, the moved `portable.checkout.json` included — it travels, and never keeps a second home |
 | `PUT /test_suites/{id}` | replace companion of row 2 |
 | `DELETE /test_suites/{id}` | teardown-scope call, by parent ([§4](#4-teardown-scope)) |
-| `GET /test_suites/{id}/test_cases` | list companion of `POST /test_suites/{id}/test_cases` (row 4), exercised for the single-homed suites; the dual-homed `portable.checkout.json` is refused `409`, which [§3 step 12](#step-12--validation-of-the-seeded-environment) asserts |
+| `GET /test_suites/{id}/test_cases` | list companion of `POST /test_suites/{id}/test_cases` (row 4), exercised for every seeded suite, `portable.checkout.json` (empty, one home) among them, as [§3 step 12](#step-12--validation-of-the-seeded-environment) asserts |
 | `DELETE /test_suites/{id}/test_cases/{case_id}` | teardown-scope call ([§4](#4-teardown-scope)) |
 | `GET /test_suites/{id}/test_cases/{case_id}/attachments/{filename}` | read-back companion of row 6, addressed through the suite that holds the case; the seed reaches a case by its identifier alone while every case it attaches to still has one home |
 | `DELETE /test_suites/{id}/test_cases/{case_id}/attachments/{filename}` | teardown is scoped to the case folder, not to individual attachments |
@@ -209,51 +209,40 @@ $TUCANO_DATA_DIR/
 ├── projects/
 │   ├── checkout/
 │   │   ├── project.json                      # {"projectId","name","tags":["checkout","regression"]}
-│   │   ├── smoke.checkout/                   # a suite folder: three originals, two placed copies
+│   │   ├── smoke.checkout/                   # a suite folder: the three cases it keeps
 │   │   │   ├── suite.json
 │   │   │   ├── TC-LOGIN-1/
 │   │   │   │   ├── test-case.json            # tags, ordered steps, version 2
 │   │   │   │   ├── revisions/
 │   │   │   │   │   └── v1.json               # snapshot written by the qualifying steps update
 │   │   │   │   ├── <stamp>-login-flow.txt    # case attachment
+│   │   │   │   ├── <stamp>-login-proof.png   # the image: the GUI previews it inline
 │   │   │   │   └── steps/
 │   │   │   │       └── 0/
 │   │   │   │           └── <stamp>-step-1.txt        # step attachment
 │   │   │   ├── TC-LOGIN-2/                   # the locked-account case
-│   │   │   │   ├── test-case.json            # carries two ordered steps
+│   │   │   │   ├── test-case.json            # two steps, version 3, owns defect links (#460)
 │   │   │   │   ├── revisions/
-│   │   │   │   │   └── v1.json
+│   │   │   │   │   ├── v1.json               # snapshot of the creation document
+│   │   │   │   │   └── v2.json               # snapshot of the steps write
 │   │   │   │   ├── <stamp>-lock-message.txt
 │   │   │   │   └── steps/
 │   │   │   │       ├── 0/
 │   │   │   │       │   └── <stamp>-step-1.txt
 │   │   │   │       └── 1/
 │   │   │   │           └── <stamp>-step-2.txt
-│   │   │   ├── TC-CART-1/
-│   │   │   │   ├── test-case.json
-│   │   │   │   ├── revisions/
-│   │   │   │   │   └── v1.json
-│   │   │   │   ├── <stamp>-cart-state.txt
-│   │   │   │   └── steps/
-│   │   │   │       └── 0/
-│   │   │   │           └── <stamp>-step-2.txt
-│   │   │   ├── TC-CATALOG-1/                 # copied here from payments.json, which keeps
-│   │   │   │   ├── test-case.json            # the source home; no step attachment
-│   │   │   │   ├── revisions/
-│   │   │   │   │   └── v1.json
-│   │   │   │   └── <stamp>-catalog-snapshot.txt
-│   │   │   └── TC-SEARCH-1/                  # copied here from smoke.payments.json
+│   │   │   └── TC-CART-1/
 │   │   │       ├── test-case.json
 │   │   │       ├── revisions/
-│   │   │       │   └── v1.json
-│   │   │       ├── <stamp>-search-response.txt
+│   │   │           └── v1.json
+│   │   │       ├── <stamp>-cart-state.txt
 │   │   │       └── steps/
 │   │   │           └── 0/
-│   │   │               └── <stamp>-step-1.txt
+│   │   │               └── <stamp>-step-2.txt
 │   │   ├── regression.checkout/              # second suite in this project, a move waypoint
 │   │   │   └── suite.json                    # left holding no case — the empty-suite shape
-│   │   ├── portable.checkout/                # moved into payments.json, then copied back
-│   │   │   └── suite.json                    # created empty: a suite placement carries its cases
+│   │   ├── portable.checkout/                # created empty and moved out (row 22) — no home left here
+│   │   │   └── suite.json                    # created empty: a suite placement carries its cases; none travelled
 │   │   ├── smoke.checkout-copy-<suffix>/     # the duplicate suite, id from the response
 │   │   │   └── suite.json
 │   │   ├── TC-PROJECT-1/                     # a case owned directly by the project, which
@@ -261,8 +250,8 @@ $TUCANO_DATA_DIR/
 │   │   │   ├── revisions/
 │   │   │   │   └── v1.json
 │   │   │   └── <stamp>-checkout-page.txt     # no step attachment on this case
-│   │   ├── TC-ORDERS-1/                      # owned directly by the project and copied into
-│   │   │   ├── test-case.json                # payments.json, which keeps this source home
+│   │   ├── TC-ORDERS-1/                      # owned directly by the project; row 22 copies it into
+│   │   │   ├── test-case.json                # payments.json and deletes the copy again
 │   │   │   ├── revisions/
 │   │   │   │   └── v1.json
 │   │   │   ├── <stamp>-orders-payload.txt
@@ -288,7 +277,7 @@ $TUCANO_DATA_DIR/
 │       │   │   └── steps/
 │       │   │       └── 0/
 │       │   │           └── <stamp>-step-1.txt
-│       │   └── TC-SEARCH-1/                  # copied into smoke.checkout.json; this stays the source
+│       │   └── TC-SEARCH-1/                  # its one home; row 22's copy into smoke.checkout.json is undone
 │       │       ├── test-case.json
 │       │       ├── revisions/
 │       │       │   └── v1.json
@@ -296,26 +285,10 @@ $TUCANO_DATA_DIR/
 │       │       └── steps/
 │       │           └── 0/
 │       │               └── <stamp>-step-1.txt
-│       ├── portable.checkout/                # the copy placed back out of checkout.json
+│       ├── portable.checkout/                # the suite moved here from checkout.json (row 22) — its one home
 │       │   └── suite.json
-│       ├── TC-LOGIN-1/                       # a copy placed into this project; the source keeps
-│       │   ├── test-case.json                # its home in smoke.checkout.json
-│       │   ├── revisions/
-│       │   │   └── v1.json
-│       │   ├── <stamp>-login-flow.txt        # a copy carries the steps and attachments too
-│       │   └── steps/
-│       │       └── 0/
-│       │           └── <stamp>-step-1.txt
-│       ├── TC-ORDERS-1/                      # a copy placed into this project
-│       │   ├── test-case.json
-│       │   ├── revisions/
-│       │   │   └── v1.json
-│       │   ├── <stamp>-orders-payload.txt
-│       │   └── steps/
-│       │       └── 0/
-│       │           └── <stamp>-step-2.txt
-│       ├── TC-CATALOG-1/                     # owned directly by this project and copied into
-│       │   ├── test-case.json                # smoke.checkout.json, which keeps this home
+│       ├── TC-CATALOG-1/                     # owned directly by this project; row 22 copies it into
+│       │   ├── test-case.json                # smoke.checkout.json and deletes the copy again
 │       │   ├── revisions/
 │       │   │   └── v1.json
 │       │   └── <stamp>-catalog-snapshot.txt
@@ -344,9 +317,13 @@ deliberately:
   and `move` relocates it so the target becomes the case's only physical home.
   A suite placement works the same way at suite scale, which is why
   `portable.checkout.json` is created empty — the cases inside a suite would
-  travel with it. An identifier with two homes no longer resolves to one, so
-  the four copies above are addressed through their parents' listings rather
-  than by a bare `GET /test_cases/{id}` (see §1).
+  travel with it. Row 22 deletes every case copy it places, and moves the
+  suite without copying it, so the demo tree leaves every identifier with
+  exactly one home: a durable two-home dataset is deliberate ambiguity, the
+  contract tests assert the refusals it produces, and no client of the demo
+  dataset should have to route around them (TucanoTestAPI#462 tracks the
+  parent-scoped routes that would make such a dataset usable, and
+  TucanoTestGUI#178-style explorations stay honest without it).
 
 ## 3. Generating API calls
 
@@ -355,9 +332,9 @@ order — step 2 puts a configuration into a project step 1 creates, and steps 3
 and 4 create their suites and cases inside those projects; the later steps
 depend only on the resources named in them. Two steps cannot be moved earlier:
 step 5 attaches files to a case by its bare identifier, and step 11 composes
-cases and a suite into a second parent, both of which are only unambiguous
-while the target still has a single home — so the placements run last, after
-every lookup by identifier is finished.
+cases and a suite across parents, temporarily giving identifiers a second
+home — so the placements run last, after every lookup by identifier is
+finished, and each copy is undone before the seed ends.
 
 ### Step 0 — session
 
@@ -749,25 +726,27 @@ The generator's validation step asserts, at minimum:
 - `GET /metrics` answers the Prometheus text exposition, and the series for a
   request the validation just served appears in it.
 - Every document in the target tree above is present and readable back through a
-  `GET` route that resolves it — its document route, or the listing of the
-  parent that holds it for the cases and the suite row 22 gave a second home.
+  `GET` route that resolves it — after row 22's undone copies, every seeded
+  identifier has one home, so each resolves through its own bare document route.
 - Every seeded case carries ordered `steps` and at least one case-level
-  attachment, and its step-level attachments number exactly those recorded in
+  attachment — `TC-LOGIN-1` an image and `TC-PROJECT-1` a document among them,
+  so the preview and download paths have real bytes to reach — and its
+  step-level attachments number exactly those recorded in
   row 6 (1, 2, 1, 1, 0, 1, 0, 1 across the eight cases); each case records the
-  step write as `version` ≥ 2, and `GET /test_cases/TC-LOGIN-2/history` reports
-  the revision behind it. Each case is read back through the parent that holds
-  it.
-- The cases row 22 composed into a second home — `TC-LOGIN-1`, `TC-ORDERS-1`,
-  `TC-CATALOG-1` and `TC-SEARCH-1` — answer `409` to a bare
-  `GET /test_cases/{id}`, because the identifier resolves to two parents, and
-  the two-homed suite `portable.checkout.json` is refused the same way on both
-  `GET /test_suites/{id}` and `GET /test_suites/{id}/test_cases`. All of them
-  still read back through their parents' listings.
+  step write as `version` ≥ 2 — `TC-LOGIN-2` reaches version 3 across two updates —
+  and `GET /test_cases/TC-LOGIN-2/history` reports both revisions behind it.
+  Each case is read back through its bare document route, its one home.
+- Every seeded case identifier resolves singularly: a bare
+  `GET /test_cases/{id}` answers each one (an id left with two homes would
+  answer `409` and fail the seed), and `portable.checkout.json` reads back
+  through its bare suite routes with no case in it.
 - Each project's own case listing holds exactly the cases the seed left there:
-  `checkout.json` holds the two it owns directly, `payments.json` the three it
+  `checkout.json` holds the two it owns directly, `payments.json` the one it
   ends with, and `regression.checkout.json` holds no case at all. The suite
-  listings include every suite the seed created — the empty one, the duplicate
-  of row 21 and the two-homed `portable.checkout.json` under both projects.
+  listings include every suite the seed left in place — the two empty ones
+  (`regression.checkout.json` and the travelled `portable.checkout.json`, the
+  latter under `payments.json` alone), the duplicate of row 21 and the cases'
+  own homes.
 - Each of the three project-owned resources — configurations, runs and
   milestones — reads back through **both** the listing of the project that owns
   it (`GET /projects/{id}/configurations`, `GET /projects/{id}/test_runs`,

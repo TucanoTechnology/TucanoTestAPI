@@ -56,7 +56,7 @@ const MILESTONES = ['v1.0.json'];
  * `regression.checkout` is a second suite in the same project, the parent a
  * move passes a case through, and it ends up holding no case at all — the
  * "a suite may be empty" shape; `portable.checkout` is placed between the two
- * projects by step 11 and ends up with a home in each — the composed-suite
+ * projects by step 11 and ends up in the other one — the composed-suite
  * shape, which needs its own empty suite because placing a suite carries the
  * cases inside it along.
  */
@@ -190,10 +190,10 @@ async function call(
 }
 
 /** Uploads one file as the single `file` part of a multipart request. */
-async function upload(path, filename) {
+async function upload(path, filename, type = 'text/plain') {
   const form = new FormData();
   const bytes = await readFile(join(FIXTURES, filename));
-  form.append('file', new Blob([bytes], { type: 'text/plain' }), filename);
+  form.append('file', new Blob([bytes], { type }), filename);
   const res = await fetch(`${baseUrl}${path}`, {
     method: 'POST',
     headers: token ? { authorization: `Bearer ${token}` } : {},
@@ -355,6 +355,7 @@ const CASES = [
     parent: { kind: 'suite', id: SMOKE_CHECKOUT },
     title: 'Sign in with a locked account',
     expectedResult: 'Sign-in is refused with a message',
+    revision: { expectedResult: 'Sign-in is refused with a lock message naming the account' },
     tags: ['auth'],
     steps: [
       { action: 'Open the sign-in form', expectedResult: 'The form is shown' },
@@ -389,7 +390,8 @@ const CASES = [
     steps: [{ action: 'Open the checkout page', expectedResult: 'The checkout form is shown' }],
   },
   {
-    // A project-owned case that step 11 copies into the other project.
+    // A project-owned case; step 11 copies it into the other project and deletes
+    // the copy again, proving the copy and the scoped delete.
     id: 'TC-ORDERS-1',
     parent: { kind: 'project', id: 'checkout.json' },
     title: 'List the orders of an account',
@@ -399,7 +401,8 @@ const CASES = [
     ],
   },
   {
-    // A project-owned case in the other project, copied into a suite.
+    // A project-owned case in the other project; step 11 copies it into a
+    // suite and deletes the copy again.
     id: 'TC-CATALOG-1',
     parent: { kind: 'project', id: 'payments.json' },
     title: 'Browse the catalog page by page',
@@ -407,7 +410,8 @@ const CASES = [
     steps: [{ action: 'Request page 1 of the catalog', expectedResult: 'Three items are returned' }],
   },
   {
-    // The suite-owned case that step 11 copies into the other project's suite.
+    // The suite-owned case step 11 copies into the other project's suite and
+    // deletes again.
     id: 'TC-SEARCH-1',
     parent: { kind: 'suite', id: SMOKE_PAYMENTS },
     title: 'Search the catalog for an item',
@@ -430,6 +434,11 @@ async function step4Cases() {
     });
     // A qualifying update: stamps `version`/`lastModified` and writes revisions/v1.json.
     await call('PUT', `/test_cases/${testCase.id}`, { body: { steps: testCase.steps } });
+    // A second qualifying update on one case, so its History reads two
+    // revisions — the tab's real shape, not a single-entry accident.
+    if (testCase.revision !== undefined) {
+      await call('PUT', `/test_cases/${testCase.id}`, { body: testCase.revision });
+    }
   }
   step(`cases: ${CASES.map((testCase) => testCase.id).join(', ')} — each with ordered steps`);
 }
@@ -451,6 +460,7 @@ const ATTACHMENTS = [
   {
     id: 'TC-LOGIN-1',
     file: 'login-flow.txt',
+    extraFiles: [{ file: 'login-proof.png', type: 'image/png' }],
     stepFiles: [{ index: 0, file: 'step-1.txt' }],
   },
   {
@@ -471,7 +481,12 @@ const ATTACHMENTS = [
     file: 'move-trace.txt',
     stepFiles: [{ index: 0, file: 'step-1.txt' }],
   },
-  { id: 'TC-PROJECT-1', file: 'checkout-page.txt' },
+  {
+    id: 'TC-PROJECT-1',
+    file: 'checkout-page.txt',
+    // A non-image binary: the download path, where an image is the preview path.
+    extraFiles: [{ file: 'payments-manual.pdf', type: 'application/pdf' }],
+  },
   {
     id: 'TC-ORDERS-1',
     file: 'orders-payload.txt',
@@ -487,15 +502,21 @@ const ATTACHMENTS = [
 
 async function step5Attachments() {
   let onSteps = 0;
+  let binaries = 0;
   for (const plan of ATTACHMENTS) {
     await upload(`/test_cases/${plan.id}/attachments`, plan.file);
+    for (const extra of plan.extraFiles ?? []) {
+      await upload(`/test_cases/${plan.id}/attachments`, extra.file, extra.type);
+      binaries += 1;
+    }
     for (const stepFile of plan.stepFiles ?? []) {
       await upload(`/test_cases/${plan.id}/steps/${stepFile.index}/attachments`, stepFile.file);
       onSteps += 1;
     }
   }
   step(
-    `attachments: one on each of the ${ATTACHMENTS.length} cases, plus ${onSteps} on their steps`,
+    `attachments: one on each of the ${ATTACHMENTS.length} cases, plus ${onSteps} on their ` +
+      `steps and ${binaries} binaries (an image for the preview, a document for the download)`,
   );
 }
 
@@ -647,19 +668,23 @@ async function step10MilestoneAndDuplicate() {
 /**
  * The composition shapes, run last.
  *
- * Every placement here gives an identifier a second home (copy) or a new one
- * (move), so each one runs only after the documents it touches have been
- * written: creation, steps, attachments and run membership all address a case
- * by bare identifier and would answer 409 once the identifier resolves to two
- * parents. Nothing after this step addresses a placed identifier at all.
+ * Every placement here runs after the documents it touches have been written:
+ * creation, steps, attachments and run membership all address a case by bare
+ * identifier. But the tree that remains has exactly one home per identifier —
+ * a *durable* second home is deliberately ambiguous data, the contract tests'
+ * territory, not what a person exploring the app should be handed (the GUI's
+ * document routes address cases by bare id, and the parent-scoped siblings
+ * TucanoTestAPI#462 will add are not there yet). So each copy below is
+ * copied and then removed again, the copy and the target parent's scoped
+ * delete both proven; moves simply move, which never duplicates an id.
  *
  * Both parent kinds and both modes are covered, and each parent pair appears
  * once per mode:
  *
- *   copy  TC-LOGIN-1    suite   -> project   smoke.checkout.json  -> payments.json
- *   copy  TC-ORDERS-1   project -> project   checkout.json        -> payments.json
- *   copy  TC-CATALOG-1  project -> suite     payments.json        -> smoke.checkout.json
- *   copy  TC-SEARCH-1   suite   -> suite     smoke.payments.json -> smoke.checkout.json
+ *   copy+undo  TC-LOGIN-1   suite   -> project   smoke.checkout.json  -> payments.json
+ *   copy+undo  TC-ORDERS-1  project -> project   checkout.json        -> payments.json
+ *   copy+undo  TC-CATALOG-1 project -> suite     payments.json        -> smoke.checkout.json
+ *   copy+undo  TC-SEARCH-1  suite   -> suite     smoke.payments.json  -> smoke.checkout.json
  *   move  TC-MOVE-1     suite   -> project   smoke.checkout.json  -> checkout.json
  *   move  TC-MOVE-1     project -> project   checkout.json        -> payments.json
  *   move  TC-MOVE-1     project -> suite     payments.json        -> regression.checkout.json
@@ -672,17 +697,17 @@ async function step10MilestoneAndDuplicate() {
  * attachments intact — `place` copies or renames the whole folder. `regression`
  * is left empty by the last hop, which is the empty-suite shape. `TC-PROJECT-1`
  * moves onto the parent that already holds it, the no-op the rules answer
- * `201` to without touching the disk. Each copied case is copied once and is
- * never addressed again, so the ambiguity its second home creates is harmless.
+ * `201` to without touching the disk.
  *
- * The last two calls place a suite rather than a case: `portable.checkout.json`
- * is moved out of `checkout.json` into `payments.json` and then copied back, so
- * the suite ends up with one home in each project while the case identifiers
- * stay unique. It is created empty for exactly that reason — a suite placement
- * carries the cases inside it along.
+ * The last calls place a suite rather than a case: `portable.checkout.json`
+ * is moved out of `checkout.json` into `payments.json` and left there — one
+ * home, a second empty-suite shape. It is created empty for exactly that
+ * reason — a suite placement carries the cases inside it along.
  */
 async function step11Placement() {
-  // Copy is the default: the source keeps its home and both copies are editable.
+  // Copy is the default: the source keeps its home. Each copy is then removed
+  // through the target parent's scoped delete route — both halves proven, and
+  // the tree keeps one home per identifier.
   const copies = [
     '/projects/payments.json/test_cases',
     '/projects/payments.json/test_cases',
@@ -692,6 +717,9 @@ async function step11Placement() {
   const copiedCases = ['TC-LOGIN-1', 'TC-ORDERS-1', 'TC-CATALOG-1', 'TC-SEARCH-1'];
   for (const [index, target] of copies.entries()) {
     await call('POST', target, { body: { testCaseId: copiedCases[index] } });
+    await call('DELETE', `${target}/${encodeURIComponent(copiedCases[index])}`, {
+      expected: [200],
+    });
   }
 
   // Move is opt-in: the target parent becomes the case's only physical home.
@@ -710,16 +738,14 @@ async function step11Placement() {
   });
 
   // The suite composition, which is why `portable.checkout.json` is empty.
+  // Moved, not copied-and-kept: the suite ends with one home, in `payments.json`.
   await call('POST', '/projects/payments.json/test_suites', {
     body: { suiteId: PORTABLE, mode: 'move' },
   });
-  await call('POST', '/projects/checkout.json/test_suites', {
-    body: { suiteId: PORTABLE },
-  });
 
   step(
-    `placement: ${copies.length} copies, 5 moves (TC-MOVE-1 through all four directions) and ` +
-      `${PORTABLE} held by both projects`,
+    `placement: ${copies.length} copies undone, 5 moves (TC-MOVE-1 through all four ` +
+      `directions) and ${PORTABLE} moved between the projects`,
   );
 }
 
