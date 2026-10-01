@@ -1419,14 +1419,8 @@ const CONTRACT_COVERAGE: [(&str, &str); 108] = [
         "delete /configurations/{id}",
         "configurations_support_the_full_crud_lifecycle",
     ),
-    (
-        "get /workflows",
-        "workflows_are_created_inside_a_project",
-    ),
-    (
-        "post /workflows",
-        "workflows_are_created_inside_a_project",
-    ),
+    ("get /workflows", "workflows_are_created_inside_a_project"),
+    ("post /workflows", "workflows_are_created_inside_a_project"),
     (
         "get /workflows/{id}",
         "workflows_support_the_full_crud_lifecycle",

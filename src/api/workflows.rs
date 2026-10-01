@@ -18,8 +18,7 @@ use crate::{
 };
 
 use super::{
-    AppState,
-    access,
+    AppState, access,
     crud::prelude::*,
     crud::{composed_response, crud_handlers, duplicate_handler},
 };
@@ -71,7 +70,7 @@ async fn run_from_workflow<R: Repository + 'static>(
 ) -> Result<(StatusCode, Json<Value>), DomainError> {
     super::on_blocking(move || -> Result<(StatusCode, Json<Value>), DomainError> {
         access::require(&service, &principal, &id, crate::auth::Role::Editor)?;
-        
+
         // Read the workflow.
         let workflow = service.document_in(
             Resource::Workflows,
@@ -79,16 +78,17 @@ async fn run_from_workflow<R: Repository + 'static>(
             &workflow_id,
             "Workflow not found",
         )?;
-        
+
         // Build run body from workflow steps.
-        let steps = workflow.get("steps").and_then(Value::as_array).ok_or_else(|| {
-            DomainError::invalid_request("Workflow has no steps")
-        })?;
-        
+        let steps = workflow
+            .get("steps")
+            .and_then(Value::as_array)
+            .ok_or_else(|| DomainError::invalid_request("Workflow has no steps"))?;
+
         let mut test_cases = Vec::new();
         let mut test_suites = Vec::new();
         let mut seen_cases = std::collections::HashSet::new();
-        
+
         for step in steps {
             if let Some(obj) = step.as_object() {
                 if let Some(case_id) = obj.get("testCaseId").and_then(Value::as_str) {
@@ -101,27 +101,33 @@ async fn run_from_workflow<R: Repository + 'static>(
                 }
             }
         }
-        
-        let run_name = body.get("name").and_then(Value::as_str).unwrap_or(&workflow_id);
+
+        let run_name = body
+            .get("name")
+            .and_then(Value::as_str)
+            .unwrap_or(&workflow_id);
         let mut run_body = json!({
             "name": run_name,
             "testCases": test_cases,
             "testSuites": test_suites,
             "sourceWorkflowId": workflow_id
         });
-        
+
         // Add projects if specified.
         if let Some(projects) = body.get("projects") {
             run_body["projects"] = projects.clone();
         } else {
             run_body["projects"] = json!([{"projectId": id}]);
         }
-        
+
         let created = service.create_in(Resource::Runs, &Parent::Project(id), &run_body)?;
-        Ok((StatusCode::CREATED, Json(json!({
-            "message": "Run created from workflow",
-            "id": created.id
-        }))))
+        Ok((
+            StatusCode::CREATED,
+            Json(json!({
+                "message": "Run created from workflow",
+                "id": created.id
+            })),
+        ))
     })
     .await
 }
@@ -181,7 +187,12 @@ fn validate_workflow_steps<R: Repository + 'static>(
             }
             (None, Some(suite)) => {
                 // Suite must be held by the project.
-                service.document_in(Resource::Suites, &project_parent, suite, "Test suite not found")?;
+                service.document_in(
+                    Resource::Suites,
+                    &project_parent,
+                    suite,
+                    "Test suite not found",
+                )?;
             }
             (Some(_), Some(_)) => {
                 return Err(DomainError::invalid_request(format!(
@@ -212,10 +223,7 @@ pub(crate) fn routes<R: Repository + 'static>() -> Router<AppState<R>> {
                 .put(update_workflow::<R>)
                 .delete(delete_workflow::<R>),
         )
-        .route(
-            "/workflows/{id}/duplicate",
-            post(duplicate_workflow::<R>),
-        )
+        .route("/workflows/{id}/duplicate", post(duplicate_workflow::<R>))
         .route(
             "/projects/{id}/workflows",
             get(list_workflows::<R>).post(create_project_workflow::<R>),

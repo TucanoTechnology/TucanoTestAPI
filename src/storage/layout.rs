@@ -20,7 +20,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 /// A suite or a case folder taking one of these names would be created inside
 /// that collection, where its marker would be listed as a document of a
 /// resource it is not, so the name is refused instead.
-pub const RESERVED_PROJECT_CHILDREN: [&str; 4] = ["test_runs", "milestones", "configurations", "workflows"];
+pub const RESERVED_PROJECT_CHILDREN: [&str; 4] =
+    ["test_runs", "milestones", "configurations", "workflows"];
 
 /// Longest name one stored component may have, counted in bytes.
 ///
@@ -93,7 +94,10 @@ impl Resource {
             Resource::Projects => Some("project.json"),
             Resource::Suites => Some("suite.json"),
             Resource::Cases => Some("test-case.json"),
-            Resource::Runs | Resource::Milestones | Resource::Configurations | Resource::Workflows => None,
+            Resource::Runs
+            | Resource::Milestones
+            | Resource::Configurations
+            | Resource::Workflows => None,
         }
     }
 

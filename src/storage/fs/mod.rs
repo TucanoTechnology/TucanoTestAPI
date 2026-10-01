@@ -111,7 +111,10 @@ impl FileRepository {
                 let parent = required_parent(parent)?;
                 case_marker(&self.root, parent, id)
             }
-            Resource::Runs | Resource::Milestones | Resource::Configurations | Resource::Workflows => {
+            Resource::Runs
+            | Resource::Milestones
+            | Resource::Configurations
+            | Resource::Workflows => {
                 let project = project_parent(parent)?;
                 project_document_path(&self.root, project, resource, id)
             }

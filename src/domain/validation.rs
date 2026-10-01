@@ -14,7 +14,9 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 
-use crate::models::{Milestone, Project, TestCase, TestConfiguration, TestRun, TestSuite, Workflow};
+use crate::models::{
+    Milestone, Project, TestCase, TestConfiguration, TestRun, TestSuite, Workflow,
+};
 use crate::storage::Resource;
 
 use super::error::DomainError;

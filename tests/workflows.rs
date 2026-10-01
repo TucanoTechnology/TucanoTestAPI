@@ -2,7 +2,7 @@ mod common;
 
 use axum::http::StatusCode;
 use common::{
-    app_at, assert_error_envelope, create_project, delete, fixture_home, get, json_request,
+    assert_error_envelope, delete, fixture_home, get, json_request,
     project_folder, send_json, test_app,
 };
 use serde_json::json;
@@ -26,7 +26,7 @@ async fn workflows_are_created_inside_a_project() {
 
     // Creation through the project-scoped route.
     let home = fixture_home(&app).await;
-    
+
     // Create a case first so the workflow can reference it.
     let (status, _) = send_json(
         &app,
@@ -107,7 +107,7 @@ async fn workflows_support_the_full_crud_lifecycle() {
     assert_eq!(stored["name"], "smoke");
 
     // Update
-    let (status, updated) = send_json(
+    let (_status, _updated) = send_json(
         &app,
         json_request(
             "PUT",
@@ -124,11 +124,7 @@ async fn workflows_support_the_full_crud_lifecycle() {
     assert_eq!(stored["name"], "smoke-v2");
 
     // Delete through the project-scoped route
-    let (status, _) = send_json(
-        &app,
-        delete(&format!("/projects/{home}/workflows/{id}")),
-    )
-    .await;
+    let (status, _) = send_json(&app, delete(&format!("/projects/{home}/workflows/{id}"))).await;
     assert_eq!(status, StatusCode::OK);
 
     // Gone

@@ -77,7 +77,10 @@ impl FileRepository {
                 }
                 found
             }
-            Resource::Runs | Resource::Milestones | Resource::Configurations | Resource::Workflows => {
+            Resource::Runs
+            | Resource::Milestones
+            | Resource::Configurations
+            | Resource::Workflows => {
                 let mut found = Vec::new();
                 for directory in self.collection_dirs(resource)? {
                     let Some(project_folder) = directory.parent().and_then(|p| p.file_name())
